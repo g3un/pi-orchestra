@@ -5,18 +5,13 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "pi": {
+    "extensions": ["./src/extension/index.ts"]
+  },
   "engines": {
     "npm": ">=11.10.0"
   },
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    }
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/tools/subagent.test.js"
   },
