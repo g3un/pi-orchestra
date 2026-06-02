@@ -6,28 +6,42 @@ import { PiAgentRuntime } from "../pi-runtime.ts";
 import type { SubagentInput } from "../tools/subagent.ts";
 import { createSubagentTool, type SubagentTool } from "../tools/subagent.ts";
 
-const AgentProfileParams = Type.Object({
-	name: Type.String({ description: "Short role/name for the subagent." }),
-	systemPrompt: Type.String({ description: "System prompt for the subagent." }),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool allowlist for the subagent." })),
-	model: Type.Optional(Type.String({ description: "Optional provider/model id, for example anthropic/claude-sonnet-4-5." })),
+const AgentProfileParams = Type.Object(
+	{
+		name: Type.String({ description: "Short role/name for the subagent." }),
+		systemPrompt: Type.String({ description: "System prompt for the subagent." }),
+		tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool allowlist for the subagent." })),
+		model: Type.Optional(
+			Type.String({ description: "Optional provider/model id, for example anthropic/claude-sonnet-4-5." }),
+		),
+	},
+	{ description: "Required for action=spawn. Defines the subagent role." },
+);
+
+const SubagentActionParams = Type.String({
+	enum: ["spawn", "status", "resume", "push_bus", "close"],
+	description:
+		"Action to perform. spawn creates a new subagent with profile and task. status inspects an existing subagent by id. resume sends a follow-up instruction by id. push_bus sends shared context by id. close disposes a subagent by id.",
 });
 
-const SubagentActionParams = Type.Union([
-	Type.Literal("run"),
-	Type.Literal("status"),
-	Type.Literal("resume"),
-	Type.Literal("push_bus"),
-	Type.Literal("close"),
-]);
-
-const SubagentToolParams = Type.Object({
-	action: SubagentActionParams,
-	profile: Type.Optional(AgentProfileParams),
-	task: Type.Optional(Type.String({ description: "Task to delegate to the subagent." })),
-	id: Type.Optional(Type.String({ description: "Subagent id." })),
-	message: Type.Optional(Type.String({ description: "Message for resume or push_bus." })),
-});
+const SubagentToolParams = Type.Object(
+	{
+		action: SubagentActionParams,
+		profile: Type.Optional(AgentProfileParams),
+		task: Type.Optional(Type.String({ description: "Required for action=spawn. Task to delegate to the new subagent." })),
+		id: Type.Optional(
+			Type.String({
+				description: "Required for action=status, action=resume, action=push_bus, and action=close. Subagent id returned by spawn.",
+			}),
+		),
+		message: Type.Optional(
+			Type.String({
+				description: "Required for action=resume and action=push_bus. Follow-up instruction or context update for the subagent.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
 
 interface ToolBundle {
 	tool: SubagentTool;
@@ -44,6 +58,7 @@ export default function piWeaverExtension(pi: ExtensionAPI): void {
 			promptSnippet: "Delegate isolated work to subagent and inspect or resume it later.",
 			promptGuidelines: [
 				"Use subagent for isolated research, inspection, or implementation tasks.",
+				"Use action=spawn to create a new isolated subagent for a delegated task.",
 				"Use action=status before resuming or closing an existing subagent if its state is unclear.",
 				"Use action=push_bus to send updated parent context to a running subagent.",
 			],
@@ -51,7 +66,7 @@ export default function piWeaverExtension(pi: ExtensionAPI): void {
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const bundle = getBundle(bundles, ctx);
-				const input = withDefaultModel(toSubagentInput(params), ctx);
+				const input = withDefaultModel(toSubagentInput(params as RawSubagentParams), ctx);
 				const output = await bundle.tool.execute(input);
 
 				return {
@@ -63,17 +78,19 @@ export default function piWeaverExtension(pi: ExtensionAPI): void {
 	);
 }
 
-function toSubagentInput(params: {
-	action: "run" | "status" | "resume" | "push_bus" | "close";
+type RawSubagentParams = {
+	action: "spawn" | "status" | "resume" | "push_bus" | "close";
 	profile?: AgentProfile;
 	task?: string;
 	id?: string;
 	message?: string;
-}): SubagentInput {
-	if (params.action === "run") {
-		if (!params.profile) throw new Error("subagent action=run requires profile.");
-		if (!params.task) throw new Error("subagent action=run requires task.");
-		return { action: "run", profile: params.profile, task: params.task };
+};
+
+function toSubagentInput(params: RawSubagentParams): SubagentInput {
+	if (params.action === "spawn") {
+		if (!params.profile) throw new Error("subagent action=spawn requires profile.");
+		if (!params.task) throw new Error("subagent action=spawn requires task.");
+		return { action: "spawn", profile: params.profile, task: params.task };
 	}
 
 	if (params.action === "status") {
@@ -114,7 +131,7 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
 }
 
 function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): SubagentInput {
-	if (input.action !== "run" || input.profile.model || !ctx.model) return input;
+	if (input.action !== "spawn" || input.profile.model || !ctx.model) return input;
 	return {
 		...input,
 		profile: {

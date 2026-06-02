@@ -11,12 +11,12 @@ const profile: AgentProfile = {
 	systemPrompt: "Research the assigned task.",
 };
 
-test("subagent run creates a bus, starts the runtime, and stores the run", async () => {
+test("subagent spawn creates a bus, starts the runtime, and stores the run", async () => {
 	const runtime = new FakeRuntime();
 	const store = new FakeStore();
 	const tool = createSubagentTool({ runtime, store });
 
-	const output = await tool.execute({ action: "run", profile, task: "Inspect the code." });
+	const output = await tool.execute({ action: "spawn", profile, task: "Inspect the code." });
 
 	assert.ok(output.run);
 	assert.equal(output.run.id, "agent-1");
@@ -36,7 +36,15 @@ test("subagent status prefers runtime state and falls back to store state", asyn
 	const tool = createSubagentTool({ runtime, store });
 	const runtimeRun = run({ id: "same-id", state: "running" });
 	const storeRun = run({ id: "same-id", state: "failed" });
-	const fallbackRun = run({ id: "store-only", state: "finished" });
+	const fallbackRun = run({
+		id: "store-only",
+		state: "finished",
+		result: {
+			status: "success",
+			summary: "Found the relevant implementation.",
+			data: { file: "src/tools/subagent.ts" },
+		},
+	});
 
 	runtime.runs.set(runtimeRun.id, runtimeRun);
 	store.saveRun(storeRun);
@@ -48,6 +56,18 @@ test("subagent status prefers runtime state and falls back to store state", asyn
 
 	assert.equal(runtimeOutput.run, runtimeRun);
 	assert.equal(fallbackOutput.run, fallbackRun);
+	assert.equal(
+		fallbackOutput.message,
+		[
+			"Subagent store-only is finished.",
+			"",
+			"Result: success",
+			"Found the relevant implementation.",
+			"",
+			"Data:",
+			'{\n  "file": "src/tools/subagent.ts"\n}',
+		].join("\n"),
+	);
 	assert.equal(missingOutput.run, undefined);
 	assert.equal(missingOutput.message, "Subagent missing not found.");
 });
