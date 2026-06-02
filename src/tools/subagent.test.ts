@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentProfile, AgentRun } from "../agent.ts";
-import type { Bus, BusMessage } from "../bus.ts";
-import type { AgentRuntime } from "../runtime.ts";
-import type { AgentStore } from "../store.ts";
+import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { Bus, BusMessage } from "../core/bus.ts";
+import type { AgentRuntime } from "../core/runtime.ts";
+import type { AgentStore } from "../core/store.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const profile: AgentProfile = {

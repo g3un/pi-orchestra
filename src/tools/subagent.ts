@@ -1,8 +1,8 @@
 import { v7 as uuid7 } from "uuid";
-import type { AgentProfile, AgentRun } from "../agent.ts";
-import type { Bus } from "../bus.ts";
-import type { AgentRuntime } from "../runtime.ts";
-import type { AgentStore } from "../store.ts";
+import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { Bus } from "../core/bus.ts";
+import type { AgentRuntime } from "../core/runtime.ts";
+import type { AgentStore } from "../core/store.ts";
 
 export type SubagentInput =
 	| {

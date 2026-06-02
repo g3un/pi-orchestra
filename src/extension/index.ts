@@ -1,8 +1,8 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile } from "../agent.ts";
-import { InMemoryAgentStore } from "../in-memory-store.ts";
-import { PiAgentRuntime } from "../pi-runtime.ts";
+import type { AgentProfile } from "../core/agent.ts";
+import { InMemoryAgentStore } from "../core/in-memory-store.ts";
+import { PiAgentRuntime } from "../core/pi-runtime.ts";
 import type { SubagentInput } from "../tools/subagent.ts";
 import { createSubagentTool, type SubagentTool } from "../tools/subagent.ts";
 
