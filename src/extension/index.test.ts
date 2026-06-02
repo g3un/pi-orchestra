@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import piWeaverExtension from "./index.ts";
+import piOrchestraExtension from "./index.ts";
 
 test("subagent parameters use an OpenAI-compatible root object schema", () => {
 	const registeredTools: ToolDefinition[] = [];
 
-	piWeaverExtension({
+	piOrchestraExtension({
 		registerTool(tool: ToolDefinition) {
 			registeredTools.push(tool);
 		},

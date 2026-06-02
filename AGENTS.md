@@ -1,4 +1,4 @@
-# Pi-Weaver: Agent Guide
+# Pi-Orchestra: Agent Guide
 
 ## Commits
 

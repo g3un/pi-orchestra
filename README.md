@@ -1,1 +1,3 @@
-# Pi Weaver
+# Pi-Orchestra
+
+Subagent orchestration for Pi

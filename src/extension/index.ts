@@ -47,7 +47,7 @@ interface ToolBundle {
 	tool: SubagentTool;
 }
 
-export default function piWeaverExtension(pi: ExtensionAPI): void {
+export default function piOrchestraExtension(pi: ExtensionAPI): void {
 	const bundles = new Map<string, ToolBundle>();
 
 	pi.registerTool(
