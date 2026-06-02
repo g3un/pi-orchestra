@@ -13,7 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/extension/**/*.test.js\" \"dist-test/tools/**/*.test.js\""
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/*.test.js\" \"dist-test/extension/**/*.test.js\" \"dist-test/tools/**/*.test.js\""
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.75.5",
