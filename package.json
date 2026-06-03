@@ -10,8 +10,11 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "pnpm test:all",
+    "test:all": "vitest run",
+    "test:unit": "vitest run src",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
