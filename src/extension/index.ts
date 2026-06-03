@@ -172,7 +172,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
         "Use timeoutMs to avoid waiting indefinitely when a run may be stuck.",
       ],
       parameters: WaitRunsToolParams,
-      executionMode: "parallel",
+      executionMode: "sequential",
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const bundle = getBundle(bundles, ctx);
         const output = await bundle.waitRunsTool.execute(toWaitRunsInput(params as RawWaitRunsParams));
