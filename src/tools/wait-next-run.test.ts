@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type {
   OrchestraApi,
@@ -10,6 +10,7 @@ import type {
   WaitNextRunOptions,
   WaitNextRunResult,
 } from "../core/orchestra.ts";
+import { toWaitRunResult } from "../utils.ts";
 import { createWaitNextRunTool } from "./wait-next-run.ts";
 
 test("waitNextRun delegates to orchestra and formats the completed run", async () => {
@@ -26,9 +27,9 @@ test("waitNextRun delegates to orchestra and formats the completed run", async (
   orchestra.nextRunResult = {
     bus,
     run: completedRun,
-    runResult: toRunResult(completedRun),
+    runResult: toWaitRunResult(completedRun),
     runs: [completedRun],
-    runResults: [toRunResult(completedRun)],
+    runResults: [toWaitRunResult(completedRun)],
     timedOut: false,
     pendingRunIds: [],
   };
@@ -40,7 +41,7 @@ test("waitNextRun delegates to orchestra and formats the completed run", async (
     options: { excludeRunIds: ["already-handled"], timeoutMs: 1000 },
   });
   assert.equal(output.run, completedRun);
-  assert.deepEqual(output.runResult, toRunResult(completedRun));
+  assert.deepEqual(output.runResult, toWaitRunResult(completedRun));
   assert.equal(
     output.message,
     [`Next completed run on bus ${bus.id}: agent-1 is finished.`, "", "Result: success", "Found a plan."].join("\n"),
@@ -56,7 +57,7 @@ test("waitNextRun formats timeout without a completed run", async () => {
   orchestra.nextRunResult = {
     bus,
     runs: [runningRun],
-    runResults: [toRunResult(runningRun)],
+    runResults: [toWaitRunResult(runningRun)],
     timedOut: true,
     pendingRunIds: [runningRun.id],
   };
@@ -129,20 +130,9 @@ class FakeOrchestra implements OrchestraApi {
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     const runs = this.listRuns({ busId });
     return Promise.resolve(
-      this.nextRunResult ?? { bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] },
+      this.nextRunResult ?? { bus, runs, runResults: runs.map(toWaitRunResult), timedOut: false, pendingRunIds: [] },
     );
   }
-}
-
-function toRunResult(run: AgentRun): WaitNextRunResult["runResults"][number] {
-  const runResult: WaitNextRunResult["runResults"][number] = {
-    runId: run.id,
-    name: run.name,
-    profile: run.profile,
-    state: run.state,
-  };
-  if (run.result !== undefined) runResult.result = run.result;
-  return runResult;
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {

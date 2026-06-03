@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { AgentProfile, AgentRun } from "./agent.ts";
+import type { AgentProfile, AgentRun } from "./subagent.ts";
 import type { BusMessage } from "./bus.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { Orchestra } from "./orchestra.ts";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type {
   OrchestraApi,
@@ -10,7 +10,8 @@ import type {
   WaitNextRunOptions,
   WaitNextRunResult,
 } from "../core/orchestra.ts";
-import { createWorkgroupTool } from "./workgroup.ts";
+import { isTerminalRun, slugify, toWaitRunResult } from "../utils.ts";
+import { createWorkgroupTool, settleWorkgroupRuns } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
   name: "security",
@@ -35,7 +36,7 @@ test("workgroup launches members on an existing bus", async () => {
   const output = await tool.execute({
     busId: bus.name,
     goal: "Plan the auth refactor.",
-    mode: "council",
+    mode: "synthesize",
     members: [
       { name: "security-review", profile: securityProfile, assignment: "Identify auth security risks." },
       { name: "backend-review", profile: backendProfile, assignment: "Assess API and data model changes." },
@@ -51,7 +52,7 @@ test("workgroup launches members on an existing bus", async () => {
       { profile: backendProfile, busId: bus.id, name: "backend-review" },
     ],
   );
-  assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup mode: council/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup mode: synthesize/);
   assert.match(orchestra.spawned[0]?.task ?? "", /Shared goal:\nPlan the auth refactor\./);
   assert.match(orchestra.spawned[0]?.task ?? "", /Identify auth security risks\./);
   assert.match(
@@ -59,11 +60,11 @@ test("workgroup launches members on an existing bus", async () => {
     /publish_bus is for sibling reference data, not for requesting leader action/,
   );
   assert.match(orchestra.spawned[0]?.task ?? "", /finish with status blocked/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Council mode guidelines/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize mode guidelines/);
   assert.equal(
     output.message,
     [
-      "Launched council workgroup on bus auth-work with 2 run(s).",
+      "Launched synthesize workgroup on bus auth-work with 2 run(s).",
       "",
       "Runs:",
       "- security-review: running",
@@ -74,15 +75,15 @@ test("workgroup launches members on an existing bus", async () => {
   );
 });
 
-test("workgroup explore mode guides members to share facts without herding", async () => {
+test("workgroup compete mode guides members to share facts without herding", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool({ orchestra });
-  const bus = orchestra.createBus({ name: "design-explore" });
+  const bus = orchestra.createBus({ name: "design-compete" });
 
   await tool.execute({
     busId: bus.id,
     goal: "Compare implementation options.",
-    mode: "explore",
+    mode: "compete",
     members: [{ name: "option-a", profile: backendProfile }],
   });
 
@@ -104,7 +105,7 @@ test("workgroup rejects missing buses", async () => {
       tool.execute({
         busId: "missing",
         goal: "Plan the auth refactor.",
-        mode: "explore",
+        mode: "compete",
         members: [{ profile: securityProfile }],
       }),
     /Bus missing not found\./,
@@ -130,11 +131,67 @@ test("workgroup member name checks are global", async () => {
       tool.execute({
         busId: targetBus.id,
         goal: "Plan the auth refactor.",
-        mode: "explore",
+        mode: "compete",
         members: [{ name: "security-review", profile: securityProfile }],
       }),
     /Workgroup member name "security-review" is already in use\./,
   );
+});
+
+test("workgroup compete settlement closes pending runs after first success", async () => {
+  const orchestra = new FakeOrchestra();
+  const bus = orchestra.createBus({ name: "compete-work" });
+  const winner = run({
+    id: "winner",
+    name: "winner",
+    busId: bus.id,
+    state: "finished",
+    result: { status: "success", summary: "Found input." },
+  });
+  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
+  orchestra.runs.set(winner.id, winner);
+  orchestra.runs.set(pending.id, pending);
+
+  const output = await settleWorkgroupRuns(orchestra, bus.id, "compete");
+
+  assert.equal(output.status, "success");
+  assert.equal(output.winner?.runId, winner.id);
+  assert.deepEqual(
+    output.workerResults.map((result) => result.runId),
+    [winner.id],
+  );
+  assert.deepEqual(orchestra.closedIds, [pending.id]);
+  assert.equal(orchestra.runs.get(pending.id)?.state, "closed");
+});
+
+test("workgroup synthesize settlement waits for every run", async () => {
+  const orchestra = new FakeOrchestra();
+  const bus = orchestra.createBus({ name: "synthesize-work" });
+  const first = run({
+    id: "first",
+    name: "first",
+    busId: bus.id,
+    state: "finished",
+    result: { status: "success", summary: "First." },
+  });
+  const second = run({
+    id: "second",
+    name: "second",
+    busId: bus.id,
+    state: "failed",
+    result: { status: "failed", summary: "Second." },
+  });
+  orchestra.runs.set(first.id, first);
+  orchestra.runs.set(second.id, second);
+
+  const output = await settleWorkgroupRuns(orchestra, bus.id, "synthesize");
+
+  assert.equal(output.status, "success");
+  assert.deepEqual(
+    output.workerResults.map((result) => result.runId),
+    [first.id, second.id],
+  );
+  assert.deepEqual(orchestra.closedIds, []);
 });
 
 test("workgroup closes successfully spawned members when launch is incomplete", async () => {
@@ -147,7 +204,7 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
       tool.execute({
         busId: bus.id,
         goal: "Plan the auth refactor.",
-        mode: "council",
+        mode: "synthesize",
         members: [
           { name: "security-review", profile: securityProfile },
           { name: "broken-review", profile: brokenProfile },
@@ -236,19 +293,51 @@ class FakeOrchestra implements OrchestraApi {
     return closedRun;
   }
 
-  waitBusSettled(_busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
-    throw new Error("Not implemented.");
+  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
+    const bus = this.getBus(busId);
+    if (!bus) throw new Error(`Bus ${busId} not found.`);
+    const runs = this.listRuns({ busId: bus.id });
+    return Promise.resolve({
+      bus,
+      runs,
+      runResults: runs.map(toWaitRunResult),
+      timedOut: false,
+      pendingRunIds: runs.filter((current) => !isTerminalRun(current)).map((current) => current.id),
+    });
   }
 
-  waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
-    throw new Error("Not implemented.");
+  waitNextRun(busId: string, options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
+    const bus = this.getBus(busId);
+    if (!bus) throw new Error(`Bus ${busId} not found.`);
+
+    const excludedRunIds = new Set(options.excludeRunIds ?? []);
+    const runs = this.listRuns({ busId: bus.id });
+    const run = runs.find(
+      (current) => !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalRun(current),
+    );
+    return Promise.resolve({
+      bus,
+      run,
+      runResult: run ? toWaitRunResult(run) : undefined,
+      runs,
+      runResults: runs.map(toWaitRunResult),
+      timedOut: false,
+      pendingRunIds: runs
+        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
+        .map((current) => current.id),
+    });
   }
 }
 
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+function run(overrides: Partial<AgentRun>): AgentRun {
+  const id = overrides.id ?? "agent-1";
+  return {
+    id,
+    name: overrides.name ?? id,
+    profile: "researcher",
+    task: "Inspect the code.",
+    busId: "bus-1",
+    state: "idle",
+    ...overrides,
+  };
 }

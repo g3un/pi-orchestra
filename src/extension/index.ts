@@ -10,14 +10,18 @@ import {
   type WaitBusSettledTool,
 } from "../tools/wait-bus-settled.ts";
 import { createWaitNextRunTool, defineWaitNextRunPiTool, type WaitNextRunTool } from "../tools/wait-next-run.ts";
+import { createWaitWorkflowTool, defineWaitWorkflowPiTool, type WaitWorkflowTool } from "../tools/wait-workflow.ts";
+import { createWorkflowTool, defineWorkflowPiTool, type WorkflowTool } from "../tools/workflow.ts";
 import { createWorkgroupTool, defineWorkgroupPiTool, type WorkgroupTool } from "../tools/workgroup.ts";
 
 interface ToolBundle {
   busTool: BusTool;
   subagentTool: SubagentTool;
   workgroupTool: WorkgroupTool;
+  workflowTool: WorkflowTool;
   waitBusSettledTool: WaitBusSettledTool;
   waitNextRunTool: WaitNextRunTool;
+  waitWorkflowTool: WaitWorkflowTool;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -27,8 +31,10 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   pi.registerTool(defineBusPiTool((ctx) => getToolBundle(ctx).busTool));
   pi.registerTool(defineSubagentPiTool((ctx) => getToolBundle(ctx).subagentTool));
   pi.registerTool(defineWorkgroupPiTool((ctx) => getToolBundle(ctx).workgroupTool));
+  pi.registerTool(defineWorkflowPiTool((ctx) => getToolBundle(ctx).workflowTool));
   pi.registerTool(defineWaitBusSettledPiTool((ctx) => getToolBundle(ctx).waitBusSettledTool));
   pi.registerTool(defineWaitNextRunPiTool((ctx) => getToolBundle(ctx).waitNextRunTool));
+  pi.registerTool(defineWaitWorkflowPiTool((ctx) => getToolBundle(ctx).waitWorkflowTool));
 }
 
 function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): ToolBundle {
@@ -46,8 +52,10 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
     busTool: createBusTool({ orchestra }),
     subagentTool: createSubagentTool({ orchestra }),
     workgroupTool: createWorkgroupTool({ orchestra }),
+    workflowTool: createWorkflowTool({ orchestra, store }),
     waitBusSettledTool: createWaitBusSettledTool({ orchestra }),
     waitNextRunTool: createWaitNextRunTool({ orchestra }),
+    waitWorkflowTool: createWaitWorkflowTool({ store }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;

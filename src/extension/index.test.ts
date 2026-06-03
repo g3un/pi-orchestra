@@ -51,8 +51,23 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   assert.ok(parameters.properties);
   assert.match(parameters.properties.busId?.description ?? "", /Existing work bus id or name/);
   assert.match(parameters.properties.goal?.description ?? "", /Shared workgroup goal/);
-  assert.deepEqual(parameters.properties.mode?.enum, ["explore", "council"]);
+  assert.deepEqual(parameters.properties.mode?.enum, ["compete", "synthesize"]);
   assert.match(parameters.properties.members?.description ?? "", /workgroup members/);
+});
+
+test("workflow parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
+
+  const workflow = registeredTools.find((tool) => tool.name === "workflow");
+  assert.ok(workflow);
+
+  const parameters = workflow.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.deepEqual(parameters.properties.action?.enum, ["start", "status", "cancel"]);
+  assert.match(parameters.properties.goal?.description ?? "", /Overall workflow goal/);
+  assert.match(parameters.properties.stages?.description ?? "", /Linear stages/);
 });
 
 test("waitBusSettled parameters use an OpenAI-compatible root object schema", () => {
@@ -69,6 +84,20 @@ test("waitBusSettled parameters use an OpenAI-compatible root object schema", ()
   assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /null to wait indefinitely/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /latest collected state/);
+});
+
+test("waitWorkflow parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
+
+  const waitWorkflow = registeredTools.find((tool) => tool.name === "waitWorkflow");
+  assert.ok(waitWorkflow);
+
+  const parameters = waitWorkflow.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.match(parameters.properties.id?.description ?? "", /Workflow id or name/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
 });
 
 test("waitNextRun parameters use an OpenAI-compatible root object schema", () => {

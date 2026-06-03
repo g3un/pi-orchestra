@@ -1,3 +1,4 @@
+import { indent } from "../utils.ts";
 import type { BusMessage } from "./bus.ts";
 
 export function formatBusMessages(messages: BusMessage[]): string {
@@ -14,11 +15,4 @@ export function formatBusMessages(messages: BusMessage[]): string {
 
 function formatBusMessage(message: BusMessage): string {
   return [`- From ${message.from}:`, indent(message.message)].join("\n");
-}
-
-function indent(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => `  ${line}`)
-    .join("\n");
 }

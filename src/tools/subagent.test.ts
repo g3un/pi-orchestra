@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type {
   OrchestraApi,
@@ -10,6 +10,7 @@ import type {
   WaitNextRunOptions,
   WaitNextRunResult,
 } from "../core/orchestra.ts";
+import { toWaitRunResult } from "../utils.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const profile: AgentProfile = {
@@ -181,23 +182,12 @@ class FakeOrchestra implements OrchestraApi {
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     const runs = this.listRuns({ busId });
-    return Promise.resolve({ bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] });
+    return Promise.resolve({ bus, runs, runResults: runs.map(toWaitRunResult), timedOut: false, pendingRunIds: [] });
   }
 
   waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
     throw new Error("Not implemented.");
   }
-}
-
-function toRunResult(run: AgentRun): WaitBusSettledResult["runResults"][number] {
-  const runResult: WaitBusSettledResult["runResults"][number] = {
-    runId: run.id,
-    name: run.name,
-    profile: run.profile,
-    state: run.state,
-  };
-  if (run.result !== undefined) runResult.result = run.result;
-  return runResult;
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {

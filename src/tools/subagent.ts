@@ -1,16 +1,19 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
+import { formatNamedEntityLabel } from "../utils.ts";
+
+export interface SubagentSpawnInput {
+  action: "spawn";
+  profile: AgentProfile;
+  task: string;
+  busId: string;
+  name?: string;
+}
 
 export type SubagentInput =
-  | {
-      action: "spawn";
-      profile: AgentProfile;
-      task: string;
-      busId: string;
-      name?: string;
-    }
+  | SubagentSpawnInput
   | {
       action: "status";
       id: string;
@@ -41,6 +44,11 @@ export interface SubagentTool {
 export interface SubagentToolDeps {
   orchestra: OrchestraApi;
 }
+
+export const SubagentRunNameParam = Type.String({
+  description:
+    "Optional short, human-readable globally unique subagent run name. If omitted, a short name is generated from the profile name.",
+});
 
 export const AgentProfileParams = Type.Object(
   {
@@ -76,12 +84,7 @@ const SubagentToolParams = Type.Object(
         description: "Required for action=spawn. Existing bus id or name returned by bus action=create.",
       }),
     ),
-    name: Type.Optional(
-      Type.String({
-        description:
-          "Optional short, human-readable globally unique subagent run name for action=spawn. If omitted, a short name is generated from the profile name.",
-      }),
-    ),
+    name: Type.Optional(SubagentRunNameParam),
     id: Type.Optional(
       Type.String({
         description:
@@ -97,13 +100,17 @@ const SubagentToolParams = Type.Object(
   { additionalProperties: false },
 );
 
+export async function spawnSubagent(orchestra: OrchestraApi, input: SubagentSpawnInput): Promise<AgentRun> {
+  return await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name });
+}
+
 export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentTool {
   return {
     name: "subagent",
 
     async execute(input) {
       if (input.action === "spawn") {
-        const run = await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name });
+        const run = await spawnSubagent(orchestra, input);
         return { run, message: formatRunMessage(run) };
       }
 
@@ -117,7 +124,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
         const run = await orchestra.messageAgent(input.id, input.message, { busId: input.busId });
         return {
           run,
-          message: formatRunMessage(run, `Messaged subagent ${formatRunLabel(run)}; it is ${run.state}.`),
+          message: formatRunMessage(run, `Messaged subagent ${formatNamedEntityLabel(run)}; it is ${run.state}.`),
         };
       }
 
@@ -125,7 +132,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
       return {
         run,
         message: run
-          ? formatRunMessage(run, `Closed subagent ${formatRunLabel(run)}.`)
+          ? formatRunMessage(run, `Closed subagent ${formatNamedEntityLabel(run)}.`)
           : `Closed subagent ${input.id}.`,
       };
     },
@@ -200,7 +207,10 @@ export function withDefaultProfileModel(profile: AgentProfile, ctx: ExtensionCon
   };
 }
 
-function formatRunMessage(run: AgentRun, headline = `Subagent ${formatRunLabel(run)} is ${run.state}.`): string {
+function formatRunMessage(
+  run: AgentRun,
+  headline = `Subagent ${formatNamedEntityLabel(run)} is ${run.state}.`,
+): string {
   if (!run.result) return headline;
 
   const parts = [headline, "", `Result: ${run.result.status}`, run.result.summary];
@@ -208,10 +218,6 @@ function formatRunMessage(run: AgentRun, headline = `Subagent ${formatRunLabel(r
     parts.push("", "Data:", formatResultData(run.result.data));
   }
   return parts.join("\n");
-}
-
-function formatRunLabel(run: AgentRun): string {
-  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
 }
 
 function formatResultData(data: unknown): string {

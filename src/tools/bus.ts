@@ -2,6 +2,7 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Type } from "typebox";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
+import { formatNamedEntityLabel, indent } from "../utils.ts";
 
 export type BusInput =
   | {
@@ -71,7 +72,7 @@ export function createBusTool({ orchestra }: BusToolDeps): BusTool {
     async execute(input) {
       if (input.action === "create") {
         const bus = orchestra.createBus({ name: input.name });
-        return { bus, message: formatBusStatus(bus, `Created bus ${formatBusLabel(bus)}.`) };
+        return { bus, message: formatBusStatus(bus, `Created bus ${formatNamedEntityLabel(bus)}.`) };
       }
 
       const bus = orchestra.getBus(input.id);
@@ -85,7 +86,7 @@ export function createBusTool({ orchestra }: BusToolDeps): BusTool {
       return {
         bus: published.bus,
         busMessage: published.busMessage,
-        message: formatBusStatus(published.bus, `Published message to bus ${formatBusLabel(published.bus)}.`),
+        message: formatBusStatus(published.bus, `Published message to bus ${formatNamedEntityLabel(published.bus)}.`),
       };
     },
   };
@@ -134,26 +135,15 @@ function toBusInput(params: RawBusParams): BusInput {
 
 function formatBusStatus(
   bus: Bus,
-  headline = `Bus ${formatBusLabel(bus)} has ${bus.messages.length} message(s).`,
+  headline = `Bus ${formatNamedEntityLabel(bus)} has ${bus.messages.length} message(s).`,
 ): string {
   if (bus.messages.length === 0) return headline;
 
   return [headline, "", "Messages:", ...bus.messages.map(formatBusMessage)].join("\n");
 }
 
-function formatBusLabel(bus: Bus): string {
-  return bus.name === bus.id ? bus.id : `${bus.name} (${bus.id})`;
-}
-
 function formatBusMessage(message: BusMessage): string {
   return [`- ${message.id} from ${message.from}:`, indent(message.message)].join("\n");
-}
-
-function indent(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => `  ${line}`)
-    .join("\n");
 }
 
 type RawBusParams = {

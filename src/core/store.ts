@@ -1,5 +1,6 @@
-import type { AgentRun } from "./agent.ts";
+import type { AgentRun } from "./subagent.ts";
 import type { Bus, BusMessage } from "./bus.ts";
+import type { WorkflowRun } from "./workflow.ts";
 
 export interface AgentStore {
   saveRun(run: AgentRun): void;
@@ -12,4 +13,9 @@ export interface AgentStore {
   listBuses(): Bus[];
   /** Add or replace a bus message by id. */
   addBusMessage(busId: string, message: BusMessage): void;
+
+  saveWorkflow(workflow: WorkflowRun): void;
+  getWorkflow(id: string): WorkflowRun | undefined;
+  listWorkflows(): WorkflowRun[];
+  subscribeWorkflow(id: string, listener: (workflow: WorkflowRun) => void): () => void;
 }

@@ -1,6 +1,7 @@
-import type { AgentProfile, AgentRun } from "./agent.ts";
+import type { AgentProfile, AgentRun } from "./subagent.ts";
 import type { Bus, BusMessage } from "./bus.ts";
 import type { AgentRuntime } from "./runtime.ts";
+import { createEntityIdentity, isTerminalRun, resolveWaitTimeoutMs, toWaitRunResult } from "../utils.ts";
 import type { AgentStore } from "./store.ts";
 
 export interface OrchestraApi {
@@ -82,8 +83,6 @@ export interface OrchestraDeps {
   store: AgentStore;
 }
 
-const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
-
 export class Orchestra implements OrchestraApi {
   private readonly runtime: AgentRuntime;
   private readonly store: AgentStore;
@@ -142,7 +141,7 @@ export class Orchestra implements OrchestraApi {
   }
 
   waitBusSettled(busId: string, options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
-    const timeoutMs = resolveTimeoutMs("waitBusSettled", options.timeoutMs);
+    const timeoutMs = resolveWaitTimeoutMs("waitBusSettled", options.timeoutMs);
     const bus = this.requireBus(busId);
     const initialRuns = this.listRuns({ busId: bus.id });
     if (initialRuns.every(isTerminalRun)) {
@@ -197,7 +196,7 @@ export class Orchestra implements OrchestraApi {
   }
 
   waitNextRun(busId: string, options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
-    const timeoutMs = resolveTimeoutMs("waitNextRun", options.timeoutMs);
+    const timeoutMs = resolveWaitTimeoutMs("waitNextRun", options.timeoutMs);
     const bus = this.requireBus(busId);
     const initialRuns = this.listRuns({ busId: bus.id });
     const excludedRunIds = this.resolveExcludedRunIds(initialRuns, options.excludeRunIds ?? []);
@@ -282,26 +281,13 @@ export class Orchestra implements OrchestraApi {
     return resolvedIds;
   }
 
-  private createBusIdentity(name: string | undefined): EntityIdentity {
+  private createBusIdentity(name: string | undefined) {
     return createEntityIdentity(name, "bus", this.store.listBuses(), "Bus");
   }
 
-  private createRunIdentity(profile: AgentProfile, name: string | undefined): EntityIdentity {
-    return createEntityIdentity(name, slugify(profile.name) || "agent", this.store.listRuns(), "Agent");
+  private createRunIdentity(profile: AgentProfile, name: string | undefined) {
+    return createEntityIdentity(name, profile.name, this.store.listRuns(), "Agent");
   }
-}
-
-interface EntityIdentity {
-  id: string;
-  name: string;
-}
-
-function resolveTimeoutMs(label: string, timeoutMs: number | null | undefined): number | null {
-  const resolvedTimeoutMs = timeoutMs === undefined ? DEFAULT_WAIT_TIMEOUT_MS : timeoutMs;
-  if (resolvedTimeoutMs !== null && (!Number.isFinite(resolvedTimeoutMs) || resolvedTimeoutMs <= 0)) {
-    throw new Error(`${label} timeoutMs must be positive, or null to wait indefinitely.`);
-  }
-  return resolvedTimeoutMs;
 }
 
 function buildWaitBusSettledResult(bus: Bus, runs: AgentRun[], timedOut: boolean): WaitBusSettledResult {
@@ -332,57 +318,4 @@ function buildWaitNextRunResult(
       .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
       .map((current) => current.id),
   };
-}
-
-function toWaitRunResult(run: AgentRun): WaitRunResult {
-  const runResult: WaitRunResult = {
-    runId: run.id,
-    name: run.name,
-    profile: run.profile,
-    state: run.state,
-  };
-  if (run.result !== undefined) runResult.result = run.result;
-  return runResult;
-}
-
-function createEntityIdentity(
-  requestedName: string | undefined,
-  autoSeed: string,
-  existingEntities: Array<{ id: string; name: string }>,
-  entityLabel: string,
-): EntityIdentity {
-  if (requestedName !== undefined) {
-    const name = normalizeName(requestedName, entityLabel);
-    const id = slugify(name);
-    if (!id) throw new Error(`${entityLabel} name "${name}" must contain letters or numbers.`);
-    if (existingEntities.some((entity) => entity.id === id || entity.name === name)) {
-      throw new Error(`${entityLabel} name "${name}" is already in use.`);
-    }
-    return { id, name };
-  }
-
-  const base = slugify(autoSeed) || entityLabel.toLowerCase();
-  for (let index = 1; ; index++) {
-    const id = index === 1 ? base : `${base}-${index}`;
-    if (!existingEntities.some((entity) => entity.id === id || entity.name === id)) return { id, name: id };
-  }
-}
-
-function normalizeName(name: string, entityLabel: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error(`${entityLabel} name must not be empty.`);
-  if (trimmed.length > 64) throw new Error(`${entityLabel} name must be 64 characters or fewer.`);
-  return trimmed;
-}
-
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function isTerminalRun(run: AgentRun): boolean {
-  return run.state === "finished" || run.state === "failed" || run.state === "closed";
 }

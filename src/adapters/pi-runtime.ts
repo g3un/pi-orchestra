@@ -7,7 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentResult, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentResult, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";

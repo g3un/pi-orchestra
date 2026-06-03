@@ -1,8 +1,9 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentRun } from "../core/agent.ts";
+import type { AgentRun } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi, WaitNextRunResult, WaitRunResult } from "../core/orchestra.ts";
+import { formatNamedEntityLabel } from "../utils.ts";
 
 export interface WaitNextRunInput {
   busId: string;
@@ -114,10 +115,10 @@ function toWaitNextRunInput(params: RawWaitNextRunParams): WaitNextRunInput {
 }
 
 function formatWaitNextRunMessage(result: WaitNextRunResult): string {
-  const busLabel = formatBusLabel(result.bus);
+  const busLabel = formatNamedEntityLabel(result.bus);
   if (result.run) {
     return [
-      `Next completed run on bus ${busLabel}: ${formatRunLabel(result.run)} is ${result.run.state}.`,
+      `Next completed run on bus ${busLabel}: ${formatNamedEntityLabel(result.run)} is ${result.run.state}.`,
       "",
       formatRunResult(result.run),
     ].join("\n");
@@ -133,14 +134,6 @@ function formatWaitNextRunMessage(result: WaitNextRunResult): string {
 function formatRunResult(run: AgentRun): string {
   if (!run.result) return "No result payload recorded.";
   return [`Result: ${run.result.status}`, run.result.summary].join("\n");
-}
-
-function formatBusLabel(bus: Bus): string {
-  return bus.name === bus.id ? bus.id : `${bus.name} (${bus.id})`;
-}
-
-function formatRunLabel(run: AgentRun): string {
-  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
 }
 
 type RawWaitNextRunParams = {

@@ -1,11 +1,14 @@
-import type { AgentRun } from "../core/agent.ts";
+import type { AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
+  private readonly workflows = new Map<string, WorkflowRun>();
   private readonly runListeners = new Map<string, Set<(run: AgentRun) => void>>();
+  private readonly workflowListeners = new Map<string, Set<(workflow: WorkflowRun) => void>>();
 
   saveRun(run: AgentRun): void {
     this.runs.set(run.id, run);
@@ -54,5 +57,29 @@ export class InMemoryAgentStore implements AgentStore {
     }
 
     bus.messages.push(message);
+  }
+
+  saveWorkflow(workflow: WorkflowRun): void {
+    this.workflows.set(workflow.id, workflow);
+    for (const listener of this.workflowListeners.get(workflow.id) ?? []) listener(workflow);
+  }
+
+  getWorkflow(id: string): WorkflowRun | undefined {
+    return this.workflows.get(id);
+  }
+
+  listWorkflows(): WorkflowRun[] {
+    return [...this.workflows.values()];
+  }
+
+  subscribeWorkflow(id: string, listener: (workflow: WorkflowRun) => void): () => void {
+    const listeners = this.workflowListeners.get(id) ?? new Set<(workflow: WorkflowRun) => void>();
+    listeners.add(listener);
+    this.workflowListeners.set(id, listeners);
+
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.workflowListeners.delete(id);
+    };
   }
 }

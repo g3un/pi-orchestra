@@ -1,19 +1,20 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentRun } from "../core/agent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
-import type { OrchestraApi } from "../core/orchestra.ts";
-import { AgentProfileParams, withDefaultProfileModel } from "./subagent.ts";
+import type { AgentResultStatus } from "../core/subagent.ts";
+import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
+import { WORKGROUP_MODE_VALUES, type WorkgroupMember, type WorkgroupMode } from "../core/workgroup.ts";
+import { closeAgentRuns, formatError, formatNamedEntityLabel, normalizeEntityName, slugify } from "../utils.ts";
+import {
+  AgentProfileParams,
+  spawnSubagent,
+  SubagentRunNameParam,
+  type SubagentSpawnInput,
+  withDefaultProfileModel,
+} from "./subagent.ts";
 
-export type WorkgroupMode = "explore" | "council";
-
-export interface WorkgroupMember {
-  profile: AgentProfile;
-  /** Optional globally unique short run name. If omitted, one is generated from the profile name. */
-  name?: string;
-  /** Member-specific assignment or focus within the shared goal. */
-  assignment?: string;
-}
+export type { WorkgroupMember, WorkgroupMode } from "../core/workgroup.ts";
 
 export interface WorkgroupInput {
   busId: string;
@@ -28,6 +29,17 @@ export interface WorkgroupOutput {
   message: string;
 }
 
+export interface WorkgroupSettlement {
+  mode: WorkgroupMode;
+  status: AgentResultStatus;
+  /** Results that should be consumed by downstream orchestration. For compete, this is the winning result when present. */
+  workerResults: WaitRunResult[];
+  /** Every terminal result observed while settling this workgroup. */
+  completedResults: WaitRunResult[];
+  winner?: WaitRunResult;
+  pendingRunIds: string[];
+}
+
 export interface WorkgroupTool {
   name: "workgroup";
   execute(input: WorkgroupInput): Promise<WorkgroupOutput>;
@@ -37,14 +49,10 @@ export interface WorkgroupToolDeps {
   orchestra: OrchestraApi;
 }
 
-const WorkgroupMemberParams = Type.Object(
+export const WorkgroupMemberParams = Type.Object(
   {
     profile: AgentProfileParams,
-    name: Type.Optional(
-      Type.String({
-        description: "Optional short, human-readable globally unique run name for this workgroup member.",
-      }),
-    ),
+    name: Type.Optional(SubagentRunNameParam),
     assignment: Type.Optional(
       Type.String({
         description: "Optional member-specific assignment or focus within the shared goal.",
@@ -64,9 +72,9 @@ const WorkgroupToolParams = Type.Object(
       description: "Shared workgroup goal that every member should contribute to.",
     }),
     mode: Type.String({
-      enum: ["explore", "council"],
+      enum: [...WORKGROUP_MODE_VALUES],
       description:
-        "Coordination style. explore fans out diverse approaches; council asks domain experts to advise the main-agent leader.",
+        "Coordination style for spawned members only; workgroup does not settle results automatically. Use compete when members are substitutable and any one successful result satisfies the goal; use synthesize when members are complementary and their findings, reviews, or tradeoffs must be combined or compared.",
     }),
     members: Type.Array(WorkgroupMemberParams, {
       description: "Subagents to spawn onto the existing bus as workgroup members.",
@@ -110,9 +118,7 @@ export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): Workgroup
       };
       const spawnResults = await Promise.allSettled(
         preparedInput.members.map(async (member): Promise<SpawnSuccess> => {
-          const run = await orchestra.spawnAgent(member.profile, buildMemberTask(preparedInput, member), bus.id, {
-            name: member.name,
-          });
+          const run = await spawnSubagent(orchestra, toSubagentSpawnInput(preparedInput, member, bus.id));
           return { member, run };
         }),
       );
@@ -136,18 +142,36 @@ export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): Workgroup
   };
 }
 
+export async function settleWorkgroupRuns(
+  orchestra: OrchestraApi,
+  busId: string,
+  mode: WorkgroupMode,
+): Promise<WorkgroupSettlement> {
+  if (mode === "compete") return await settleCompeteWorkgroupRuns(orchestra, busId);
+
+  const settled = await orchestra.waitBusSettled(busId, { timeoutMs: null });
+  return {
+    mode,
+    status: resolveWorkgroupStatus(settled.runResults),
+    workerResults: settled.runResults,
+    completedResults: settled.runResults,
+    pendingRunIds: settled.pendingRunIds,
+  };
+}
+
 export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => WorkgroupTool) {
   return defineTool({
     name: "workgroup",
     label: "Workgroup",
     description:
-      "Launch multiple subagents onto an existing work bus so the main agent can lead exploration or expert coordination.",
+      "Launch multiple subagents onto an existing work bus. This tool only spawns members; the main agent remains the workgroup leader/executor.",
     promptSnippet:
-      "Attach several subagents to an existing bus for explore fan-out or council-style expert collaboration.",
+      "Spawn a main-led workgroup on an existing bus; you collect, race, close, and summarize member results yourself.",
     promptGuidelines: [
       "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
-      "Use mode=explore to fan out diverse approaches: members may share facts, evidence, dead ends, and constraints with siblings, but should keep conclusions/recommendations until finish.",
-      "Use mode=council when the main agent should act as leader and coordinate domain experts that actively exchange conclusions, rebuttals, and next actions.",
+      "Workgroup only launches members. You are the leader/executor: use waitNextRun or waitBusSettled to collect results, decide next actions, and summarize outputs yourself.",
+      "Use mode=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with waitNextRun, close remaining members after the first success, and condense the winning result yourself.",
+      "Use mode=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
       "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
       "Use waitNextRun to receive finished or blocked members; if a member needs leader action, respond with subagent message.",
     ],
@@ -165,6 +189,45 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
   });
 }
 
+async function settleCompeteWorkgroupRuns(orchestra: OrchestraApi, busId: string): Promise<WorkgroupSettlement> {
+  const completedResults: WaitRunResult[] = [];
+  const excludeRunIds: string[] = [];
+
+  for (;;) {
+    const nextRun = await orchestra.waitNextRun(busId, { excludeRunIds, timeoutMs: null });
+    if (!nextRun.runResult) {
+      return {
+        mode: "compete",
+        status: resolveWorkgroupStatus(completedResults),
+        workerResults: completedResults,
+        completedResults,
+        pendingRunIds: nextRun.pendingRunIds,
+      };
+    }
+
+    completedResults.push(nextRun.runResult);
+    excludeRunIds.push(nextRun.runResult.runId);
+    if (nextRun.runResult.result?.status === "success") {
+      await closeAgentRuns(orchestra, nextRun.pendingRunIds);
+      return {
+        mode: "compete",
+        status: "success",
+        workerResults: [nextRun.runResult],
+        completedResults,
+        winner: nextRun.runResult,
+        pendingRunIds: [],
+      };
+    }
+  }
+}
+
+function resolveWorkgroupStatus(results: WaitRunResult[]): AgentResultStatus {
+  const statuses = results.map((result) => result.result?.status);
+  if (statuses.includes("success")) return "success";
+  if (statuses.includes("blocked")) return "blocked";
+  return "failed";
+}
+
 function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
   if (!params.busId) throw new Error("workgroup requires busId.");
   if (!params.goal) throw new Error("workgroup requires goal.");
@@ -175,20 +238,33 @@ function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
     busId: params.busId,
     goal: params.goal,
     mode: params.mode,
-    members: params.members.map((member, index) => {
-      if (!member.profile) throw new Error(`workgroup member ${index + 1} requires profile.`);
-      return { profile: member.profile, name: member.name, assignment: member.assignment };
-    }),
+    members: params.members.map((member, index) => toWorkgroupMember(member, `workgroup member ${index + 1}`)),
   };
+}
+
+export function toWorkgroupMember(member: RawWorkgroupMemberParams, label: string): WorkgroupMember {
+  if (!member.profile) throw new Error(`${label} requires profile.`);
+  return { profile: member.profile, name: member.name, assignment: member.assignment };
 }
 
 function withDefaultModelsForWorkgroup(input: WorkgroupInput, ctx: ExtensionContext): WorkgroupInput {
   return {
     ...input,
-    members: input.members.map((member) => ({
-      ...member,
-      profile: withDefaultProfileModel(member.profile, ctx),
-    })),
+    members: withDefaultModelsForWorkgroupMembers(input.members, ctx),
+  };
+}
+
+export function withDefaultModelsForWorkgroupMembers(
+  members: WorkgroupMember[],
+  ctx: ExtensionContext,
+): WorkgroupMember[] {
+  return members.map((member) => withDefaultModelForWorkgroupMember(member, ctx));
+}
+
+export function withDefaultModelForWorkgroupMember(member: WorkgroupMember, ctx: ExtensionContext): WorkgroupMember {
+  return {
+    ...member,
+    profile: withDefaultProfileModel(member.profile, ctx),
   };
 }
 
@@ -202,7 +278,7 @@ function prepareMembers(members: WorkgroupMember[], existingRuns: AgentRun[]): P
   return members.map((member, index) => {
     const name =
       member.name !== undefined
-        ? normalizeMemberName(member.name)
+        ? normalizeEntityName(member.name, "Workgroup member")
         : nextGeneratedMemberName(member.profile.name, index, reservedNames);
     const id = slugify(name);
     if (!id) throw new Error(`Workgroup member name "${name}" must contain letters or numbers.`);
@@ -222,13 +298,6 @@ function nextGeneratedMemberName(profileName: string, index: number, reservedNam
     const name = suffix === 1 ? base : `${base}-${suffix}`;
     if (!reservedNames.has(name)) return name;
   }
-}
-
-function normalizeMemberName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Workgroup member name must not be empty.");
-  if (trimmed.length > 64) throw new Error("Workgroup member name must be 64 characters or fewer.");
-  return trimmed;
 }
 
 function collectSpawnSuccesses(results: Array<PromiseSettledResult<SpawnSuccess>>): SpawnSuccess[] {
@@ -262,9 +331,9 @@ function formatLaunchFailure(
       const success = successes[index];
       const cleanupResult = cleanupResults[index];
       if (cleanupResult?.status === "rejected") {
-        parts.push(`- ${formatRunLabel(success.run)}: failed to close (${formatError(cleanupResult.reason)})`);
+        parts.push(`- ${formatNamedEntityLabel(success.run)}: failed to close (${formatError(cleanupResult.reason)})`);
       } else {
-        parts.push(`- ${formatRunLabel(success.run)}: closed`);
+        parts.push(`- ${formatNamedEntityLabel(success.run)}: closed`);
       }
     }
   }
@@ -272,8 +341,18 @@ function formatLaunchFailure(
   return parts.join("\n");
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function toSubagentSpawnInput(
+  input: PreparedWorkgroupInput,
+  member: PreparedWorkgroupMember,
+  busId: string,
+): SubagentSpawnInput {
+  return {
+    action: "spawn",
+    profile: member.profile,
+    task: buildMemberTask(input, member),
+    busId,
+    name: member.name,
+  };
 }
 
 function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgroupMember): string {
@@ -299,9 +378,9 @@ function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgrou
 }
 
 function buildModeGuidelines(mode: WorkgroupMode): string[] {
-  if (mode === "explore") {
+  if (mode === "compete") {
     return [
-      "Explore mode guidelines:",
+      "Compete mode guidelines:",
       "- Pursue your assigned approach independently; do not follow sibling agents' conclusions or recommendations.",
       "- Use publish_bus only for facts, evidence, dead ends, constraints, or blockers that may help sibling agents.",
       "- Keep your conclusions and recommendations private until finish so sibling agents do not converge too early.",
@@ -311,11 +390,11 @@ function buildModeGuidelines(mode: WorkgroupMode): string[] {
   }
 
   return [
-    "Council mode guidelines:",
+    "Synthesize mode guidelines:",
     "- Act as a domain expert advising the main-agent leader from your assigned perspective.",
     "- Use publish_bus for important findings, questions, blockers, context, conclusions, or rebuttals that sibling experts should see.",
     "- If you need leader action, approval, or a decision, finish with status blocked instead of publishing that request to the bus.",
-    "- Engage critically with sibling experts' conclusions and counterarguments; council mode should converge through open debate.",
+    "- Engage critically with sibling experts' conclusions and counterarguments; synthesize mode should converge through open debate.",
     "- In finish, summarize your expert findings, open questions, risks, and recommended next actions.",
   ];
 }
@@ -326,38 +405,24 @@ function formatRosterMember(member: PreparedWorkgroupMember): string {
 
 function formatWorkgroupMessage(bus: Bus, input: PreparedWorkgroupInput, runs: AgentRun[]): string {
   return [
-    `Launched ${input.mode} workgroup on bus ${formatBusLabel(bus)} with ${runs.length} run(s).`,
+    `Launched ${input.mode} workgroup on bus ${formatNamedEntityLabel(bus)} with ${runs.length} run(s).`,
     "",
     "Runs:",
-    ...runs.map((run) => `- ${formatRunLabel(run)}: ${run.state}`),
+    ...runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`),
     "",
     "Use waitNextRun to handle member results as they finish, or waitBusSettled for full fan-in.",
   ].join("\n");
-}
-
-function formatBusLabel(bus: Bus): string {
-  return bus.name === bus.id ? bus.id : `${bus.name} (${bus.id})`;
-}
-
-function formatRunLabel(run: AgentRun): string {
-  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
-}
-
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 type RawWorkgroupParams = {
   busId?: string;
   goal?: string;
   mode?: WorkgroupMode;
-  members?: Array<{
-    profile?: AgentProfile;
-    name?: string;
-    assignment?: string;
-  }>;
+  members?: RawWorkgroupMemberParams[];
+};
+
+export type RawWorkgroupMemberParams = {
+  profile?: AgentProfile;
+  name?: string;
+  assignment?: string;
 };

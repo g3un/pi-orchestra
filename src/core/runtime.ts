@@ -1,4 +1,4 @@
-import type { AgentProfile, AgentRun } from "./agent.ts";
+import type { AgentProfile, AgentRun } from "./subagent.ts";
 import type { BusMessage } from "./bus.ts";
 
 export interface SpawnAgentRuntimeOptions {

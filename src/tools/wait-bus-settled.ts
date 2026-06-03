@@ -1,8 +1,9 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentRun } from "../core/agent.ts";
+import type { AgentRun } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi, WaitBusSettledResult, WaitRunResult } from "../core/orchestra.ts";
+import { formatNamedEntityLabel } from "../utils.ts";
 
 export interface WaitBusSettledInput {
   busId: string;
@@ -101,7 +102,7 @@ function toWaitBusSettledInput(params: RawWaitBusSettledParams): WaitBusSettledI
 }
 
 function formatWaitBusSettledMessage(result: WaitBusSettledResult): string {
-  const busLabel = formatBusLabel(result.bus);
+  const busLabel = formatNamedEntityLabel(result.bus);
   const headline = result.timedOut
     ? `Timed out waiting for bus ${busLabel} to settle; ${result.pendingRunIds.length} run(s) still pending.`
     : `All ${result.runs.length} run(s) attached to bus ${busLabel} reached terminal state.`;
@@ -111,17 +112,9 @@ function formatWaitBusSettledMessage(result: WaitBusSettledResult): string {
 }
 
 function formatRunSummary(run: AgentRun): string {
-  const runLabel = formatRunLabel(run);
+  const runLabel = formatNamedEntityLabel(run);
   if (!run.result) return `- ${runLabel}: ${run.state}`;
   return `- ${runLabel}: ${run.state} result=${run.result.status} summary=${run.result.summary}`;
-}
-
-function formatBusLabel(bus: Bus): string {
-  return bus.name === bus.id ? bus.id : `${bus.name} (${bus.id})`;
-}
-
-function formatRunLabel(run: AgentRun): string {
-  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
 }
 
 type RawWaitBusSettledParams = {
