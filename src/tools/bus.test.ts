@@ -101,6 +101,12 @@ class FakeOrchestra implements OrchestraApi {
     return this.runs.get(id);
   }
 
+  listRuns(options: { busId?: string } = {}): AgentRun[] {
+    const runs = [...this.runs.values()];
+    if (!options.busId) return runs;
+    return runs.filter((run) => run.busId === options.busId);
+  }
+
   async resumeAgent(id: string, _message: string): Promise<AgentRun> {
     const run = this.runs.get(id);
     if (!run) throw new Error(`Agent ${id} not found.`);

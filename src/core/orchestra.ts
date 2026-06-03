@@ -11,6 +11,7 @@ export interface OrchestraApi {
 
   spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun>;
   getRun(id: string): AgentRun | undefined;
+  listRuns(options?: ListRunsOptions): AgentRun[];
   resumeAgent(id: string, message: string): Promise<AgentRun>;
   closeAgent(id: string): Promise<AgentRun | undefined>;
   waitRuns(runIds: string[], options?: WaitRunsOptions): Promise<AgentRun[]>;
@@ -23,6 +24,10 @@ export interface PublishedBusMessage {
 
 export interface WaitRunsOptions {
   timeoutMs?: number;
+}
+
+export interface ListRunsOptions {
+  busId?: string;
 }
 
 export interface OrchestraDeps {
@@ -62,6 +67,12 @@ export class Orchestra implements OrchestraApi {
 
   getRun(id: string): AgentRun | undefined {
     return this.store.getRun(id);
+  }
+
+  listRuns(options: ListRunsOptions = {}): AgentRun[] {
+    const runs = this.store.listRuns();
+    if (!options.busId) return runs;
+    return runs.filter((run) => run.busId === options.busId);
   }
 
   async resumeAgent(id: string, message: string): Promise<AgentRun> {

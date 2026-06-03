@@ -23,6 +23,19 @@ test("orchestra creates buses in the store", () => {
   assert.deepEqual(bus.messages, []);
 });
 
+test("orchestra lists runs and filters by bus", () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const firstRun = run({ id: "agent-1", busId: "bus-1" });
+  const secondRun = run({ id: "agent-2", busId: "bus-2" });
+  store.saveRun(firstRun);
+  store.saveRun(secondRun);
+
+  assert.deepEqual(orchestra.listRuns(), [firstRun, secondRun]);
+  assert.deepEqual(orchestra.listRuns({ busId: "bus-1" }), [firstRun]);
+});
+
 test("orchestra delegates agent lifecycle while store remains the source of truth", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
