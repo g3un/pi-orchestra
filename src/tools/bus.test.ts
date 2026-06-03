@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
+import type { OrchestraApi, PublishedBusMessage, WaitBusOptions, WaitBusResult } from "../core/orchestra.ts";
 import { createBusTool } from "./bus.ts";
 
 test("bus create allocates a standalone bus through orchestra", async () => {
@@ -117,7 +117,20 @@ class FakeOrchestra implements OrchestraApi {
     return this.runs.get(id);
   }
 
-  waitRuns(runIds: string[]): Promise<AgentRun[]> {
-    return Promise.resolve(runIds.map((id) => this.runs.get(id)).filter((run): run is AgentRun => run !== undefined));
+  waitBus(busId: string, _options: WaitBusOptions = {}): Promise<WaitBusResult> {
+    const bus = this.buses.get(busId);
+    if (!bus) throw new Error(`Bus ${busId} not found.`);
+    const runs = this.listRuns({ busId });
+    return Promise.resolve({ bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] });
   }
+}
+
+function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
+  const runResult: WaitBusResult["runResults"][number] = {
+    runId: run.id,
+    profile: run.profile,
+    state: run.state,
+  };
+  if (run.result !== undefined) runResult.result = run.result;
+  return runResult;
 }

@@ -80,49 +80,95 @@ test("orchestra rejects resume for running agents", async () => {
   assert.equal(runtime.resumed, undefined);
 });
 
-test("orchestra waitRuns resolves immediately for terminal runs", async () => {
+test("orchestra waitBus resolves immediately for terminal bus runs", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const finishedRun = run({ id: "agent-1", state: "finished" });
-  const failedRun = run({ id: "agent-2", state: "failed" });
+  const bus = orchestra.createBus();
+  const finishedRun = run({ id: "agent-1", busId: bus.id, state: "finished" });
+  const failedRun = run({ id: "agent-2", busId: bus.id, state: "failed" });
+  const otherBusRun = run({ id: "agent-3", busId: "other-bus", state: "running" });
   store.saveRun(finishedRun);
   store.saveRun(failedRun);
+  store.saveRun(otherBusRun);
 
-  const runs = await orchestra.waitRuns([finishedRun.id, failedRun.id]);
+  const output = await orchestra.waitBus(bus.id);
 
-  assert.deepEqual(runs, [finishedRun, failedRun]);
+  assert.equal(output.bus, bus);
+  assert.deepEqual(output.runs, [finishedRun, failedRun]);
+  assert.deepEqual(output.runResults, [
+    { runId: finishedRun.id, profile: finishedRun.profile, state: finishedRun.state },
+    { runId: failedRun.id, profile: failedRun.profile, state: failedRun.state },
+  ]);
+  assert.equal(output.timedOut, false);
+  assert.deepEqual(output.pendingRunIds, []);
 });
 
-test("orchestra waitRuns waits for every run to become terminal", async () => {
+test("orchestra waitBus waits for every current bus run to become terminal", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const runningRun = run({ id: "agent-1", state: "running" });
-  const finishedRun = run({ id: "agent-2", state: "finished" });
+  const bus = orchestra.createBus();
+  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
+  const finishedRun = run({ id: "agent-2", busId: bus.id, state: "finished" });
   store.saveRun(runningRun);
   store.saveRun(finishedRun);
 
-  const waitPromise = orchestra.waitRuns([runningRun.id, finishedRun.id], { timeoutMs: 1000 });
+  const waitPromise = orchestra.waitBus(bus.id, { timeoutMs: 1000 });
   const completedRun = { ...runningRun, state: "finished" as const };
   store.saveRun(completedRun);
 
-  const runs = await waitPromise;
+  const output = await waitPromise;
 
-  assert.deepEqual(runs, [completedRun, finishedRun]);
+  assert.equal(output.bus, bus);
+  assert.deepEqual(output.runs, [completedRun, finishedRun]);
+  assert.equal(output.timedOut, false);
+  assert.deepEqual(output.pendingRunIds, []);
 });
 
-test("orchestra waitRuns rejects on timeout", async () => {
+test("orchestra waitBus returns partial results on timeout", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const runningRun = run({ id: "agent-1", state: "running" });
+  const bus = orchestra.createBus();
+  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
   store.saveRun(runningRun);
 
-  await assert.rejects(
-    () => orchestra.waitRuns([runningRun.id], { timeoutMs: 0 }),
-    /Timed out waiting for agent run\(s\): agent-1\./,
-  );
+  const output = await orchestra.waitBus(bus.id, { timeoutMs: 1 });
+
+  assert.equal(output.bus, bus);
+  assert.deepEqual(output.runs, [runningRun]);
+  assert.deepEqual(output.runResults, [{ runId: runningRun.id, profile: runningRun.profile, state: runningRun.state }]);
+  assert.equal(output.timedOut, true);
+  assert.deepEqual(output.pendingRunIds, [runningRun.id]);
+});
+
+test("orchestra waitBus rejects non-positive timeouts", () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus();
+
+  assert.throws(() => orchestra.waitBus(bus.id, { timeoutMs: 0 }), /timeoutMs must be positive/);
+});
+
+test("orchestra waitBus accepts null timeout to wait indefinitely", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus();
+  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
+  store.saveRun(runningRun);
+
+  const waitPromise = orchestra.waitBus(bus.id, { timeoutMs: null });
+  const completedRun = { ...runningRun, state: "finished" as const };
+  store.saveRun(completedRun);
+
+  const output = await waitPromise;
+
+  assert.deepEqual(output.runs, [completedRun]);
+  assert.equal(output.timedOut, false);
+  assert.deepEqual(output.pendingRunIds, []);
 });
 
 class FakeRuntime implements AgentRuntime {

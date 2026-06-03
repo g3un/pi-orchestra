@@ -14,7 +14,7 @@ export interface OrchestraApi {
   listRuns(options?: ListRunsOptions): AgentRun[];
   resumeAgent(id: string, message: string): Promise<AgentRun>;
   closeAgent(id: string): Promise<AgentRun | undefined>;
-  waitRuns(runIds: string[], options?: WaitRunsOptions): Promise<AgentRun[]>;
+  waitBus(busId: string, options?: WaitBusOptions): Promise<WaitBusResult>;
 }
 
 export interface PublishedBusMessage {
@@ -22,8 +22,24 @@ export interface PublishedBusMessage {
   busMessage: BusMessage;
 }
 
-export interface WaitRunsOptions {
-  timeoutMs?: number;
+export interface WaitBusResult {
+  bus: Bus;
+  runs: AgentRun[];
+  runResults: WaitBusRunResult[];
+  timedOut: boolean;
+  pendingRunIds: string[];
+}
+
+export interface WaitBusRunResult {
+  runId: string;
+  profile: string;
+  state: AgentRun["state"];
+  result?: AgentRun["result"];
+}
+
+export interface WaitBusOptions {
+  /** Defaults to 10 minutes. Use null to wait indefinitely. */
+  timeoutMs?: number | null;
 }
 
 export interface ListRunsOptions {
@@ -34,6 +50,8 @@ export interface OrchestraDeps {
   runtime: AgentRuntime;
   store: AgentStore;
 }
+
+const DEFAULT_WAIT_BUS_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class Orchestra implements OrchestraApi {
   private readonly runtime: AgentRuntime;
@@ -85,19 +103,19 @@ export class Orchestra implements OrchestraApi {
     return await this.runtime.close(id);
   }
 
-  waitRuns(runIds: string[], options: WaitRunsOptions = {}): Promise<AgentRun[]> {
-    if (options.timeoutMs !== undefined && options.timeoutMs < 0) {
-      throw new Error("waitRuns timeoutMs must be non-negative.");
+  waitBus(busId: string, options: WaitBusOptions = {}): Promise<WaitBusResult> {
+    const timeoutMs = options.timeoutMs === undefined ? DEFAULT_WAIT_BUS_TIMEOUT_MS : options.timeoutMs;
+    if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      throw new Error("waitBus timeoutMs must be positive, or null to wait indefinitely.");
     }
 
-    const initialRuns = runIds.map((id) => {
-      const run = this.store.getRun(id);
-      if (!run) throw new Error(`Agent ${id} not found.`);
-      return run;
-    });
-    if (initialRuns.every(isTerminalRun)) return Promise.resolve(initialRuns);
+    const bus = this.requireBus(busId);
+    const initialRuns = this.listRuns({ busId });
+    if (initialRuns.every(isTerminalRun)) {
+      return Promise.resolve(buildWaitBusResult(bus, initialRuns, false));
+    }
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const latestRuns = new Map(initialRuns.map((run) => [run.id, run]));
       const unsubscribeAll: Array<() => void> = [];
       let settled = false;
@@ -108,27 +126,26 @@ export class Orchestra implements OrchestraApi {
         for (const unsubscribe of unsubscribeAll.splice(0)) unsubscribe();
       };
 
+      const getLatestRuns = () => initialRuns.map((run) => latestRuns.get(run.id) ?? run);
+      const getPendingRunIds = (runs: AgentRun[]) => runs.filter((run) => !isTerminalRun(run)).map((run) => run.id);
+
       const resolveIfDone = () => {
-        const runs = runIds.map((id) => latestRuns.get(id));
-        if (!runs.every((run): run is AgentRun => run !== undefined && isTerminalRun(run))) return;
+        const runs = getLatestRuns();
+        if (getPendingRunIds(runs).length > 0) return;
 
         settled = true;
         cleanup();
-        resolve(runs);
+        resolve(buildWaitBusResult(bus, runs, false));
       };
 
-      if (options.timeoutMs !== undefined) {
+      if (timeoutMs !== null) {
         timeout = setTimeout(() => {
           if (settled) return;
 
           settled = true;
           cleanup();
-          const waitingIds = runIds.filter((id) => {
-            const run = latestRuns.get(id);
-            return !run || !isTerminalRun(run);
-          });
-          reject(new Error(`Timed out waiting for agent run(s): ${waitingIds.join(", ")}.`));
-        }, options.timeoutMs);
+          resolve(buildWaitBusResult(bus, getLatestRuns(), true));
+        }, timeoutMs);
       }
 
       for (const run of initialRuns) {
@@ -157,6 +174,26 @@ export class Orchestra implements OrchestraApi {
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
+}
+
+function buildWaitBusResult(bus: Bus, runs: AgentRun[], timedOut: boolean): WaitBusResult {
+  return {
+    bus,
+    runs,
+    runResults: runs.map(toWaitBusRunResult),
+    timedOut,
+    pendingRunIds: runs.filter((run) => !isTerminalRun(run)).map((run) => run.id),
+  };
+}
+
+function toWaitBusRunResult(run: AgentRun): WaitBusRunResult {
+  const runResult: WaitBusRunResult = {
+    runId: run.id,
+    profile: run.profile,
+    state: run.state,
+  };
+  if (run.result !== undefined) runResult.result = run.result;
+  return runResult;
 }
 
 function isTerminalRun(run: AgentRun): boolean {

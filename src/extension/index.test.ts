@@ -14,9 +14,9 @@ test("bus parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
   assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish"]);
-  assert.match(parameters.properties.action?.description ?? "", /create allocates a standalone bus/);
-  assert.match(parameters.properties.id?.description ?? "", /Required for action=status/);
-  assert.match(parameters.properties.message?.description ?? "", /Required for action=publish/);
+  assert.match(parameters.properties.action?.description ?? "", /work grouping boundary/);
+  assert.match(parameters.properties.id?.description ?? "", /one bus groups the subagents/);
+  assert.match(parameters.properties.message?.description ?? "", /work bus/);
 });
 
 test("subagent parameters use an OpenAI-compatible root object schema", () => {
@@ -37,18 +37,20 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.match(parameters.properties.message?.description ?? "", /Required for action=resume/);
 });
 
-test("waitRuns parameters use an OpenAI-compatible root object schema", () => {
+test("waitBus parameters use an OpenAI-compatible root object schema", () => {
   const registeredTools = registerExtensionTools();
 
-  const waitRuns = registeredTools.find((tool) => tool.name === "waitRuns");
-  assert.ok(waitRuns);
+  const waitBus = registeredTools.find((tool) => tool.name === "waitBus");
+  assert.ok(waitBus);
 
-  const parameters = waitRuns.parameters as JsonSchemaObject;
+  const parameters = waitBus.parameters as JsonSchemaObject;
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.match(parameters.properties.runIds?.description ?? "", /Run ids to wait for/);
-  assert.match(parameters.properties.timeoutMs?.description ?? "", /timeout in milliseconds/);
+  assert.match(parameters.properties.busId?.description ?? "", /Work bus id to wait for/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /null to wait indefinitely/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /latest collected state/);
 });
 
 function registerExtensionTools(): ToolDefinition[] {

@@ -8,13 +8,13 @@ import type { BusInput } from "../tools/bus.ts";
 import { createBusTool, type BusTool } from "../tools/bus.ts";
 import type { SubagentInput } from "../tools/subagent.ts";
 import { createSubagentTool, type SubagentTool } from "../tools/subagent.ts";
-import type { WaitRunsInput } from "../tools/wait-runs.ts";
-import { createWaitRunsTool, type WaitRunsTool } from "../tools/wait-runs.ts";
+import type { WaitBusInput } from "../tools/wait-bus.ts";
+import { createWaitBusTool, type WaitBusTool } from "../tools/wait-bus.ts";
 
 const BusActionParams = Type.String({
   enum: ["create", "status", "publish"],
   description:
-    "Action to perform. create allocates a standalone bus. status inspects a bus by id. publish sends shared context to every active subagent attached to the bus.",
+    "Action to perform. A bus is the work grouping boundary: create allocates one work bus, status inspects a work bus by id, and publish sends shared context to every active subagent attached to that bus.",
 });
 
 const BusToolParams = Type.Object(
@@ -22,28 +22,38 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     id: Type.Optional(
       Type.String({
-        description: "Required for action=status and action=publish. Bus id returned by action=create.",
+        description:
+          "Required for action=status and action=publish. Bus id returned by action=create; one bus groups the subagents for a delegated work item.",
       }),
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=publish. Shared context to add to the bus.",
+        description: "Required for action=publish. Shared context to add to the work bus for all attached agents.",
       }),
     ),
   },
   { additionalProperties: false },
 );
 
-const WaitRunsToolParams = Type.Object(
+const WaitBusToolParams = Type.Object(
   {
-    runIds: Type.Array(Type.String(), {
-      description: "Run ids to wait for. The tool returns when every listed run is finished, failed, or closed.",
-      minItems: 1,
+    busId: Type.String({
+      description:
+        "Work bus id to wait for. The tool returns when every current run attached to this bus is finished, failed, or closed.",
     }),
     timeoutMs: Type.Optional(
-      Type.Number({
-        description: "Optional timeout in milliseconds for waiting for all runs.",
-      }),
+      Type.Union(
+        [
+          Type.Number({
+            exclusiveMinimum: 0,
+          }),
+          Type.Null(),
+        ],
+        {
+          description:
+            "Optional positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, waitBus returns the latest collected state for current runs attached to the bus.",
+        },
+      ),
     ),
   },
   { additionalProperties: false },
@@ -80,7 +90,8 @@ const SubagentToolParams = Type.Object(
     ),
     busId: Type.Optional(
       Type.String({
-        description: "Required for action=spawn. Existing bus id returned by bus action=create.",
+        description:
+          "Required for action=spawn. Existing bus id returned by bus action=create; this attaches the subagent to that work group.",
       }),
     ),
     id: Type.Optional(
@@ -100,7 +111,7 @@ const SubagentToolParams = Type.Object(
 interface ToolBundle {
   busTool: BusTool;
   subagentTool: SubagentTool;
-  waitRunsTool: WaitRunsTool;
+  waitBusTool: WaitBusTool;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -110,11 +121,14 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
     defineTool({
       name: "bus",
       label: "Bus",
-      description: "Create, inspect, and publish shared context buses for orchestrated agents.",
-      promptSnippet: "Create a bus before spawning related subagents, then publish shared context to it.",
+      description:
+        "Create, inspect, and publish shared context buses. A bus is the work grouping boundary: one delegated task or team should share one bus, with one or more subagents attached to it.",
+      promptSnippet:
+        "Create one bus per delegated work item, spawn related subagents on it, then publish shared context to that bus.",
       promptGuidelines: [
-        "Use action=create before spawning a subagent or agent team that needs shared context.",
-        "Pass the returned bus id as subagent action=spawn busId.",
+        "Use action=create before spawning a subagent or agent team; the returned bus is the work grouping boundary.",
+        "Pass the returned bus id as subagent action=spawn busId so each subagent joins that work group.",
+        "Multiple subagents can attach to the same bus when they are cooperating on the same delegated work item.",
         "Use action=publish to send updated parent context to every active subagent attached to the bus.",
         "Use action=status to inspect the messages already published on a bus.",
       ],
@@ -140,8 +154,9 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       promptSnippet: "Delegate isolated work to subagent and inspect or resume it later.",
       promptGuidelines: [
         "Use subagent for isolated research, inspection, or implementation tasks.",
-        "Create a bus first with bus action=create, then pass its id as busId when spawning related subagents.",
-        "Use action=spawn to create a new isolated subagent for a delegated task on an existing bus.",
+        "Create a bus first with bus action=create; the bus is the work grouping boundary for one delegated task or team.",
+        "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId.",
+        "Attach multiple subagents to the same bus when they are cooperating on the same work item.",
         "Use action=status before resuming or closing an existing subagent if its state is unclear.",
         "Use bus action=publish to send updated parent context to agents attached to a bus.",
       ],
@@ -162,20 +177,21 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
 
   pi.registerTool(
     defineTool({
-      name: "waitRuns",
-      label: "Wait Runs",
-      description: "Wait until one or more agent runs reach a terminal state.",
-      promptSnippet: "Wait for spawned subagents or agent team runs to finish before collecting their status.",
+      name: "waitBus",
+      label: "Wait Bus",
+      description: "Wait until all current agent runs attached to a work bus reach a terminal state.",
+      promptSnippet: "Wait for every current subagent on a bus to finish before collecting their statuses.",
       promptGuidelines: [
-        "Use waitRuns after spawning one or more subagents when you need their final results before continuing.",
-        "Pass all run ids in runIds; the tool returns when every run is finished, failed, or closed.",
-        "Use timeoutMs to avoid waiting indefinitely when a run may be stuck.",
+        "Use waitBus after spawning one or more subagents on a bus when you need the bus work group to finish before continuing.",
+        "Pass the busId for the delegated work item; the tool waits for every current run attached to that bus.",
+        "By default waitBus times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
+        "On timeout, the tool returns the latest collected run states for the bus instead of failing.",
       ],
-      parameters: WaitRunsToolParams,
+      parameters: WaitBusToolParams,
       executionMode: "sequential",
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const bundle = getBundle(bundles, ctx);
-        const output = await bundle.waitRunsTool.execute(toWaitRunsInput(params as RawWaitRunsParams));
+        const output = await bundle.waitBusTool.execute(toWaitBusInput(params as RawWaitBusParams));
 
         return {
           content: [{ type: "text", text: output.message }],
@@ -201,9 +217,9 @@ type RawSubagentParams = {
   message?: string;
 };
 
-type RawWaitRunsParams = {
-  runIds?: string[];
-  timeoutMs?: number;
+type RawWaitBusParams = {
+  busId?: string;
+  timeoutMs?: number | null;
 };
 
 function toBusInput(params: RawBusParams): BusInput {
@@ -219,9 +235,9 @@ function toBusInput(params: RawBusParams): BusInput {
   return { action: "publish", id: params.id, message: params.message };
 }
 
-function toWaitRunsInput(params: RawWaitRunsParams): WaitRunsInput {
-  if (!params.runIds || params.runIds.length === 0) throw new Error("waitRuns requires runIds.");
-  return { runIds: params.runIds, timeoutMs: params.timeoutMs };
+function toWaitBusInput(params: RawWaitBusParams): WaitBusInput {
+  if (!params.busId) throw new Error("waitBus requires busId.");
+  return { busId: params.busId, timeoutMs: params.timeoutMs };
 }
 
 function toSubagentInput(params: RawSubagentParams): SubagentInput {
@@ -261,7 +277,7 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
   const bundle = {
     busTool: createBusTool({ orchestra }),
     subagentTool: createSubagentTool({ orchestra }),
-    waitRunsTool: createWaitRunsTool({ orchestra }),
+    waitBusTool: createWaitBusTool({ orchestra }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;
