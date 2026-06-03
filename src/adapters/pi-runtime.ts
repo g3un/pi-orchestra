@@ -106,15 +106,17 @@ export class PiAgentRuntime implements AgentRuntime {
     this.store.addBusMessage(busId, busMessage);
 
     const steeringMessage = formatBusMessages([busMessage]);
+    const steerTasks: Array<Promise<void>> = [];
     for (const [runId, entry] of this.entries) {
       const run = this.store.getRun(runId);
       if (!run || run.busId !== busId) continue;
       if (run.id === from || run.state === "closed" || !entry.session.isStreaming) continue;
 
       entry.seenBusMessageIds.add(busMessage.id);
-      await entry.session.steer(steeringMessage);
+      steerTasks.push(entry.session.steer(steeringMessage));
     }
 
+    await Promise.all(steerTasks);
     return busMessage;
   }
 
