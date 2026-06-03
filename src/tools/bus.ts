@@ -1,7 +1,5 @@
-import { v7 as uuid7 } from "uuid";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { AgentRuntime } from "../core/runtime.ts";
-import type { AgentStore } from "../core/store.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
 
 export type BusInput =
   | {
@@ -30,34 +28,31 @@ export interface BusTool {
 }
 
 export interface BusToolDeps {
-  runtime: AgentRuntime;
-  store: AgentStore;
+  orchestra: OrchestraApi;
 }
 
-export function createBusTool({ runtime, store }: BusToolDeps): BusTool {
+export function createBusTool({ orchestra }: BusToolDeps): BusTool {
   return {
     name: "bus",
 
     async execute(input) {
       if (input.action === "create") {
-        const bus: Bus = { id: uuid7(), messages: [] };
-        store.saveBus(bus);
+        const bus = orchestra.createBus();
         return { bus, message: formatBusStatus(bus, `Created bus ${bus.id}.`) };
       }
 
-      const bus = store.getBus(input.id);
+      const bus = orchestra.getBus(input.id);
       if (!bus) return { message: `Bus ${input.id} not found.` };
 
       if (input.action === "status") {
         return { bus, message: formatBusStatus(bus) };
       }
 
-      const busMessage = await runtime.publishBus(bus, input.message, input.from ?? "main");
-      store.addBusMessage(bus.id, busMessage);
+      const published = await orchestra.publishBus(input.id, input.message, input.from ?? "main");
       return {
-        bus,
-        busMessage,
-        message: formatBusStatus(bus, `Published message to bus ${bus.id}.`),
+        bus: published.bus,
+        busMessage: published.busMessage,
+        message: formatBusStatus(published.bus, `Published message to bus ${published.bus.id}.`),
       };
     },
   };

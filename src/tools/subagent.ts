@@ -1,6 +1,5 @@
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
-import type { AgentRuntime } from "../core/runtime.ts";
-import type { AgentStore } from "../core/store.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
 
 export type SubagentInput =
   | {
@@ -34,43 +33,34 @@ export interface SubagentTool {
 }
 
 export interface SubagentToolDeps {
-  runtime: AgentRuntime;
-  store: AgentStore;
+  orchestra: OrchestraApi;
 }
 
-export function createSubagentTool({ runtime, store }: SubagentToolDeps): SubagentTool {
+export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentTool {
   return {
     name: "subagent",
 
     async execute(input) {
       if (input.action === "spawn") {
-        const bus = store.getBus(input.busId);
-        if (!bus) throw new Error(`Bus ${input.busId} not found.`);
-
-        const run = await runtime.spawn(input.profile, input.task, bus);
-        store.saveRun(run);
+        const run = await orchestra.spawnAgent(input.profile, input.task, input.busId);
         return { run, message: formatRunMessage(run) };
       }
 
       if (input.action === "status") {
-        const run = runtime.get(input.id) ?? store.getRun(input.id);
+        const run = orchestra.getRun(input.id);
         if (!run) return { message: `Subagent ${input.id} not found.` };
         return { run, message: formatRunMessage(run) };
       }
 
       if (input.action === "resume") {
-        const run = await runtime.resume(input.id, input.message);
-        store.saveRun(run);
+        const run = await orchestra.resumeAgent(input.id, input.message);
         return {
           run,
           message: formatRunMessage(run, `Resumed subagent ${run.id}; it is ${run.state}.`),
         };
       }
 
-      await runtime.close(input.id);
-      const current = store.getRun(input.id);
-      const run = current ? { ...current, state: "closed" as const } : undefined;
-      if (run) store.saveRun(run);
+      const run = await orchestra.closeAgent(input.id);
       return {
         run,
         message: run ? formatRunMessage(run, `Closed subagent ${input.id}.`) : `Closed subagent ${input.id}.`,

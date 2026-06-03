@@ -2,6 +2,7 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import { Type } from "typebox";
 import type { AgentProfile } from "../core/agent.ts";
 import { InMemoryAgentStore } from "../core/in-memory-store.ts";
+import { Orchestra } from "../core/orchestra.ts";
 import { PiAgentRuntime } from "../core/pi-runtime.ts";
 import type { BusInput } from "../tools/bus.ts";
 import { createBusTool, type BusTool } from "../tools/bus.ts";
@@ -199,14 +200,14 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
 
   const store = new InMemoryAgentStore();
   const runtime = new PiAgentRuntime({
+    store,
     cwd: ctx.cwd,
     resolveModel: (model) => resolveModel(ctx, model),
-    onRunUpdate: (run) => store.saveRun(run),
-    onBusMessage: (bus, message) => store.addBusMessage(bus.id, message),
   });
+  const orchestra = new Orchestra({ runtime, store });
   const bundle = {
-    busTool: createBusTool({ runtime, store }),
-    subagentTool: createSubagentTool({ runtime, store }),
+    busTool: createBusTool({ orchestra }),
+    subagentTool: createSubagentTool({ orchestra }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;

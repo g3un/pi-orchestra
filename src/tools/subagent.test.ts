@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { AgentRuntime } from "../core/runtime.ts";
-import type { AgentStore } from "../core/store.ts";
+import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const profile: AgentProfile = {
@@ -11,30 +10,27 @@ const profile: AgentProfile = {
   systemPrompt: "Research the assigned task.",
 };
 
-test("subagent spawn uses an existing bus, starts the runtime, and stores the run", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
+test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
   const bus: Bus = { id: "bus-1", messages: [] };
-  store.saveBus(bus);
+  orchestra.buses.set(bus.id, bus);
 
   const output = await tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: bus.id });
 
   assert.ok(output.run);
   assert.equal(output.run.id, "agent-1");
   assert.equal(output.run.busId, bus.id);
-  assert.deepEqual(runtime.spawned, {
+  assert.deepEqual(orchestra.spawned, {
     profile,
     task: "Inspect the code.",
-    bus,
+    busId: bus.id,
   });
-  assert.deepEqual(store.savedRuns, [output.run]);
 });
 
 test("subagent spawn rejects missing buses", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
 
   await assert.rejects(
     () => tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: "missing" }),
@@ -42,14 +38,11 @@ test("subagent spawn rejects missing buses", async () => {
   );
 });
 
-test("subagent status prefers runtime state and falls back to store state", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
-  const runtimeRun = run({ id: "same-id", state: "running" });
-  const storeRun = run({ id: "same-id", state: "failed" });
-  const fallbackRun = run({
-    id: "store-only",
+test("subagent status reads orchestra state", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
+  const finishedRun = run({
+    id: "agent-1",
     state: "finished",
     result: {
       status: "success",
@@ -57,21 +50,16 @@ test("subagent status prefers runtime state and falls back to store state", asyn
       data: { file: "src/tools/subagent.ts" },
     },
   });
+  orchestra.runs.set(finishedRun.id, finishedRun);
 
-  runtime.runs.set(runtimeRun.id, runtimeRun);
-  store.saveRun(storeRun);
-  store.saveRun(fallbackRun);
-
-  const runtimeOutput = await tool.execute({ action: "status", id: "same-id" });
-  const fallbackOutput = await tool.execute({ action: "status", id: "store-only" });
+  const output = await tool.execute({ action: "status", id: finishedRun.id });
   const missingOutput = await tool.execute({ action: "status", id: "missing" });
 
-  assert.equal(runtimeOutput.run, runtimeRun);
-  assert.equal(fallbackOutput.run, fallbackRun);
+  assert.equal(output.run, finishedRun);
   assert.equal(
-    fallbackOutput.message,
+    output.message,
     [
-      "Subagent store-only is finished.",
+      "Subagent agent-1 is finished.",
       "",
       "Result: success",
       "Found the relevant implementation.",
@@ -84,57 +72,79 @@ test("subagent status prefers runtime state and falls back to store state", asyn
   assert.equal(missingOutput.message, "Subagent missing not found.");
 });
 
-test("subagent resume delegates to runtime and stores the returned run", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
+test("subagent resume delegates to orchestra", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
   const existing = run({ id: "agent-1", state: "finished" });
-  runtime.runs.set(existing.id, existing);
+  orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "resume", id: existing.id, message: "Continue." });
 
-  assert.deepEqual(runtime.resumed, { id: existing.id, message: "Continue." });
+  assert.deepEqual(orchestra.resumed, { id: existing.id, message: "Continue." });
   assert.ok(output.run);
   assert.equal(output.run.state, "running");
-  assert.equal(store.getRun(existing.id), output.run);
+  assert.equal(orchestra.getRun(existing.id), output.run);
 });
 
-test("subagent close delegates to runtime and records the closed state", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
+test("subagent close delegates to orchestra", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
   const existing = run({ id: "agent-1", state: "finished" });
-  store.saveRun(existing);
+  orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "close", id: existing.id });
 
-  assert.deepEqual(runtime.closedIds, [existing.id]);
+  assert.deepEqual(orchestra.closedIds, [existing.id]);
   assert.ok(output.run);
   assert.equal(output.run.state, "closed");
-  assert.equal(store.getRun(existing.id)?.state, "closed");
+  assert.equal(orchestra.getRun(existing.id)?.state, "closed");
 });
 
-class FakeRuntime implements AgentRuntime {
+class FakeOrchestra implements OrchestraApi {
+  buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();
-  spawned?: { profile: AgentProfile; task: string; bus: Bus };
+  spawned?: { profile: AgentProfile; task: string; busId: string };
   resumed?: { id: string; message: string };
-  published?: { bus: Bus; message: string; from: string };
   closedIds: string[] = [];
 
-  async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
-    this.spawned = { profile, task, bus };
+  createBus(): Bus {
+    const bus: Bus = { id: `bus-${this.buses.size + 1}`, messages: [] };
+    this.buses.set(bus.id, bus);
+    return bus;
+  }
+
+  getBus(id: string): Bus | undefined {
+    return this.buses.get(id);
+  }
+
+  async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
+    const bus = this.buses.get(id);
+    if (!bus) throw new Error(`Bus ${id} not found.`);
+    const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, message, from };
+    bus.messages.push(busMessage);
+    return { bus, busMessage };
+  }
+
+  async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
+    if (!this.buses.has(busId)) throw new Error(`Bus ${busId} not found.`);
+
+    this.spawned = { profile, task, busId };
     const spawnedRun = run({
       id: "agent-1",
       profile: profile.name,
       task,
-      busId: bus.id,
+      busId,
       state: "running",
     });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
   }
 
-  async resume(id: string, message: string): Promise<AgentRun> {
+  getRun(id: string): AgentRun | undefined {
+    return this.runs.get(id);
+  }
+
+  async resumeAgent(id: string, message: string): Promise<AgentRun> {
     this.resumed = { id, message };
     const current = this.runs.get(id) ?? run({ id });
     const resumedRun = { ...current, state: "running" as const };
@@ -142,59 +152,14 @@ class FakeRuntime implements AgentRuntime {
     return resumedRun;
   }
 
-  async publishBus(bus: Bus, message: string, from: string): Promise<BusMessage> {
-    this.published = { bus, message, from };
-    return { id: "message-1", message, from };
-  }
-
-  async close(id: string): Promise<void> {
+  async closeAgent(id: string): Promise<AgentRun | undefined> {
     this.closedIds.push(id);
-  }
+    const current = this.runs.get(id);
+    if (!current) return undefined;
 
-  get(id: string): AgentRun | undefined {
-    return this.runs.get(id);
-  }
-}
-
-class FakeStore implements AgentStore {
-  private readonly runs = new Map<string, AgentRun>();
-  private readonly buses = new Map<string, Bus>();
-  savedRuns: AgentRun[] = [];
-  savedBuses: Bus[] = [];
-  busMessagesAdded: Array<{ busId: string; message: BusMessage }> = [];
-
-  saveRun(run: AgentRun): void {
-    this.savedRuns.push(run);
-    this.runs.set(run.id, run);
-  }
-
-  getRun(id: string): AgentRun | undefined {
-    return this.runs.get(id);
-  }
-
-  listRuns(): AgentRun[] {
-    return [...this.runs.values()];
-  }
-
-  saveBus(bus: Bus): void {
-    this.savedBuses.push(bus);
-    this.buses.set(bus.id, bus);
-  }
-
-  getBus(id: string): Bus | undefined {
-    return this.buses.get(id);
-  }
-
-  addBusMessage(busId: string, message: BusMessage): void {
-    this.busMessagesAdded.push({ busId, message });
-    const bus = this.buses.get(busId);
-    if (!bus) return;
-    const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
-    if (existingIndex >= 0) {
-      bus.messages[existingIndex] = message;
-    } else {
-      bus.messages.push(message);
-    }
+    const closedRun = { ...current, state: "closed" as const };
+    this.runs.set(id, closedRun);
+    return closedRun;
   }
 }
 

@@ -11,18 +11,16 @@ import type { AgentProfile, AgentResult, AgentRun } from "./agent.ts";
 import type { Bus, BusMessage } from "./bus.ts";
 import { formatBusMessages } from "./bus-format.ts";
 import type { AgentRuntime } from "./runtime.ts";
+import type { AgentStore } from "./store.ts";
 
 export interface PiAgentRuntimeOptions {
+  store: AgentStore;
   cwd?: string;
   resolveModel?: (model: string) => Model<any> | Promise<Model<any> | undefined> | undefined;
-  onRunUpdate?: (run: AgentRun) => void;
-  onBusMessage?: (bus: Bus, message: BusMessage) => void;
 }
 
 interface RuntimeEntry {
-  run: AgentRun;
   session: AgentSession;
-  bus: Bus;
   seenBusMessageIds: Set<string>;
   promptTask?: Promise<void>;
 }
@@ -41,28 +39,28 @@ const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"];
 
 export class PiAgentRuntime implements AgentRuntime {
   private readonly entries = new Map<string, RuntimeEntry>();
+  private readonly store: AgentStore;
   private readonly cwd: string;
   private readonly resolveModel?: PiAgentRuntimeOptions["resolveModel"];
-  private readonly onRunUpdate?: PiAgentRuntimeOptions["onRunUpdate"];
-  private readonly onBusMessage?: PiAgentRuntimeOptions["onBusMessage"];
 
-  constructor(options: PiAgentRuntimeOptions = {}) {
+  constructor(options: PiAgentRuntimeOptions) {
+    this.store = options.store;
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
-    this.onRunUpdate = options.onRunUpdate;
-    this.onBusMessage = options.onBusMessage;
   }
 
-  async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
+  async spawn(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
+    this.requireBus(busId);
+
     const run: AgentRun = {
       id: uuid7(),
       profile: profile.name,
       task,
-      busId: bus.id,
+      busId,
       state: "running",
     };
 
-    const childTools = this.createChildTools(run);
+    const childTools = this.createChildTools(run.id);
     const model = await this.resolveProfileModel(profile);
     const baseTools = profile.tools ?? DEFAULT_AGENT_TOOLS;
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
@@ -74,37 +72,43 @@ export class PiAgentRuntime implements AgentRuntime {
       sessionManager: SessionManager.inMemory(this.cwd),
     });
 
-    const entry: RuntimeEntry = { run, session, bus, seenBusMessageIds: new Set() };
+    this.store.saveRun(run);
+    const entry: RuntimeEntry = { session, seenBusMessageIds: new Set() };
     this.entries.set(run.id, entry);
-    this.startPromptTask(entry, withBusMessages(entry, buildInitialPrompt(profile, task)));
+    this.startPromptTask(run.id, entry, this.withBusMessages(run.id, entry, buildInitialPrompt(profile, task)));
     return run;
   }
 
   async resume(id: string, message: string): Promise<AgentRun> {
     const entry = this.requireEntry(id);
-    this.assertOpen(entry);
-    entry.run.state = "running";
-    entry.run.result = undefined;
-    this.emitRunUpdate(entry.run);
-    this.startPromptTask(entry, withBusMessages(entry, message));
-    return entry.run;
+    const run = this.requireRun(id);
+    this.assertOpenRun(run);
+
+    const resumedRun: AgentRun = {
+      ...run,
+      state: "running",
+      result: undefined,
+    };
+    this.store.saveRun(resumedRun);
+    this.startPromptTask(id, entry, this.withBusMessages(id, entry, message));
+    return resumedRun;
   }
 
-  async publishBus(bus: Bus, message: string, from: string): Promise<BusMessage> {
+  async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
+    this.requireBus(busId);
     const busMessage: BusMessage = {
       id: uuid7(),
       message,
       from,
     };
 
-    addOrReplaceBusMessage(bus, busMessage);
-    this.emitBusMessage(bus, busMessage);
+    this.store.addBusMessage(busId, busMessage);
 
     const steeringMessage = formatBusMessages([busMessage]);
-    for (const entry of this.entries.values()) {
-      if (entry.bus.id !== bus.id) continue;
-      if (entry.bus !== bus) addOrReplaceBusMessage(entry.bus, busMessage);
-      if (entry.run.id === from || this.isClosed(entry) || !entry.session.isStreaming) continue;
+    for (const [runId, entry] of this.entries) {
+      const run = this.store.getRun(runId);
+      if (!run || run.busId !== busId) continue;
+      if (run.id === from || run.state === "closed" || !entry.session.isStreaming) continue;
 
       entry.seenBusMessageIds.add(busMessage.id);
       await entry.session.steer(steeringMessage);
@@ -113,21 +117,24 @@ export class PiAgentRuntime implements AgentRuntime {
     return busMessage;
   }
 
-  async close(id: string): Promise<void> {
-    const entry = this.requireEntry(id);
-    if (entry.run.state !== "closed") {
-      entry.run.state = "closed";
-      entry.session.dispose();
-      this.emitRunUpdate(entry.run);
+  async close(id: string): Promise<AgentRun | undefined> {
+    const run = this.store.getRun(id);
+    if (!run) return undefined;
+
+    const entry = this.entries.get(id);
+    if (run.state === "closed") {
+      entry?.session.dispose();
+      return run;
     }
+
+    const closedRun: AgentRun = { ...run, state: "closed" };
+    this.store.saveRun(closedRun);
+    entry?.session.dispose();
+    return closedRun;
   }
 
-  get(id: string): AgentRun | undefined {
-    return this.entries.get(id)?.run;
-  }
-
-  private startPromptTask(entry: RuntimeEntry, message: string): void {
-    const task = this.runPrompt(entry.run.id, message).finally(() => {
+  private startPromptTask(id: string, entry: RuntimeEntry, message: string): void {
+    const task = this.runPrompt(id, message).finally(() => {
       if (entry.promptTask === task) entry.promptTask = undefined;
     });
     entry.promptTask = task;
@@ -135,36 +142,43 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private async runPrompt(id: string, message: string): Promise<void> {
     const entry = this.requireEntry(id);
-    if (this.isClosed(entry)) return;
+    if (this.isClosed(id)) return;
 
     try {
       await entry.session.prompt(message, { expandPromptTemplates: false });
-      if (this.isClosed(entry)) return;
-      if (entry.run.state === "running") {
+      if (this.isClosed(id)) return;
+      if (this.store.getRun(id)?.state === "running") {
         await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
       }
-      if (this.isClosed(entry)) return;
-      if (entry.run.state === "running") {
-        entry.run.state = "failed";
-        entry.run.result = {
-          status: "failed",
-          summary: "Agent stopped without calling finish.",
-          data: getLastAssistantText(entry.session),
-        };
-        this.emitRunUpdate(entry.run);
+      if (this.isClosed(id)) return;
+      const run = this.store.getRun(id);
+      if (run?.state === "running") {
+        this.store.saveRun({
+          ...run,
+          state: "failed",
+          result: {
+            status: "failed",
+            summary: "Agent stopped without calling finish.",
+            data: getLastAssistantText(entry.session),
+          },
+        });
       }
     } catch (error) {
-      if (this.isClosed(entry)) return;
-      entry.run.state = "failed";
-      entry.run.result = {
-        status: "failed",
-        summary: error instanceof Error ? error.message : String(error),
-      };
-      this.emitRunUpdate(entry.run);
+      if (this.isClosed(id)) return;
+      const run = this.store.getRun(id);
+      if (!run) return;
+      this.store.saveRun({
+        ...run,
+        state: "failed",
+        result: {
+          status: "failed",
+          summary: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 
-  private createChildTools(run: AgentRun): ToolDefinition[] {
+  private createChildTools(runId: string): ToolDefinition[] {
     const finishAgent = {
       name: "finish",
       label: "Finish",
@@ -172,14 +186,18 @@ export class PiAgentRuntime implements AgentRuntime {
         "Required final subagent action. Report that your assigned subagent task is complete. This does not close the agent.",
       parameters: FinishAgentParams,
       execute: async (_toolCallId, params) => {
+        const run = this.requireRun(runId);
+        this.assertOpenRun(run);
         const result: AgentResult = {
           status: params.status,
           summary: params.summary,
           data: params.data,
         };
-        run.result = result;
-        run.state = result.status === "failed" ? "failed" : "finished";
-        this.emitRunUpdate(run);
+        this.store.saveRun({
+          ...run,
+          result,
+          state: result.status === "failed" ? "failed" : "finished",
+        });
         return {
           content: [
             {
@@ -200,14 +218,14 @@ export class PiAgentRuntime implements AgentRuntime {
         "Publish supplemental context to this subagent run's bus for the parent or sibling agents. Continue working after publishing unless the task is done.",
       parameters: PublishBusParams,
       execute: async (_toolCallId, params) => {
-        const entry = this.requireEntry(run.id);
-        this.assertOpen(entry);
-        const busMessage = await this.publishBus(entry.bus, params.message, run.id);
+        const run = this.requireRun(runId);
+        this.assertOpenRun(run);
+        const busMessage = await this.publishBus(run.busId, params.message, run.id);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Published message ${busMessage.id} to bus ${entry.bus.id}.`,
+              text: `Published message ${busMessage.id} to bus ${run.busId}.`,
             },
           ],
           details: busMessage,
@@ -218,34 +236,48 @@ export class PiAgentRuntime implements AgentRuntime {
     return [finishAgent, publishBus];
   }
 
-  private emitRunUpdate(run: AgentRun): void {
-    try {
-      this.onRunUpdate?.(run);
-    } catch {
-      // Keep runtime state transitions from being interrupted by persistence errors.
-    }
-  }
-
-  private emitBusMessage(bus: Bus, message: BusMessage): void {
-    try {
-      this.onBusMessage?.(bus, message);
-    } catch {
-      // Keep runtime message delivery from being interrupted by persistence errors.
-    }
-  }
-
   private requireEntry(id: string): RuntimeEntry {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Agent ${id} not found.`);
     return entry;
   }
 
-  private assertOpen(entry: RuntimeEntry): void {
-    if (entry.run.state === "closed") throw new Error(`Agent ${entry.run.id} is closed.`);
+  private requireRun(id: string): AgentRun {
+    const run = this.store.getRun(id);
+    if (!run) throw new Error(`Agent ${id} not found.`);
+    return run;
   }
 
-  private isClosed(entry: RuntimeEntry): boolean {
-    return entry.run.state === "closed";
+  private assertOpenRun(run: AgentRun): void {
+    if (run.state === "closed") throw new Error(`Agent ${run.id} is closed.`);
+  }
+
+  private isClosed(id: string): boolean {
+    return this.store.getRun(id)?.state === "closed";
+  }
+
+  private requireBus(id: string): Bus {
+    const bus = this.store.getBus(id);
+    if (!bus) throw new Error(`Bus ${id} not found.`);
+    return bus;
+  }
+
+  private withBusMessages(runId: string, entry: RuntimeEntry, message: string): string {
+    const busMessages = this.drainBusMessages(runId, entry);
+    if (busMessages.length === 0) return message;
+    return [message, "", formatBusMessages(busMessages)].join("\n");
+  }
+
+  private drainBusMessages(runId: string, entry: RuntimeEntry): BusMessage[] {
+    const run = this.requireRun(runId);
+    const bus = this.requireBus(run.busId);
+    const unreadMessages = bus.messages.filter((message) => {
+      if (message.from === run.id) return false;
+      return !entry.seenBusMessageIds.has(message.id);
+    });
+
+    for (const message of unreadMessages) entry.seenBusMessageIds.add(message.id);
+    return unreadMessages;
   }
 
   private async resolveProfileModel(profile: AgentProfile): Promise<Model<any> | undefined> {
@@ -292,32 +324,6 @@ function buildFinishRequiredPrompt(): string {
     "If your prior response already completed the task, summarize that result in finish.",
     "Call finish with status success, blocked, or failed, and include any structured data needed by the parent.",
   ].join("\n");
-}
-
-function withBusMessages(entry: RuntimeEntry, message: string): string {
-  const busMessages = drainBusMessages(entry);
-  if (busMessages.length === 0) return message;
-  return [message, "", formatBusMessages(busMessages)].join("\n");
-}
-
-function drainBusMessages(entry: RuntimeEntry): BusMessage[] {
-  const unreadMessages = entry.bus.messages.filter((message) => {
-    if (message.from === entry.run.id) return false;
-    return !entry.seenBusMessageIds.has(message.id);
-  });
-
-  for (const message of unreadMessages) entry.seenBusMessageIds.add(message.id);
-  return unreadMessages;
-}
-
-function addOrReplaceBusMessage(bus: Bus, message: BusMessage): void {
-  const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
-  if (existingIndex >= 0) {
-    bus.messages[existingIndex] = message;
-    return;
-  }
-
-  bus.messages.push(message);
 }
 
 function getLastAssistantText(session: AgentSession): string | undefined {
