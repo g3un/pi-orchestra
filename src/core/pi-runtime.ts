@@ -15,12 +15,14 @@ import type { AgentRuntime } from "./runtime.ts";
 export interface PiAgentRuntimeOptions {
   cwd?: string;
   resolveModel?: (model: string) => Model<any> | Promise<Model<any> | undefined> | undefined;
+  onRunUpdate?: (run: AgentRun) => void;
 }
 
 interface RuntimeEntry {
   run: AgentRun;
   session: AgentSession;
   bus: Bus;
+  promptTask?: Promise<void>;
 }
 
 const FinishAgentParams = Type.Object({
@@ -35,13 +37,15 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly cwd: string;
   private readonly resolveModel?: PiAgentRuntimeOptions["resolveModel"];
+  private readonly onRunUpdate?: PiAgentRuntimeOptions["onRunUpdate"];
 
   constructor(options: PiAgentRuntimeOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
+    this.onRunUpdate = options.onRunUpdate;
   }
 
-  async create(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
+  async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
     const run: AgentRun = {
       id: uuid7(),
       profile: profile.name,
@@ -64,7 +68,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const entry: RuntimeEntry = { run, session, bus };
     this.entries.set(run.id, entry);
-    await this.runPrompt(run.id, withBusMessages(entry, buildInitialPrompt(profile, task)));
+    this.startPromptTask(entry, withBusMessages(entry, buildInitialPrompt(profile, task)));
     return run;
   }
 
@@ -73,7 +77,8 @@ export class PiAgentRuntime implements AgentRuntime {
     this.assertOpen(entry);
     entry.run.state = "running";
     entry.run.result = undefined;
-    await this.runPrompt(id, withBusMessages(entry, message));
+    this.emitRunUpdate(entry.run);
+    this.startPromptTask(entry, withBusMessages(entry, message));
     return entry.run;
   }
 
@@ -96,8 +101,9 @@ export class PiAgentRuntime implements AgentRuntime {
   async close(id: string): Promise<void> {
     const entry = this.requireEntry(id);
     if (entry.run.state !== "closed") {
-      entry.session.dispose();
       entry.run.state = "closed";
+      entry.session.dispose();
+      this.emitRunUpdate(entry.run);
     }
   }
 
@@ -105,10 +111,24 @@ export class PiAgentRuntime implements AgentRuntime {
     return this.entries.get(id)?.run;
   }
 
+  private startPromptTask(entry: RuntimeEntry, message: string): void {
+    const task = this.runPrompt(entry.run.id, message).finally(() => {
+      if (entry.promptTask === task) entry.promptTask = undefined;
+    });
+    entry.promptTask = task;
+  }
+
   private async runPrompt(id: string, message: string): Promise<void> {
     const entry = this.requireEntry(id);
+    if (this.isClosed(entry)) return;
+
     try {
       await entry.session.prompt(message, { expandPromptTemplates: false });
+      if (this.isClosed(entry)) return;
+      if (entry.run.state === "running") {
+        await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
+      }
+      if (this.isClosed(entry)) return;
       if (entry.run.state === "running") {
         entry.run.state = "failed";
         entry.run.result = {
@@ -116,13 +136,16 @@ export class PiAgentRuntime implements AgentRuntime {
           summary: "Agent stopped without calling finish.",
           data: getLastAssistantText(entry.session),
         };
+        this.emitRunUpdate(entry.run);
       }
     } catch (error) {
+      if (this.isClosed(entry)) return;
       entry.run.state = "failed";
       entry.run.result = {
         status: "failed",
         summary: error instanceof Error ? error.message : String(error),
       };
+      this.emitRunUpdate(entry.run);
     }
   }
 
@@ -130,9 +153,10 @@ export class PiAgentRuntime implements AgentRuntime {
     const finishAgent = {
       name: "finish",
       label: "Finish",
-      description: "Report that your assigned subagent task is complete. This does not close the agent.",
+      description:
+        "Required final subagent action. Report that your assigned subagent task is complete. This does not close the agent.",
       parameters: FinishAgentParams,
-      async execute(_toolCallId, params) {
+      execute: async (_toolCallId, params) => {
         const result: AgentResult = {
           status: params.status,
           summary: params.summary,
@@ -140,6 +164,7 @@ export class PiAgentRuntime implements AgentRuntime {
         };
         run.result = result;
         run.state = result.status === "failed" ? "failed" : "finished";
+        this.emitRunUpdate(run);
         return {
           content: [
             {
@@ -156,6 +181,14 @@ export class PiAgentRuntime implements AgentRuntime {
     return [finishAgent];
   }
 
+  private emitRunUpdate(run: AgentRun): void {
+    try {
+      this.onRunUpdate?.(run);
+    } catch {
+      // Keep runtime state transitions from being interrupted by persistence errors.
+    }
+  }
+
   private requireEntry(id: string): RuntimeEntry {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Agent ${id} not found.`);
@@ -164,6 +197,10 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private assertOpen(entry: RuntimeEntry): void {
     if (entry.run.state === "closed") throw new Error(`Agent ${entry.run.id} is closed.`);
+  }
+
+  private isClosed(entry: RuntimeEntry): boolean {
+    return entry.run.state === "closed";
   }
 
   private async resolveProfileModel(profile: AgentProfile): Promise<Model<any> | undefined> {
@@ -184,8 +221,11 @@ function buildInitialPrompt(profile: AgentProfile, task: string): string {
     "Task:",
     task,
     "",
-    "When your assigned subagent task is complete, call finish with a concise summary and any structured data needed by the parent.",
-    "finish does not close you or complete the parent task. The parent may resume or close you.",
+    "Mandatory completion protocol:",
+    "- You MUST call the finish tool when this subagent run is done. Do not end with only a text response.",
+    "- Your final action must be a finish tool call, even when the task is blocked or failed.",
+    "- Call finish with status success, blocked, or failed; include a concise summary and any structured data needed by the parent.",
+    "- finish records your subagent result. It does not close you or complete the parent task; the parent may resume or close you.",
   ];
 
   parts.push(
@@ -195,6 +235,17 @@ function buildInitialPrompt(profile: AgentProfile, task: string): string {
   );
 
   return parts.join("\n");
+}
+
+function buildFinishRequiredPrompt(): string {
+  return [
+    "Your previous response ended without calling the finish tool.",
+    "",
+    "You MUST now end this subagent run by calling the finish tool.",
+    "Do not provide another text-only response.",
+    "If your prior response already completed the task, summarize that result in finish.",
+    "Call finish with status success, blocked, or failed, and include any structured data needed by the parent.",
+  ].join("\n");
 }
 
 function withBusMessages(entry: RuntimeEntry, message: string): string {

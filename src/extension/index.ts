@@ -71,7 +71,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
         "Use action=push_bus to send updated parent context to a running subagent.",
       ],
       parameters: SubagentToolParams,
-      executionMode: "sequential",
+      executionMode: "parallel",
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const bundle = getBundle(bundles, ctx);
         const input = withDefaultModel(toSubagentInput(params as RawSubagentParams), ctx);
@@ -130,6 +130,7 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
   const runtime = new PiAgentRuntime({
     cwd: ctx.cwd,
     resolveModel: (model) => resolveModel(ctx, model),
+    onRunUpdate: (run) => store.saveRun(run),
   });
   const bundle = {
     tool: createSubagentTool({ runtime, store }),

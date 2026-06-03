@@ -52,7 +52,7 @@ export function createSubagentTool({ runtime, store }: SubagentToolDeps): Subage
       if (input.action === "spawn") {
         const bus: Bus = { id: uuid7(), messages: [] };
         store.saveBus(bus);
-        const run = await runtime.create(input.profile, input.task, bus);
+        const run = await runtime.spawn(input.profile, input.task, bus);
         store.saveRun(run);
         return { run, message: formatRunMessage(run) };
       }

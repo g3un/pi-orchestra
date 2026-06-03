@@ -20,9 +20,9 @@ test("subagent spawn creates a bus, starts the runtime, and stores the run", asy
 
   assert.ok(output.run);
   assert.equal(output.run.id, "agent-1");
-  assert.equal(output.run.busId, runtime.created?.bus.id);
+  assert.equal(output.run.busId, runtime.spawned?.bus.id);
   assert.match(output.run.busId, uuid7Pattern);
-  assert.deepEqual(runtime.created, {
+  assert.deepEqual(runtime.spawned, {
     profile,
     task: "Inspect the code.",
     bus: store.savedBuses[0],
@@ -138,22 +138,22 @@ const uuid7Pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 class FakeRuntime implements AgentRuntime {
   runs = new Map<string, AgentRun>();
-  created?: { profile: AgentProfile; task: string; bus: Bus };
+  spawned?: { profile: AgentProfile; task: string; bus: Bus };
   resumed?: { id: string; message: string };
   pushed?: { id: string; message: string; from: string };
   closedIds: string[] = [];
 
-  async create(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
-    this.created = { profile, task, bus };
-    const createdRun = run({
+  async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
+    this.spawned = { profile, task, bus };
+    const spawnedRun = run({
       id: "agent-1",
       profile: profile.name,
       task,
       busId: bus.id,
       state: "running",
     });
-    this.runs.set(createdRun.id, createdRun);
-    return createdRun;
+    this.runs.set(spawnedRun.id, spawnedRun);
+    return spawnedRun;
   }
 
   async resume(id: string, message: string): Promise<AgentRun> {
