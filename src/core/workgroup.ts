@@ -1,7 +1,7 @@
 import type { AgentProfile } from "./subagent.ts";
 
-export const WORKGROUP_MODE_VALUES = ["compete", "synthesize"] as const;
-export type WorkgroupMode = (typeof WORKGROUP_MODE_VALUES)[number];
+export const WORKGROUP_STRATEGY_VALUES = ["compete", "synthesize"] as const;
+export type WorkgroupStrategy = (typeof WORKGROUP_STRATEGY_VALUES)[number];
 
 export interface WorkgroupMember {
   profile: AgentProfile;

@@ -1,10 +1,10 @@
 import type { AgentResult, AgentResultStatus, AgentState } from "./subagent.ts";
-import type { WorkgroupMember, WorkgroupMode } from "./workgroup.ts";
+import type { WorkgroupMember, WorkgroupStrategy } from "./workgroup.ts";
 
 export interface WorkflowStageSpec {
   name: string;
   goal: string;
-  mode: WorkgroupMode;
+  strategy: WorkgroupStrategy;
   members: WorkgroupMember[];
   /** If omitted, a restricted default stage leader is used. */
   leader?: WorkgroupMember;

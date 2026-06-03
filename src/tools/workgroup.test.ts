@@ -36,7 +36,7 @@ test("workgroup launches members on an existing bus", async () => {
   const output = await tool.execute({
     busId: bus.name,
     goal: "Plan the auth refactor.",
-    mode: "synthesize",
+    strategy: "synthesize",
     members: [
       { name: "security-review", profile: securityProfile, assignment: "Identify auth security risks." },
       { name: "backend-review", profile: backendProfile, assignment: "Assess API and data model changes." },
@@ -52,7 +52,7 @@ test("workgroup launches members on an existing bus", async () => {
       { profile: backendProfile, busId: bus.id, name: "backend-review" },
     ],
   );
-  assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup mode: synthesize/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup strategy: synthesize/);
   assert.match(orchestra.spawned[0]?.task ?? "", /Shared goal:\nPlan the auth refactor\./);
   assert.match(orchestra.spawned[0]?.task ?? "", /Identify auth security risks\./);
   assert.match(
@@ -60,7 +60,7 @@ test("workgroup launches members on an existing bus", async () => {
     /publish_bus is for sibling reference data, not for requesting leader action/,
   );
   assert.match(orchestra.spawned[0]?.task ?? "", /finish with status blocked/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize mode guidelines/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize strategy guidelines/);
   assert.equal(
     output.message,
     [
@@ -75,7 +75,7 @@ test("workgroup launches members on an existing bus", async () => {
   );
 });
 
-test("workgroup compete mode guides members to share facts without herding", async () => {
+test("workgroup compete strategy guides members to share facts without herding", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool({ orchestra });
   const bus = orchestra.createBus({ name: "design-compete" });
@@ -83,7 +83,7 @@ test("workgroup compete mode guides members to share facts without herding", asy
   await tool.execute({
     busId: bus.id,
     goal: "Compare implementation options.",
-    mode: "compete",
+    strategy: "compete",
     members: [{ name: "option-a", profile: backendProfile }],
   });
 
@@ -105,7 +105,7 @@ test("workgroup rejects missing buses", async () => {
       tool.execute({
         busId: "missing",
         goal: "Plan the auth refactor.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ profile: securityProfile }],
       }),
     /Bus missing not found\./,
@@ -131,7 +131,7 @@ test("workgroup member name checks are global", async () => {
       tool.execute({
         busId: targetBus.id,
         goal: "Plan the auth refactor.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ name: "security-review", profile: securityProfile }],
       }),
     /Workgroup member name "security-review" is already in use\./,
@@ -204,7 +204,7 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
       tool.execute({
         busId: bus.id,
         goal: "Plan the auth refactor.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [
           { name: "security-review", profile: securityProfile },
           { name: "broken-review", profile: brokenProfile },

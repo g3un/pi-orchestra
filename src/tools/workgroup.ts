@@ -4,7 +4,7 @@ import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
 import type { AgentResultStatus } from "../core/subagent.ts";
 import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
-import { WORKGROUP_MODE_VALUES, type WorkgroupMember, type WorkgroupMode } from "../core/workgroup.ts";
+import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
 import { closeAgentRuns, formatError, formatNamedEntityLabel, normalizeEntityName, slugify } from "../utils.ts";
 import {
   AgentProfileParams,
@@ -14,12 +14,12 @@ import {
   withDefaultProfileModel,
 } from "./subagent.ts";
 
-export type { WorkgroupMember, WorkgroupMode } from "../core/workgroup.ts";
+export type { WorkgroupMember, WorkgroupStrategy } from "../core/workgroup.ts";
 
 export interface WorkgroupInput {
   busId: string;
   goal: string;
-  mode: WorkgroupMode;
+  strategy: WorkgroupStrategy;
   members: WorkgroupMember[];
 }
 
@@ -30,7 +30,7 @@ export interface WorkgroupOutput {
 }
 
 export interface WorkgroupSettlement {
-  mode: WorkgroupMode;
+  strategy: WorkgroupStrategy;
   status: AgentResultStatus;
   /** Results that should be consumed by downstream orchestration. For compete, this is the winning result when present. */
   workerResults: WaitRunResult[];
@@ -71,10 +71,10 @@ const WorkgroupToolParams = Type.Object(
     goal: Type.String({
       description: "Shared workgroup goal that every member should contribute to.",
     }),
-    mode: Type.String({
-      enum: [...WORKGROUP_MODE_VALUES],
+    strategy: Type.String({
+      enum: [...WORKGROUP_STRATEGY_VALUES],
       description:
-        "Coordination style for spawned members only; workgroup does not settle results automatically. Use compete when members are substitutable and any one successful result satisfies the goal; use synthesize when members are complementary and their findings, reviews, or tradeoffs must be combined or compared.",
+        "Coordination strategy for spawned members only; workgroup does not settle results automatically. Use compete when members are substitutable and any one successful result satisfies the goal; use synthesize when members are complementary and their findings, reviews, or tradeoffs must be combined or compared.",
     }),
     members: Type.Array(WorkgroupMemberParams, {
       description: "Subagents to spawn onto the existing bus as workgroup members.",
@@ -145,13 +145,13 @@ export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): Workgroup
 export async function settleWorkgroupRuns(
   orchestra: OrchestraApi,
   busId: string,
-  mode: WorkgroupMode,
+  strategy: WorkgroupStrategy,
 ): Promise<WorkgroupSettlement> {
-  if (mode === "compete") return await settleCompeteWorkgroupRuns(orchestra, busId);
+  if (strategy === "compete") return await settleCompeteWorkgroupRuns(orchestra, busId);
 
   const settled = await orchestra.waitBusSettled(busId, { timeoutMs: null });
   return {
-    mode,
+    strategy,
     status: resolveWorkgroupStatus(settled.runResults),
     workerResults: settled.runResults,
     completedResults: settled.runResults,
@@ -170,8 +170,8 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
     promptGuidelines: [
       "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
       "Workgroup only launches members. You are the leader/executor: use waitNextRun or waitBusSettled to collect results, decide next actions, and summarize outputs yourself.",
-      "Use mode=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with waitNextRun, close remaining members after the first success, and condense the winning result yourself.",
-      "Use mode=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
+      "Use strategy=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with waitNextRun, close remaining members after the first success, and condense the winning result yourself.",
+      "Use strategy=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
       "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
       "Use waitNextRun to receive finished or blocked members; if a member needs leader action, respond with subagent message.",
     ],
@@ -197,7 +197,7 @@ async function settleCompeteWorkgroupRuns(orchestra: OrchestraApi, busId: string
     const nextRun = await orchestra.waitNextRun(busId, { excludeRunIds, timeoutMs: null });
     if (!nextRun.runResult) {
       return {
-        mode: "compete",
+        strategy: "compete",
         status: resolveWorkgroupStatus(completedResults),
         workerResults: completedResults,
         completedResults,
@@ -210,7 +210,7 @@ async function settleCompeteWorkgroupRuns(orchestra: OrchestraApi, busId: string
     if (nextRun.runResult.result?.status === "success") {
       await closeAgentRuns(orchestra, nextRun.pendingRunIds);
       return {
-        mode: "compete",
+        strategy: "compete",
         status: "success",
         workerResults: [nextRun.runResult],
         completedResults,
@@ -231,13 +231,13 @@ function resolveWorkgroupStatus(results: WaitRunResult[]): AgentResultStatus {
 function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
   if (!params.busId) throw new Error("workgroup requires busId.");
   if (!params.goal) throw new Error("workgroup requires goal.");
-  if (!params.mode) throw new Error("workgroup requires mode.");
+  if (!params.strategy) throw new Error("workgroup requires strategy.");
   if (!params.members || params.members.length === 0) throw new Error("workgroup requires members.");
 
   return {
     busId: params.busId,
     goal: params.goal,
-    mode: params.mode,
+    strategy: params.strategy,
     members: params.members.map((member, index) => toWorkgroupMember(member, `workgroup member ${index + 1}`)),
   };
 }
@@ -361,7 +361,7 @@ function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgrou
     "The main agent is the workgroup leader, but it is outside the bus: publish_bus is for sibling reference data, not for requesting leader action.",
     "If you need the leader to decide, approve, unblock, or act, call finish with status blocked so the leader can receive it via waitNextRun and respond with subagent message.",
     "",
-    `Workgroup mode: ${input.mode}`,
+    `Workgroup strategy: ${input.strategy}`,
     "Shared goal:",
     input.goal,
     "",
@@ -371,16 +371,16 @@ function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgrou
     "Workgroup members:",
     ...input.members.map(formatRosterMember),
     "",
-    ...buildModeGuidelines(input.mode),
+    ...buildStrategyGuidelines(input.strategy),
   ];
 
   return parts.join("\n");
 }
 
-function buildModeGuidelines(mode: WorkgroupMode): string[] {
-  if (mode === "compete") {
+function buildStrategyGuidelines(strategy: WorkgroupStrategy): string[] {
+  if (strategy === "compete") {
     return [
-      "Compete mode guidelines:",
+      "Compete strategy guidelines:",
       "- Pursue your assigned approach independently; do not follow sibling agents' conclusions or recommendations.",
       "- Use publish_bus only for facts, evidence, dead ends, constraints, or blockers that may help sibling agents.",
       "- Keep your conclusions and recommendations private until finish so sibling agents do not converge too early.",
@@ -390,11 +390,11 @@ function buildModeGuidelines(mode: WorkgroupMode): string[] {
   }
 
   return [
-    "Synthesize mode guidelines:",
+    "Synthesize strategy guidelines:",
     "- Act as a domain expert advising the main-agent leader from your assigned perspective.",
     "- Use publish_bus for important findings, questions, blockers, context, conclusions, or rebuttals that sibling experts should see.",
     "- If you need leader action, approval, or a decision, finish with status blocked instead of publishing that request to the bus.",
-    "- Engage critically with sibling experts' conclusions and counterarguments; synthesize mode should converge through open debate.",
+    "- Engage critically with sibling experts' conclusions and counterarguments; synthesize strategy should converge through open debate.",
     "- In finish, summarize your expert findings, open questions, risks, and recommended next actions.",
   ];
 }
@@ -405,7 +405,7 @@ function formatRosterMember(member: PreparedWorkgroupMember): string {
 
 function formatWorkgroupMessage(bus: Bus, input: PreparedWorkgroupInput, runs: AgentRun[]): string {
   return [
-    `Launched ${input.mode} workgroup on bus ${formatNamedEntityLabel(bus)} with ${runs.length} run(s).`,
+    `Launched ${input.strategy} workgroup on bus ${formatNamedEntityLabel(bus)} with ${runs.length} run(s).`,
     "",
     "Runs:",
     ...runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`),
@@ -417,7 +417,7 @@ function formatWorkgroupMessage(bus: Bus, input: PreparedWorkgroupInput, runs: A
 type RawWorkgroupParams = {
   busId?: string;
   goal?: string;
-  mode?: WorkgroupMode;
+  strategy?: WorkgroupStrategy;
   members?: RawWorkgroupMemberParams[];
 };
 

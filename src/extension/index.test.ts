@@ -51,7 +51,7 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   assert.ok(parameters.properties);
   assert.match(parameters.properties.busId?.description ?? "", /Existing work bus id or name/);
   assert.match(parameters.properties.goal?.description ?? "", /Shared workgroup goal/);
-  assert.deepEqual(parameters.properties.mode?.enum, ["compete", "synthesize"]);
+  assert.deepEqual(parameters.properties.strategy?.enum, ["compete", "synthesize"]);
   assert.match(parameters.properties.members?.description ?? "", /workgroup members/);
 });
 

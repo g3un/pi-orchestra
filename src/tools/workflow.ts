@@ -4,7 +4,7 @@ import type { AgentRun } from "../core/subagent.ts";
 import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageOutput, WorkflowStageRun, WorkflowStageSpec } from "../core/workflow.ts";
-import { WORKGROUP_MODE_VALUES, type WorkgroupMember, type WorkgroupMode } from "../core/workgroup.ts";
+import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
 import { createStageLeaderProfile } from "../profiles/stage-leader.ts";
 import {
   closeAgentRuns,
@@ -67,10 +67,10 @@ const WorkflowStageParams = Type.Object(
     goal: Type.String({
       description: "Stage-specific goal. Previous stage leader outputs are supplied automatically.",
     }),
-    mode: Type.String({
-      enum: [...WORKGROUP_MODE_VALUES],
+    strategy: Type.String({
+      enum: [...WORKGROUP_STRATEGY_VALUES],
       description:
-        "Stage mode. Workflow executes stage settlement automatically. Use compete when workers are substitutable and any one successful result satisfies the stage goal; workflow races to first success, closes the rest, then a restricted stage leader condenses the winner. Use synthesize when workers are complementary and their findings/tradeoffs must be combined or compared; workflow waits for all workers, then a restricted stage leader synthesizes them.",
+        "Stage strategy. Workflow executes stage settlement automatically. Use compete when workers are substitutable and any one successful result satisfies the stage goal; workflow races to first success, closes the rest, then a restricted stage leader condenses the winner. Use synthesize when workers are complementary and their findings/tradeoffs must be combined or compared; workflow waits for all workers, then a restricted stage leader synthesizes them.",
     }),
     members: Type.Array(WorkgroupMemberParams, {
       description:
@@ -109,7 +109,7 @@ const WorkflowToolParams = Type.Object(
     stages: Type.Optional(
       Type.Array(WorkflowStageParams, {
         description:
-          "Required for action=start. Linear stages executed automatically in order. Choose compete for substitutable attempts where one success satisfies the stage goal; workflow races/settles that stage and condenses the winner via a restricted leader. Choose synthesize for complementary work where findings, reviews, or tradeoffs must be combined. Both modes use a restricted leader and get a default one when omitted.",
+          "Required for action=start. Linear stages executed automatically in order. Choose compete for substitutable attempts where one success satisfies the stage goal; workflow races/settles that stage and condenses the winner via a restricted leader. Choose synthesize for complementary work where findings, reviews, or tradeoffs must be combined. Both strategies use a restricted leader and get a default one when omitted.",
         minItems: 1,
       }),
     ),
@@ -164,9 +164,9 @@ export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => Wor
     promptGuidelines: [
       "Use workflow for complex multi-stage work such as collect research, analyze findings, then synthesize a final report.",
       "Workflow stages execute strictly in order; do not use workflow for branching or DAG plans.",
-      "Unlike workgroup, workflow leads each stage for you: it waits/races workers, closes losers in compete mode, and invokes a restricted stage leader to produce canonical stage output.",
-      "Use mode=compete when worker approaches are substitutable and any one success satisfies the stage goal; workflow automatically races to the first success, closes the rest, and has the stage leader condense the winner. This is for finding one working fix, repro, or answer, not for comparing alternatives.",
-      "Use mode=synthesize when worker contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; workflow waits for all workers, then has the stage leader synthesize them.",
+      "Unlike workgroup, workflow leads each stage for you: it waits/races workers, closes losers in compete strategy, and invokes a restricted stage leader to produce canonical stage output.",
+      "Use strategy=compete when worker approaches are substitutable and any one success satisfies the stage goal; workflow automatically races to the first success, closes the rest, and has the stage leader condense the winner. This is for finding one working fix, repro, or answer, not for comparing alternatives.",
+      "Use strategy=synthesize when worker contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; workflow waits for all workers, then has the stage leader synthesize them.",
       "Workflow automatically creates a separate bus per stage and injects previous stage outputs directly into the next stage's worker prompts.",
       "Use workflow status to inspect progress, or waitWorkflow to wait for the whole workflow to become finished, failed, or closed.",
     ],
@@ -224,7 +224,7 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
   const workgroupOutput = await deps.workgroupTool.execute({
     busId: bus.id,
     goal: buildStageWorkerGoal(workflow, stageIndex),
-    mode: stage.mode as WorkgroupMode,
+    strategy: stage.strategy as WorkgroupStrategy,
     members: stage.members as WorkgroupMember[],
   });
   if (isWorkflowClosed(deps.store, workflowId)) {
@@ -239,10 +239,10 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
     workerRunIds: workgroupOutput.runs.map((run) => run.id),
   });
 
-  const settledWorkgroup = await settleWorkgroupRuns(deps.orchestra, bus.id, stage.mode);
+  const settledWorkgroup = await settleWorkgroupRuns(deps.orchestra, bus.id, stage.strategy);
   if (isWorkflowClosed(deps.store, workflowId)) return;
 
-  if (stage.mode === "compete" && !settledWorkgroup.winner) {
+  if (stage.strategy === "compete" && !settledWorkgroup.winner) {
     const output = buildCompeteNoWinnerOutput(settledWorkgroup.completedResults);
     finishStage(deps.store, requireWorkflow(deps.store, workflowId), stageIndex, output);
     return;
@@ -376,13 +376,13 @@ function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
 function toWorkflowStageSpec(stage: RawWorkflowStageParams): WorkflowStageSpec {
   if (!stage.name) throw new Error("workflow stage requires name.");
   if (!stage.goal) throw new Error(`workflow stage ${stage.name} requires goal.`);
-  if (!stage.mode) throw new Error(`workflow stage ${stage.name} requires mode.`);
+  if (!stage.strategy) throw new Error(`workflow stage ${stage.name} requires strategy.`);
   if (!stage.members || stage.members.length === 0) throw new Error(`workflow stage ${stage.name} requires members.`);
 
   const spec: WorkflowStageSpec = {
     name: stage.name,
     goal: stage.goal,
-    mode: stage.mode,
+    strategy: stage.strategy,
     members: stage.members.map((member, index) => toWorkgroupMember(member, `workflow member ${index + 1}`)),
   };
   if (stage.leader) spec.leader = toWorkgroupMember(stage.leader, "workflow leader");
@@ -488,20 +488,20 @@ function buildStageWorkerGoal(workflow: WorkflowRun, stageIndex: number): string
 
 function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResults: WaitRunResult[]): string {
   const stage = workflow.stages[stageIndex];
-  const modeInstructions =
-    stage.mode === "compete"
+  const strategyInstructions =
+    stage.strategy === "compete"
       ? [
-          "This is a compete stage. One worker has produced a successful winning result.",
+          "This stage uses the compete strategy. One worker has produced a successful winning result.",
           "Condense the winning result into a concise canonical stage output: keep what the next stage needs, drop verbose detail and redundancy.",
           "Do not broaden the scope, add new content, or merge unrelated alternatives.",
         ]
       : [
-          "This is a synthesize stage. Deduplicate, reconcile, and synthesize all worker results into one canonical stage output for the next stage.",
+          "This stage uses the synthesize strategy. Deduplicate, reconcile, and synthesize all worker results into one canonical stage output for the next stage.",
         ];
 
   return [
     "You are the leader for this workflow stage.",
-    ...modeInstructions,
+    ...strategyInstructions,
     "Use only the provided previous stage outputs, current worker results, and any bus reference context delivered with this task; do not ask for or require external data.",
     "Treat bus reference context as stage deliberation evidence from workers, but prefer finish results when they conflict.",
     "",
@@ -557,7 +557,7 @@ function buildCompeteNoWinnerOutput(workerResults: WaitRunResult[]): WorkflowSta
   const workflowRunResults = workerResults.map(toWorkflowRunResult);
   return {
     status,
-    summary: `Compete stage ended without a successful worker result: ${counts.blocked} blocked, ${counts.failed} failed.`,
+    summary: `Compete strategy stage ended without a successful worker result: ${counts.blocked} blocked, ${counts.failed} failed.`,
     data: { workerResults: workflowRunResults },
     workerResults: workflowRunResults,
   };
@@ -636,7 +636,7 @@ type RawWorkflowParams = {
 type RawWorkflowStageParams = {
   name?: string;
   goal?: string;
-  mode?: WorkgroupMode;
+  strategy?: WorkgroupStrategy;
   members?: RawWorkgroupMemberParams[];
   leader?: RawWorkgroupMemberParams;
 };

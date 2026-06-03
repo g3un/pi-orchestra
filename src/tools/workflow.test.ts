@@ -65,14 +65,14 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
       {
         name: "collect",
         goal: "Collect source material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "collect-worker", profile: workerProfile }],
         leader: { name: "collect-lead", profile: leaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "analyze-worker", profile: workerProfile }],
         leader: { name: "analyze-lead", profile: leaderProfile },
       },
@@ -115,7 +115,7 @@ test("workflow compete stage races to first success then uses a leader", async (
       {
         name: "options",
         goal: "Produce independent options.",
-        mode: "compete",
+        strategy: "compete",
         members: [
           { name: "option-worker", profile: workerProfile },
           { name: "slow-option", profile: hangingWorkerProfile },
@@ -132,7 +132,7 @@ test("workflow compete stage races to first success then uses a leader", async (
   assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
   assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
   const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-flow-options-leader")?.task ?? "";
-  assert.match(leaderTask, /This is a compete stage/);
+  assert.match(leaderTask, /This stage uses the compete strategy/);
   assert.match(leaderTask, /Condense the winning result into a concise canonical stage output/);
   assert.match(leaderTask, /drop verbose detail and redundancy/);
   assert.match(leaderTask, /Call finish exactly once when done/);
@@ -153,7 +153,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
       {
         name: "options",
         goal: "Produce independent options.",
-        mode: "compete",
+        strategy: "compete",
         members: [
           { name: "blocked-option", profile: blockedWorkerProfile },
           { name: "failed-option", profile: failedWorkerProfile },
@@ -162,7 +162,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
       {
         name: "never",
         goal: "Should not run.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ name: "never-after-blocked-compete", profile: workerProfile }],
       },
     ],
@@ -194,13 +194,13 @@ test("workflow compete stage fails when every worker fails", async () => {
       {
         name: "options",
         goal: "Produce independent options.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ name: "failed-only-option", profile: failedWorkerProfile }],
       },
       {
         name: "never",
         goal: "Should not run.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ name: "never-after-failed-compete", profile: workerProfile }],
       },
     ],
@@ -233,7 +233,7 @@ test("workflow uses a default restricted leader when omitted", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "default-worker", profile: workerProfile }],
       },
     ],
@@ -265,7 +265,7 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
       {
         name: "collect",
         goal: "Collect source material.",
-        mode: "compete",
+        strategy: "compete",
         members: [{ name: "slow-worker", profile: workerProfile }],
       },
     ],
@@ -295,14 +295,14 @@ test("workflow fails when a stage leader fails", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "failed-worker", profile: workerProfile }],
         leader: { name: "failed-lead", profile: failedLeaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "never-failed-worker", profile: workerProfile }],
         leader: { name: "never-failed-lead", profile: leaderProfile },
       },
@@ -336,14 +336,14 @@ test("workflow stops when a stage leader blocks", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "blocked-worker", profile: workerProfile }],
         leader: { name: "blocked-lead", profile: blockedLeaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        mode: "synthesize",
+        strategy: "synthesize",
         members: [{ name: "never-worker", profile: workerProfile }],
         leader: { name: "never-lead", profile: leaderProfile },
       },
