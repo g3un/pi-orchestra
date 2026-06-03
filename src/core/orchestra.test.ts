@@ -4,7 +4,7 @@ import type { AgentProfile, AgentRun } from "./agent.ts";
 import type { BusMessage } from "./bus.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { Orchestra } from "./orchestra.ts";
-import type { AgentRuntime } from "./runtime.ts";
+import type { AgentRuntime, SpawnAgentRuntimeOptions } from "./runtime.ts";
 import type { AgentStore } from "./store.ts";
 
 const profile: AgentProfile = {
@@ -20,15 +20,35 @@ test("orchestra creates buses in the store", () => {
   const bus = orchestra.createBus();
 
   assert.equal(store.getBus(bus.id), bus);
+  assert.equal(bus.id, "bus");
+  assert.equal(bus.name, "bus");
   assert.deepEqual(bus.messages, []);
+});
+
+test("orchestra accepts short names for buses and agent runs", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+
+  const bus = orchestra.createBus({ name: "Frontend Audit" });
+  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.name, { name: "Reviewer A" });
+
+  assert.equal(bus.id, "frontend-audit");
+  assert.equal(bus.name, "Frontend Audit");
+  assert.equal(orchestra.getBus(bus.name), bus);
+  assert.equal(run.id, "reviewer-a");
+  assert.equal(run.name, "Reviewer A");
+  assert.equal(orchestra.getRun(run.name), run);
 });
 
 test("orchestra lists runs and filters by bus", () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const firstRun = run({ id: "agent-1", busId: "bus-1" });
-  const secondRun = run({ id: "agent-2", busId: "bus-2" });
+  const firstBus = orchestra.createBus({ name: "bus-1" });
+  const secondBus = orchestra.createBus({ name: "bus-2" });
+  const firstRun = run({ id: "agent-1", name: "agent-1", busId: firstBus.id });
+  const secondRun = run({ id: "agent-2", name: "agent-2", busId: secondBus.id });
   store.saveRun(firstRun);
   store.saveRun(secondRun);
 
@@ -97,8 +117,8 @@ test("orchestra waitBus resolves immediately for terminal bus runs", async () =>
   assert.equal(output.bus, bus);
   assert.deepEqual(output.runs, [finishedRun, failedRun]);
   assert.deepEqual(output.runResults, [
-    { runId: finishedRun.id, profile: finishedRun.profile, state: finishedRun.state },
-    { runId: failedRun.id, profile: failedRun.profile, state: failedRun.state },
+    { runId: finishedRun.id, name: finishedRun.name, profile: finishedRun.profile, state: finishedRun.state },
+    { runId: failedRun.id, name: failedRun.name, profile: failedRun.profile, state: failedRun.state },
   ]);
   assert.equal(output.timedOut, false);
   assert.deepEqual(output.pendingRunIds, []);
@@ -138,7 +158,9 @@ test("orchestra waitBus returns partial results on timeout", async () => {
 
   assert.equal(output.bus, bus);
   assert.deepEqual(output.runs, [runningRun]);
-  assert.deepEqual(output.runResults, [{ runId: runningRun.id, profile: runningRun.profile, state: runningRun.state }]);
+  assert.deepEqual(output.runResults, [
+    { runId: runningRun.id, name: runningRun.name, profile: runningRun.profile, state: runningRun.state },
+  ]);
   assert.equal(output.timedOut, true);
   assert.deepEqual(output.pendingRunIds, [runningRun.id]);
 });
@@ -182,10 +204,16 @@ class FakeRuntime implements AgentRuntime {
     this.store = store;
   }
 
-  async spawn(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
+  async spawn(
+    profile: AgentProfile,
+    task: string,
+    busId: string,
+    options: SpawnAgentRuntimeOptions,
+  ): Promise<AgentRun> {
     this.spawned = { profile, task, busId };
     const run: AgentRun = {
-      id: "agent-1",
+      id: options.id,
+      name: options.name,
       profile: profile.name,
       task,
       busId,
@@ -224,8 +252,10 @@ class FakeRuntime implements AgentRuntime {
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {
+  const id = overrides.id ?? "agent-1";
   return {
-    id: "agent-1",
+    id,
+    name: overrides.name ?? id,
     profile: "researcher",
     task: "Inspect the code.",
     busId: "bus-1",

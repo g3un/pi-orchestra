@@ -45,15 +45,25 @@ export function createWaitBusTool({ orchestra }: WaitBusToolDeps): WaitBusTool {
 }
 
 function formatWaitBusMessage(result: WaitBusResult): string {
+  const busLabel = formatBusLabel(result.bus);
   const headline = result.timedOut
-    ? `Timed out waiting for bus ${result.bus.id}; ${result.pendingRunIds.length} run(s) still pending.`
-    : `All ${result.runs.length} run(s) attached to bus ${result.bus.id} reached terminal state.`;
+    ? `Timed out waiting for bus ${busLabel}; ${result.pendingRunIds.length} run(s) still pending.`
+    : `All ${result.runs.length} run(s) attached to bus ${busLabel} reached terminal state.`;
   if (result.runs.length === 0) return headline;
 
   return [headline, "", "Runs:", ...result.runs.map(formatRunSummary)].join("\n");
 }
 
 function formatRunSummary(run: AgentRun): string {
-  if (!run.result) return `- ${run.id}: ${run.state}`;
-  return `- ${run.id}: ${run.state} result=${run.result.status} summary=${run.result.summary}`;
+  const runLabel = formatRunLabel(run);
+  if (!run.result) return `- ${runLabel}: ${run.state}`;
+  return `- ${runLabel}: ${run.state} result=${run.result.status} summary=${run.result.summary}`;
+}
+
+function formatBusLabel(bus: Bus): string {
+  return bus.name === bus.id ? bus.id : `${bus.name} (${bus.id})`;
+}
+
+function formatRunLabel(run: AgentRun): string {
+  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
 }

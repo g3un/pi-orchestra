@@ -17,6 +17,7 @@ export interface AgentResult {
 
 export interface AgentRun {
   id: string;
+  name: string;
   profile: string;
   task: string;
   busId: string;

@@ -6,5 +6,6 @@ export interface BusMessage {
 
 export interface Bus {
   id: string;
+  name: string;
   messages: BusMessage[];
 }

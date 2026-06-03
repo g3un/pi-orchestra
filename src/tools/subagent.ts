@@ -7,6 +7,7 @@ export type SubagentInput =
       profile: AgentProfile;
       task: string;
       busId: string;
+      name?: string;
     }
   | {
       action: "status";
@@ -42,7 +43,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
 
     async execute(input) {
       if (input.action === "spawn") {
-        const run = await orchestra.spawnAgent(input.profile, input.task, input.busId);
+        const run = await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name });
         return { run, message: formatRunMessage(run) };
       }
 
@@ -56,20 +57,22 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
         const run = await orchestra.resumeAgent(input.id, input.message);
         return {
           run,
-          message: formatRunMessage(run, `Resumed subagent ${run.id}; it is ${run.state}.`),
+          message: formatRunMessage(run, `Resumed subagent ${formatRunLabel(run)}; it is ${run.state}.`),
         };
       }
 
       const run = await orchestra.closeAgent(input.id);
       return {
         run,
-        message: run ? formatRunMessage(run, `Closed subagent ${input.id}.`) : `Closed subagent ${input.id}.`,
+        message: run
+          ? formatRunMessage(run, `Closed subagent ${formatRunLabel(run)}.`)
+          : `Closed subagent ${input.id}.`,
       };
     },
   };
 }
 
-function formatRunMessage(run: AgentRun, headline = `Subagent ${run.id} is ${run.state}.`): string {
+function formatRunMessage(run: AgentRun, headline = `Subagent ${formatRunLabel(run)} is ${run.state}.`): string {
   if (!run.result) return headline;
 
   const parts = [headline, "", `Result: ${run.result.status}`, run.result.summary];
@@ -77,6 +80,10 @@ function formatRunMessage(run: AgentRun, headline = `Subagent ${run.id} is ${run
     parts.push("", "Data:", formatResultData(run.result.data));
   }
   return parts.join("\n");
+}
+
+function formatRunLabel(run: AgentRun): string {
+  return run.name === run.id ? run.id : `${run.name} (${run.id})`;
 }
 
 function formatResultData(data: unknown): string {

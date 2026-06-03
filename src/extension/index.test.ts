@@ -15,7 +15,8 @@ test("bus parameters use an OpenAI-compatible root object schema", () => {
   assert.ok(parameters.properties);
   assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish"]);
   assert.match(parameters.properties.action?.description ?? "", /work grouping boundary/);
-  assert.match(parameters.properties.id?.description ?? "", /one bus groups the subagents/);
+  assert.match(parameters.properties.name?.description ?? "", /human-readable bus name/);
+  assert.match(parameters.properties.id?.description ?? "", /Bus id or name/);
   assert.match(parameters.properties.message?.description ?? "", /work bus/);
 });
 
@@ -32,8 +33,9 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "resume", "close"]);
   assert.match(parameters.properties.action?.description ?? "", /spawn creates a new subagent/);
   assert.match(parameters.properties.task?.description ?? "", /Required for action=spawn/);
-  assert.match(parameters.properties.busId?.description ?? "", /Required for action=spawn/);
-  assert.match(parameters.properties.id?.description ?? "", /Required for action=status/);
+  assert.match(parameters.properties.busId?.description ?? "", /bus id or name/);
+  assert.match(parameters.properties.name?.description ?? "", /subagent run name/);
+  assert.match(parameters.properties.id?.description ?? "", /run id or name/);
   assert.match(parameters.properties.message?.description ?? "", /Required for action=resume/);
 });
 
@@ -47,7 +49,7 @@ test("waitBus parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.match(parameters.properties.busId?.description ?? "", /Work bus id to wait for/);
+  assert.match(parameters.properties.busId?.description ?? "", /Work bus id or name to wait for/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /null to wait indefinitely/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /latest collected state/);

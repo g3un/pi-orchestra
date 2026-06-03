@@ -20,10 +20,16 @@ const BusActionParams = Type.String({
 const BusToolParams = Type.Object(
   {
     action: BusActionParams,
+    name: Type.Optional(
+      Type.String({
+        description:
+          "Optional short, human-readable bus name for action=create. If omitted, a short name is generated.",
+      }),
+    ),
     id: Type.Optional(
       Type.String({
         description:
-          "Required for action=status and action=publish. Bus id returned by action=create; one bus groups the subagents for a delegated work item.",
+          "Required for action=status and action=publish. Bus id or name returned by action=create; one bus groups the subagents for a delegated work item.",
       }),
     ),
     message: Type.Optional(
@@ -39,7 +45,7 @@ const WaitBusToolParams = Type.Object(
   {
     busId: Type.String({
       description:
-        "Work bus id to wait for. The tool returns when every current run attached to this bus is finished, failed, or closed.",
+        "Work bus id or name to wait for. The tool returns when every current run attached to this bus is finished, failed, or closed.",
     }),
     timeoutMs: Type.Optional(
       Type.Union(
@@ -91,12 +97,19 @@ const SubagentToolParams = Type.Object(
     busId: Type.Optional(
       Type.String({
         description:
-          "Required for action=spawn. Existing bus id returned by bus action=create; this attaches the subagent to that work group.",
+          "Required for action=spawn. Existing bus id or name returned by bus action=create; this attaches the subagent to that work group.",
+      }),
+    ),
+    name: Type.Optional(
+      Type.String({
+        description:
+          "Optional short, human-readable subagent run name for action=spawn. If omitted, a short name is generated from the profile name.",
       }),
     ),
     id: Type.Optional(
       Type.String({
-        description: "Required for action=status, action=resume, and action=close. Subagent id returned by spawn.",
+        description:
+          "Required for action=status, action=resume, and action=close. Subagent run id or name returned by spawn.",
       }),
     ),
     message: Type.Optional(
@@ -127,7 +140,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
         "Create one bus per delegated work item, spawn related subagents on it, then publish shared context to that bus.",
       promptGuidelines: [
         "Use action=create before spawning a subagent or agent team; the returned bus is the work grouping boundary.",
-        "Pass the returned bus id as subagent action=spawn busId so each subagent joins that work group.",
+        "Give each bus a short name when useful, and pass the returned bus id or name as subagent action=spawn busId so each subagent joins that work group.",
         "Multiple subagents can attach to the same bus when they are cooperating on the same delegated work item.",
         "Use action=publish to send updated parent context to every active subagent attached to the bus.",
         "Use action=status to inspect the messages already published on a bus.",
@@ -155,7 +168,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       promptGuidelines: [
         "Use subagent for isolated research, inspection, or implementation tasks.",
         "Create a bus first with bus action=create; the bus is the work grouping boundary for one delegated task or team.",
-        "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId.",
+        "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId; optionally provide a short run name.",
         "Attach multiple subagents to the same bus when they are cooperating on the same work item.",
         "Use action=status before resuming or closing an existing subagent if its state is unclear.",
         "Use bus action=publish to send updated parent context to agents attached to a bus.",
@@ -204,6 +217,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
 
 type RawBusParams = {
   action: "create" | "status" | "publish";
+  name?: string;
   id?: string;
   message?: string;
 };
@@ -213,6 +227,7 @@ type RawSubagentParams = {
   profile?: AgentProfile;
   task?: string;
   busId?: string;
+  name?: string;
   id?: string;
   message?: string;
 };
@@ -223,7 +238,7 @@ type RawWaitBusParams = {
 };
 
 function toBusInput(params: RawBusParams): BusInput {
-  if (params.action === "create") return { action: "create" };
+  if (params.action === "create") return { action: "create", name: params.name };
 
   if (params.action === "status") {
     if (!params.id) throw new Error("bus action=status requires id.");
@@ -245,7 +260,7 @@ function toSubagentInput(params: RawSubagentParams): SubagentInput {
     if (!params.profile) throw new Error("subagent action=spawn requires profile.");
     if (!params.task) throw new Error("subagent action=spawn requires task.");
     if (!params.busId) throw new Error("subagent action=spawn requires busId.");
-    return { action: "spawn", profile: params.profile, task: params.task, busId: params.busId };
+    return { action: "spawn", profile: params.profile, task: params.task, busId: params.busId, name: params.name };
   }
 
   if (params.action === "status") {

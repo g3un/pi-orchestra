@@ -23,6 +23,7 @@ test("bus status returns stored bus messages", async () => {
   const tool = createBusTool({ orchestra });
   const bus: Bus = {
     id: "bus-1",
+    name: "bus-1",
     messages: [{ id: "message-1", from: "main", message: "Initial context." }],
   };
   orchestra.buses.set(bus.id, bus);
@@ -42,7 +43,7 @@ test("bus status returns stored bus messages", async () => {
 test("bus publish delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createBusTool({ orchestra });
-  const bus: Bus = { id: "bus-1", messages: [] };
+  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
   const output = await tool.execute({ action: "publish", id: bus.id, message: "New constraint." });
@@ -66,7 +67,8 @@ class FakeOrchestra implements OrchestraApi {
   published?: { id: string; message: string; from: string };
 
   createBus(): Bus {
-    const bus: Bus = { id: `bus-${this.buses.size + 1}`, messages: [] };
+    const id = `bus-${this.buses.size + 1}`;
+    const bus: Bus = { id, name: id, messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
@@ -88,6 +90,7 @@ class FakeOrchestra implements OrchestraApi {
   async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
     const run: AgentRun = {
       id: "agent-1",
+      name: "agent-1",
       profile: profile.name,
       task,
       busId,
@@ -128,6 +131,7 @@ class FakeOrchestra implements OrchestraApi {
 function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
   const runResult: WaitBusResult["runResults"][number] = {
     runId: run.id,
+    name: run.name,
     profile: run.profile,
     state: run.state,
   };

@@ -39,6 +39,10 @@ export class InMemoryAgentStore implements AgentStore {
     return this.buses.get(id);
   }
 
+  listBuses(): Bus[] {
+    return [...this.buses.values()];
+  }
+
   addBusMessage(busId: string, message: BusMessage): void {
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);

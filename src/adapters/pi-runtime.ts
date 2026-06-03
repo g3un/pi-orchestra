@@ -10,7 +10,7 @@ import { Type } from "typebox";
 import type { AgentProfile, AgentResult, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
-import type { AgentRuntime } from "../core/runtime.ts";
+import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
 
 export interface PiAgentRuntimeOptions {
@@ -49,11 +49,17 @@ export class PiAgentRuntime implements AgentRuntime {
     this.resolveModel = options.resolveModel;
   }
 
-  async spawn(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
+  async spawn(
+    profile: AgentProfile,
+    task: string,
+    busId: string,
+    options: SpawnAgentRuntimeOptions,
+  ): Promise<AgentRun> {
     this.requireBus(busId);
 
     const run: AgentRun = {
-      id: uuid7(),
+      id: options.id,
+      name: options.name,
       profile: profile.name,
       task,
       busId,
@@ -75,7 +81,11 @@ export class PiAgentRuntime implements AgentRuntime {
     this.store.saveRun(run);
     const entry: RuntimeEntry = { session, seenBusMessageIds: new Set() };
     this.entries.set(run.id, entry);
-    this.startPromptTask(run.id, entry, this.withBusMessages(run.id, entry, buildInitialPrompt(profile, task)));
+    this.startPromptTask(
+      run.id,
+      entry,
+      this.withBusMessages(run.id, entry, buildInitialPrompt(profile, task, run.name)),
+    );
     return run;
   }
 
@@ -292,9 +302,9 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 }
 
-function buildInitialPrompt(profile: AgentProfile, task: string): string {
+function buildInitialPrompt(profile: AgentProfile, task: string, runName: string): string {
   const parts = [
-    `You are subagent "${profile.name}".`,
+    `You are subagent run "${runName}" with profile "${profile.name}".`,
     "",
     profile.systemPrompt,
     "",

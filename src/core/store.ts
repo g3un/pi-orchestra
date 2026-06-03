@@ -9,6 +9,7 @@ export interface AgentStore {
 
   saveBus(bus: Bus): void;
   getBus(id: string): Bus | undefined;
+  listBuses(): Bus[];
   /** Add or replace a bus message by id. */
   addBusMessage(busId: string, message: BusMessage): void;
 }

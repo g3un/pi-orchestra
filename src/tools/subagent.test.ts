@@ -13,7 +13,7 @@ const profile: AgentProfile = {
 test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const bus: Bus = { id: "bus-1", messages: [] };
+  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
   const output = await tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: bus.id });
@@ -108,7 +108,8 @@ class FakeOrchestra implements OrchestraApi {
   closedIds: string[] = [];
 
   createBus(): Bus {
-    const bus: Bus = { id: `bus-${this.buses.size + 1}`, messages: [] };
+    const id = `bus-${this.buses.size + 1}`;
+    const bus: Bus = { id, name: id, messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
@@ -131,6 +132,7 @@ class FakeOrchestra implements OrchestraApi {
     this.spawned = { profile, task, busId };
     const spawnedRun = run({
       id: "agent-1",
+      name: "agent-1",
       profile: profile.name,
       task,
       busId,
@@ -179,6 +181,7 @@ class FakeOrchestra implements OrchestraApi {
 function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
   const runResult: WaitBusResult["runResults"][number] = {
     runId: run.id,
+    name: run.name,
     profile: run.profile,
     state: run.state,
   };
@@ -187,8 +190,10 @@ function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {
+  const id = overrides.id ?? "agent-1";
   return {
-    id: "agent-1",
+    id,
+    name: overrides.name ?? id,
     profile: "researcher",
     task: "Inspect the code.",
     busId: "bus-1",
