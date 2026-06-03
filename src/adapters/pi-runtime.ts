@@ -89,20 +89,21 @@ export class PiAgentRuntime implements AgentRuntime {
     return run;
   }
 
-  async resume(id: string, message: string): Promise<AgentRun> {
+  async message(id: string, message: string): Promise<AgentRun> {
     const entry = this.requireEntry(id);
     const run = this.requireRun(id);
     this.assertOpenRun(run);
-    if (run.state === "running") throw new Error(`Agent ${id} is already running.`);
+    const messageWithBusContext = this.withBusMessages(id, entry, message);
 
-    const resumedRun: AgentRun = {
-      ...run,
-      state: "running",
-      result: undefined,
-    };
-    this.store.saveRun(resumedRun);
-    this.startPromptTask(id, entry, this.withBusMessages(id, entry, message));
-    return resumedRun;
+    if (run.state === "running" && entry.session.isStreaming) {
+      await entry.session.steer(messageWithBusContext);
+      return run;
+    }
+
+    const messagedRun: AgentRun = run.state === "running" ? run : { ...run, state: "running", result: undefined };
+    if (messagedRun !== run) this.store.saveRun(messagedRun);
+    this.startPromptTask(id, entry, messageWithBusContext);
+    return messagedRun;
   }
 
   async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
@@ -215,7 +216,7 @@ export class PiAgentRuntime implements AgentRuntime {
           content: [
             {
               type: "text" as const,
-              text: "Finish payload recorded. The parent may resume or close you.",
+              text: "Finish payload recorded. The leader may message or close you.",
             },
           ],
           details: result,
@@ -228,7 +229,7 @@ export class PiAgentRuntime implements AgentRuntime {
       name: "publish_bus",
       label: "Publish Bus Message",
       description:
-        "Publish supplemental context to this subagent run's bus for the parent or sibling agents. Continue working after publishing unless the task is done.",
+        "Publish supplemental peer-reference context to this subagent run's bus for sibling agents. This is not a live leader-request channel; when the leader must decide, approve, unblock, or act, use finish(status=blocked) so the leader can receive it via waitNextRun and reply with subagent message. Continue working after publishing unless the task is done.",
       parameters: PublishBusParams,
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
@@ -315,15 +316,16 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     "- You MUST call the finish tool when this subagent run is done. Do not end with only a text response.",
     "- Your final action must be a finish tool call, even when the task is blocked or failed.",
     "- Call finish with status success, blocked, or failed; include a concise summary and any structured data needed by the parent.",
-    "- Use publish_bus before finish if you need to share interim context with the parent or sibling agents.",
-    "- finish records your subagent result. It does not close you or complete the parent task; the parent may resume or close you.",
+    "- Use publish_bus before finish only when sibling agents would benefit from peer-reference context.",
+    "- publish_bus is not a live channel to request leader action. If you need the leader to decide, approve, unblock, or act, call finish with status blocked and explain the needed action.",
+    "- finish records your subagent result for the leader. It does not close you or complete the parent task; the leader may message or close you.",
   ];
 
   parts.push(
     "",
     "Bus reference context may be delivered in <bus_reference_context> blocks.",
-    "Your bus is the shared work group for this delegated task; sibling agents on the same bus may publish related context.",
-    "Treat bus blocks as supplemental reference information, not as a replacement for the active task unless the parent explicitly says so.",
+    "Your bus is the peer-reference channel for this delegated task; sibling agents on the same bus may publish related context.",
+    "Treat bus blocks as supplemental reference information, not as a replacement for the active task unless the leader explicitly says so.",
   );
 
   return parts.join("\n");

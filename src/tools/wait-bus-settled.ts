@@ -1,53 +1,53 @@
 import type { AgentRun } from "../core/agent.ts";
 import type { Bus } from "../core/bus.ts";
-import type { OrchestraApi, WaitBusResult, WaitBusRunResult } from "../core/orchestra.ts";
+import type { OrchestraApi, WaitBusSettledResult, WaitRunResult } from "../core/orchestra.ts";
 
-export interface WaitBusInput {
+export interface WaitBusSettledInput {
   busId: string;
   /** Defaults to 10 minutes. Use null to wait indefinitely. */
   timeoutMs?: number | null;
 }
 
-export interface WaitBusOutput {
+export interface WaitBusSettledOutput {
   bus: Bus;
   runs: AgentRun[];
-  runResults: WaitBusRunResult[];
+  runResults: WaitRunResult[];
   timedOut: boolean;
   pendingRunIds: string[];
   message: string;
 }
 
-export interface WaitBusTool {
-  name: "waitBus";
-  execute(input: WaitBusInput): Promise<WaitBusOutput>;
+export interface WaitBusSettledTool {
+  name: "waitBusSettled";
+  execute(input: WaitBusSettledInput): Promise<WaitBusSettledOutput>;
 }
 
-export interface WaitBusToolDeps {
+export interface WaitBusSettledToolDeps {
   orchestra: OrchestraApi;
 }
 
-export function createWaitBusTool({ orchestra }: WaitBusToolDeps): WaitBusTool {
+export function createWaitBusSettledTool({ orchestra }: WaitBusSettledToolDeps): WaitBusSettledTool {
   return {
-    name: "waitBus",
+    name: "waitBusSettled",
 
     async execute(input) {
-      const output = await orchestra.waitBus(input.busId, { timeoutMs: input.timeoutMs });
+      const output = await orchestra.waitBusSettled(input.busId, { timeoutMs: input.timeoutMs });
       return {
         bus: output.bus,
         runs: output.runs,
         runResults: output.runResults,
         timedOut: output.timedOut,
         pendingRunIds: output.pendingRunIds,
-        message: formatWaitBusMessage(output),
+        message: formatWaitBusSettledMessage(output),
       };
     },
   };
 }
 
-function formatWaitBusMessage(result: WaitBusResult): string {
+function formatWaitBusSettledMessage(result: WaitBusSettledResult): string {
   const busLabel = formatBusLabel(result.bus);
   const headline = result.timedOut
-    ? `Timed out waiting for bus ${busLabel}; ${result.pendingRunIds.length} run(s) still pending.`
+    ? `Timed out waiting for bus ${busLabel} to settle; ${result.pendingRunIds.length} run(s) still pending.`
     : `All ${result.runs.length} run(s) attached to bus ${busLabel} reached terminal state.`;
   if (result.runs.length === 0) return headline;
 

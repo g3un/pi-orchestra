@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { OrchestraApi, PublishedBusMessage, WaitBusOptions, WaitBusResult } from "../core/orchestra.ts";
+import type {
+  OrchestraApi,
+  PublishedBusMessage,
+  WaitBusSettledOptions,
+  WaitBusSettledResult,
+  WaitNextRunOptions,
+  WaitNextRunResult,
+} from "../core/orchestra.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const profile: AgentProfile = {
@@ -72,15 +79,15 @@ test("subagent status reads orchestra state", async () => {
   assert.equal(missingOutput.message, "Subagent missing not found.");
 });
 
-test("subagent resume delegates to orchestra", async () => {
+test("subagent message delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
   const existing = run({ id: "agent-1", state: "finished" });
   orchestra.runs.set(existing.id, existing);
 
-  const output = await tool.execute({ action: "resume", id: existing.id, message: "Continue." });
+  const output = await tool.execute({ action: "message", id: existing.id, message: "Continue." });
 
-  assert.deepEqual(orchestra.resumed, { id: existing.id, message: "Continue." });
+  assert.deepEqual(orchestra.messaged, { id: existing.id, message: "Continue." });
   assert.ok(output.run);
   assert.equal(output.run.state, "running");
   assert.equal(orchestra.getRun(existing.id), output.run);
@@ -104,7 +111,7 @@ class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();
   spawned?: { profile: AgentProfile; task: string; busId: string };
-  resumed?: { id: string; message: string };
+  messaged?: { id: string; message: string };
   closedIds: string[] = [];
 
   createBus(): Bus {
@@ -152,12 +159,12 @@ class FakeOrchestra implements OrchestraApi {
     return runs.filter((run) => run.busId === options.busId);
   }
 
-  async resumeAgent(id: string, message: string): Promise<AgentRun> {
-    this.resumed = { id, message };
+  async messageAgent(id: string, message: string): Promise<AgentRun> {
+    this.messaged = { id, message };
     const current = this.runs.get(id) ?? run({ id });
-    const resumedRun = { ...current, state: "running" as const };
-    this.runs.set(id, resumedRun);
-    return resumedRun;
+    const messagedRun = { ...current, state: "running" as const };
+    this.runs.set(id, messagedRun);
+    return messagedRun;
   }
 
   async closeAgent(id: string): Promise<AgentRun | undefined> {
@@ -170,16 +177,20 @@ class FakeOrchestra implements OrchestraApi {
     return closedRun;
   }
 
-  waitBus(busId: string, _options: WaitBusOptions = {}): Promise<WaitBusResult> {
+  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     const runs = this.listRuns({ busId });
     return Promise.resolve({ bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] });
   }
+
+  waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
+    throw new Error("Not implemented.");
+  }
 }
 
-function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
-  const runResult: WaitBusResult["runResults"][number] = {
+function toRunResult(run: AgentRun): WaitBusSettledResult["runResults"][number] {
+  const runResult: WaitBusSettledResult["runResults"][number] = {
     runId: run.id,
     name: run.name,
     profile: run.profile,

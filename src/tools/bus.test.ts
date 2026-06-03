@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { OrchestraApi, PublishedBusMessage, WaitBusOptions, WaitBusResult } from "../core/orchestra.ts";
+import type {
+  OrchestraApi,
+  PublishedBusMessage,
+  WaitBusSettledOptions,
+  WaitBusSettledResult,
+  WaitNextRunOptions,
+  WaitNextRunResult,
+} from "../core/orchestra.ts";
 import { createBusTool } from "./bus.ts";
 
 test("bus create allocates a standalone bus through orchestra", async () => {
@@ -110,7 +117,7 @@ class FakeOrchestra implements OrchestraApi {
     return runs.filter((run) => run.busId === options.busId);
   }
 
-  async resumeAgent(id: string, _message: string): Promise<AgentRun> {
+  async messageAgent(id: string, _message: string): Promise<AgentRun> {
     const run = this.runs.get(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
@@ -120,16 +127,20 @@ class FakeOrchestra implements OrchestraApi {
     return this.runs.get(id);
   }
 
-  waitBus(busId: string, _options: WaitBusOptions = {}): Promise<WaitBusResult> {
+  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     const runs = this.listRuns({ busId });
     return Promise.resolve({ bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] });
   }
+
+  waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
+    throw new Error("Not implemented.");
+  }
 }
 
-function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
-  const runResult: WaitBusResult["runResults"][number] = {
+function toRunResult(run: AgentRun): WaitBusSettledResult["runResults"][number] {
+  const runResult: WaitBusSettledResult["runResults"][number] = {
     runId: run.id,
     name: run.name,
     profile: run.profile,

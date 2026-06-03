@@ -8,8 +8,12 @@ import type { BusInput } from "../tools/bus.ts";
 import { createBusTool, type BusTool } from "../tools/bus.ts";
 import type { SubagentInput } from "../tools/subagent.ts";
 import { createSubagentTool, type SubagentTool } from "../tools/subagent.ts";
-import type { WaitBusInput } from "../tools/wait-bus.ts";
-import { createWaitBusTool, type WaitBusTool } from "../tools/wait-bus.ts";
+import type { WaitBusSettledInput } from "../tools/wait-bus-settled.ts";
+import { createWaitBusSettledTool, type WaitBusSettledTool } from "../tools/wait-bus-settled.ts";
+import type { WaitNextRunInput } from "../tools/wait-next-run.ts";
+import { createWaitNextRunTool, type WaitNextRunTool } from "../tools/wait-next-run.ts";
+import type { WorkgroupInput, WorkgroupMode } from "../tools/workgroup.ts";
+import { createWorkgroupTool, type WorkgroupTool } from "../tools/workgroup.ts";
 
 const BusActionParams = Type.String({
   enum: ["create", "status", "publish"],
@@ -41,7 +45,7 @@ const BusToolParams = Type.Object(
   { additionalProperties: false },
 );
 
-const WaitBusToolParams = Type.Object(
+const WaitBusSettledToolParams = Type.Object(
   {
     busId: Type.String({
       description:
@@ -57,7 +61,36 @@ const WaitBusToolParams = Type.Object(
         ],
         {
           description:
-            "Optional positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, waitBus returns the latest collected state for current runs attached to the bus.",
+            "Optional positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, waitBusSettled returns the latest collected state for current runs attached to the bus.",
+        },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const WaitNextRunToolParams = Type.Object(
+  {
+    busId: Type.String({
+      description:
+        "Work bus id or name to wait for. The tool returns the next current run on this bus that reaches a terminal state.",
+    }),
+    excludeRunIds: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Optional run ids or names to ignore because the leader has already handled them.",
+      }),
+    ),
+    timeoutMs: Type.Optional(
+      Type.Union(
+        [
+          Type.Number({
+            exclusiveMinimum: 0,
+          }),
+          Type.Null(),
+        ],
+        {
+          description:
+            "Optional positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, waitNextRun returns the latest collected state without a completed run.",
         },
       ),
     ),
@@ -79,10 +112,49 @@ const AgentProfileParams = Type.Object(
   { description: "Required for action=spawn. Defines the subagent role." },
 );
 
+const WorkgroupMemberParams = Type.Object(
+  {
+    profile: AgentProfileParams,
+    name: Type.Optional(
+      Type.String({
+        description: "Optional short, human-readable globally unique run name for this workgroup member.",
+      }),
+    ),
+    assignment: Type.Optional(
+      Type.String({
+        description: "Optional member-specific assignment or focus within the shared goal.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const WorkgroupToolParams = Type.Object(
+  {
+    busId: Type.String({
+      description:
+        "Existing work bus id or name. Workgroup does not create buses; create one with bus action=create first.",
+    }),
+    goal: Type.String({
+      description: "Shared workgroup goal that every member should contribute to.",
+    }),
+    mode: Type.String({
+      enum: ["explore", "council"],
+      description:
+        "Coordination style. explore fans out diverse approaches; council asks domain experts to advise the main-agent leader.",
+    }),
+    members: Type.Array(WorkgroupMemberParams, {
+      description: "Subagents to spawn onto the existing bus as workgroup members.",
+      minItems: 1,
+    }),
+  },
+  { additionalProperties: false },
+);
+
 const SubagentActionParams = Type.String({
-  enum: ["spawn", "status", "resume", "close"],
+  enum: ["spawn", "status", "message", "close"],
   description:
-    "Action to perform. spawn creates a new subagent with profile, task, and an existing busId. status inspects an existing subagent by id. resume sends a follow-up instruction by id. close disposes a subagent by id.",
+    "Action to perform. spawn creates a new subagent with profile, task, and an existing busId. status inspects an existing subagent by id or name. message sends an instruction by id or name, steering a running subagent or restarting a finished one. close disposes a subagent by id or name.",
 });
 
 const SubagentToolParams = Type.Object(
@@ -96,25 +168,24 @@ const SubagentToolParams = Type.Object(
     ),
     busId: Type.Optional(
       Type.String({
-        description:
-          "Required for action=spawn. Existing bus id or name returned by bus action=create; this attaches the subagent to that work group.",
+        description: "Required for action=spawn. Existing bus id or name returned by bus action=create.",
       }),
     ),
     name: Type.Optional(
       Type.String({
         description:
-          "Optional short, human-readable subagent run name for action=spawn. If omitted, a short name is generated from the profile name.",
+          "Optional short, human-readable globally unique subagent run name for action=spawn. If omitted, a short name is generated from the profile name.",
       }),
     ),
     id: Type.Optional(
       Type.String({
         description:
-          "Required for action=status, action=resume, and action=close. Subagent run id or name returned by spawn.",
+          "Required for action=status, action=message, and action=close. Subagent run id or name returned by spawn.",
       }),
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=resume. Follow-up instruction for the subagent.",
+        description: "Required for action=message. Instruction to send to the subagent.",
       }),
     ),
   },
@@ -124,7 +195,9 @@ const SubagentToolParams = Type.Object(
 interface ToolBundle {
   busTool: BusTool;
   subagentTool: SubagentTool;
-  waitBusTool: WaitBusTool;
+  workgroupTool: WorkgroupTool;
+  waitBusSettledTool: WaitBusSettledTool;
+  waitNextRunTool: WaitNextRunTool;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -164,12 +237,13 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       name: "subagent",
       label: "Subagent",
       description: "Create and manage an isolated subagent without polluting the parent context.",
-      promptSnippet: "Delegate isolated work to subagent and inspect or resume it later.",
+      promptSnippet: "Delegate isolated work to subagent and inspect, message, or close it later.",
       promptGuidelines: [
         "Use subagent for isolated research, inspection, or implementation tasks.",
         "Create a bus first with bus action=create; the bus is the work grouping boundary for one delegated task or team.",
-        "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId; optionally provide a short run name.",
+        "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId; optionally provide a globally unique short run name.",
         "Attach multiple subagents to the same bus when they are cooperating on the same work item.",
+        "Run names are globally unique; use the returned run id or name for status/message/close.",
         "Use action=status before resuming or closing an existing subagent if its state is unclear.",
         "Use bus action=publish to send updated parent context to agents attached to a bus.",
       ],
@@ -190,21 +264,78 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
 
   pi.registerTool(
     defineTool({
-      name: "waitBus",
-      label: "Wait Bus",
-      description: "Wait until all current agent runs attached to a work bus reach a terminal state.",
-      promptSnippet: "Wait for every current subagent on a bus to finish before collecting their statuses.",
+      name: "workgroup",
+      label: "Workgroup",
+      description:
+        "Launch multiple subagents onto an existing work bus so the main agent can lead exploration or expert coordination.",
+      promptSnippet:
+        "Attach several subagents to an existing bus for explore fan-out or council-style expert collaboration.",
       promptGuidelines: [
-        "Use waitBus after spawning one or more subagents on a bus when you need the bus work group to finish before continuing.",
-        "Pass the busId for the delegated work item; the tool waits for every current run attached to that bus.",
-        "By default waitBus times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
-        "On timeout, the tool returns the latest collected run states for the bus instead of failing.",
+        "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
+        "Use mode=explore to fan out diverse approaches: members may share facts, evidence, dead ends, and constraints with siblings, but should keep conclusions/recommendations until finish.",
+        "Use mode=council when the main agent should act as leader and coordinate domain experts that actively exchange conclusions, rebuttals, and next actions.",
+        "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
+        "Use waitNextRun to receive finished or blocked members; if a member needs leader action, respond with subagent message.",
       ],
-      parameters: WaitBusToolParams,
+      parameters: WorkgroupToolParams,
       executionMode: "sequential",
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
         const bundle = getBundle(bundles, ctx);
-        const output = await bundle.waitBusTool.execute(toWaitBusInput(params as RawWaitBusParams));
+        const input = withDefaultModelsForWorkgroup(toWorkgroupInput(params as RawWorkgroupParams), ctx);
+        const output = await bundle.workgroupTool.execute(input);
+
+        return {
+          content: [{ type: "text", text: output.message }],
+          details: output,
+        };
+      },
+    }),
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "waitBusSettled",
+      label: "Wait Bus Settled",
+      description: "Wait until all current agent runs attached to a work bus reach a terminal state.",
+      promptSnippet: "Wait for every current subagent on a bus to finish before collecting their statuses.",
+      promptGuidelines: [
+        "Use waitBusSettled when you need the whole bus work group to finish before continuing.",
+        "Pass the busId for the delegated work item; the tool waits for every current run attached to that bus.",
+        "By default waitBusSettled times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
+        "On timeout, the tool returns the latest collected run states for the bus instead of failing.",
+      ],
+      parameters: WaitBusSettledToolParams,
+      executionMode: "sequential",
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const bundle = getBundle(bundles, ctx);
+        const output = await bundle.waitBusSettledTool.execute(
+          toWaitBusSettledInput(params as RawWaitBusSettledParams),
+        );
+
+        return {
+          content: [{ type: "text", text: output.message }],
+          details: output,
+        };
+      },
+    }),
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "waitNextRun",
+      label: "Wait Next Run",
+      description: "Wait for the next current run attached to a work bus to reach a terminal state.",
+      promptSnippet: "Wait for one more subagent on a bus to finish so the leader can react and coordinate.",
+      promptGuidelines: [
+        "Use waitNextRun when acting as a workgroup leader and you want to handle subagent results as they arrive.",
+        "Pass excludeRunIds with run ids or names you have already handled to avoid receiving the same terminal run again.",
+        "By default waitNextRun times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
+      ],
+      parameters: WaitNextRunToolParams,
+      executionMode: "sequential",
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const bundle = getBundle(bundles, ctx);
+        const output = await bundle.waitNextRunTool.execute(toWaitNextRunInput(params as RawWaitNextRunParams));
 
         return {
           content: [{ type: "text", text: output.message }],
@@ -223,7 +354,7 @@ type RawBusParams = {
 };
 
 type RawSubagentParams = {
-  action: "spawn" | "status" | "resume" | "close";
+  action: "spawn" | "status" | "message" | "close";
   profile?: AgentProfile;
   task?: string;
   busId?: string;
@@ -232,8 +363,25 @@ type RawSubagentParams = {
   message?: string;
 };
 
-type RawWaitBusParams = {
+type RawWorkgroupParams = {
   busId?: string;
+  goal?: string;
+  mode?: WorkgroupMode;
+  members?: Array<{
+    profile?: AgentProfile;
+    name?: string;
+    assignment?: string;
+  }>;
+};
+
+type RawWaitBusSettledParams = {
+  busId?: string;
+  timeoutMs?: number | null;
+};
+
+type RawWaitNextRunParams = {
+  busId?: string;
+  excludeRunIds?: string[];
   timeoutMs?: number | null;
 };
 
@@ -250,9 +398,31 @@ function toBusInput(params: RawBusParams): BusInput {
   return { action: "publish", id: params.id, message: params.message };
 }
 
-function toWaitBusInput(params: RawWaitBusParams): WaitBusInput {
-  if (!params.busId) throw new Error("waitBus requires busId.");
+function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
+  if (!params.busId) throw new Error("workgroup requires busId.");
+  if (!params.goal) throw new Error("workgroup requires goal.");
+  if (!params.mode) throw new Error("workgroup requires mode.");
+  if (!params.members || params.members.length === 0) throw new Error("workgroup requires members.");
+
+  return {
+    busId: params.busId,
+    goal: params.goal,
+    mode: params.mode,
+    members: params.members.map((member, index) => {
+      if (!member.profile) throw new Error(`workgroup member ${index + 1} requires profile.`);
+      return { profile: member.profile, name: member.name, assignment: member.assignment };
+    }),
+  };
+}
+
+function toWaitBusSettledInput(params: RawWaitBusSettledParams): WaitBusSettledInput {
+  if (!params.busId) throw new Error("waitBusSettled requires busId.");
   return { busId: params.busId, timeoutMs: params.timeoutMs };
+}
+
+function toWaitNextRunInput(params: RawWaitNextRunParams): WaitNextRunInput {
+  if (!params.busId) throw new Error("waitNextRun requires busId.");
+  return { busId: params.busId, excludeRunIds: params.excludeRunIds, timeoutMs: params.timeoutMs };
 }
 
 function toSubagentInput(params: RawSubagentParams): SubagentInput {
@@ -265,17 +435,17 @@ function toSubagentInput(params: RawSubagentParams): SubagentInput {
 
   if (params.action === "status") {
     if (!params.id) throw new Error("subagent action=status requires id.");
-    return { action: "status", id: params.id };
+    return { action: "status", id: params.id, busId: params.busId };
   }
 
-  if (params.action === "resume") {
-    if (!params.id) throw new Error("subagent action=resume requires id.");
-    if (!params.message) throw new Error("subagent action=resume requires message.");
-    return { action: "resume", id: params.id, message: params.message };
+  if (params.action === "message") {
+    if (!params.id) throw new Error("subagent action=message requires id.");
+    if (!params.message) throw new Error("subagent action=message requires message.");
+    return { action: "message", id: params.id, message: params.message, busId: params.busId };
   }
 
   if (!params.id) throw new Error("subagent action=close requires id.");
-  return { action: "close", id: params.id };
+  return { action: "close", id: params.id, busId: params.busId };
 }
 
 function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): ToolBundle {
@@ -292,7 +462,9 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
   const bundle = {
     busTool: createBusTool({ orchestra }),
     subagentTool: createSubagentTool({ orchestra }),
-    waitBusTool: createWaitBusTool({ orchestra }),
+    workgroupTool: createWorkgroupTool({ orchestra }),
+    waitBusSettledTool: createWaitBusSettledTool({ orchestra }),
+    waitNextRunTool: createWaitNextRunTool({ orchestra }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;
@@ -302,10 +474,25 @@ function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): Subagent
   if (input.action !== "spawn" || input.profile.model || !ctx.model) return input;
   return {
     ...input,
-    profile: {
-      ...input.profile,
-      model: formatModelId(ctx.model),
-    },
+    profile: withDefaultProfileModel(input.profile, ctx),
+  };
+}
+
+function withDefaultModelsForWorkgroup(input: WorkgroupInput, ctx: ExtensionContext): WorkgroupInput {
+  return {
+    ...input,
+    members: input.members.map((member) => ({
+      ...member,
+      profile: withDefaultProfileModel(member.profile, ctx),
+    })),
+  };
+}
+
+function withDefaultProfileModel(profile: AgentProfile, ctx: ExtensionContext): AgentProfile {
+  if (profile.model || !ctx.model) return profile;
+  return {
+    ...profile,
+    model: formatModelId(ctx.model),
   };
 }
 

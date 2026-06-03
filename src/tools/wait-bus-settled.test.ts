@@ -2,12 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type { OrchestraApi, PublishedBusMessage, WaitBusOptions, WaitBusResult } from "../core/orchestra.ts";
-import { createWaitBusTool } from "./wait-bus.ts";
+import type {
+  OrchestraApi,
+  PublishedBusMessage,
+  WaitBusSettledOptions,
+  WaitBusSettledResult,
+  WaitNextRunOptions,
+  WaitNextRunResult,
+} from "../core/orchestra.ts";
+import { createWaitBusSettledTool } from "./wait-bus-settled.ts";
 
-test("waitBus delegates to orchestra and formats terminal bus runs", async () => {
+test("waitBusSettled delegates to orchestra and formats terminal bus runs", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWaitBusTool({ orchestra });
+  const tool = createWaitBusSettledTool({ orchestra });
   const bus = orchestra.createBus();
   const runs = [
     run({ id: "agent-1", busId: bus.id, state: "finished", result: { status: "success", summary: "Done." } }),
@@ -17,7 +24,7 @@ test("waitBus delegates to orchestra and formats terminal bus runs", async () =>
 
   const output = await tool.execute({ busId: bus.id, timeoutMs: 1000 });
 
-  assert.deepEqual(orchestra.waited, { busId: bus.id, options: { timeoutMs: 1000 } });
+  assert.deepEqual(orchestra.waitedSettled, { busId: bus.id, options: { timeoutMs: 1000 } });
   assert.equal(output.bus, bus);
   assert.deepEqual(output.runs, runs);
   assert.deepEqual(output.runResults, runs.map(toRunResult));
@@ -35,13 +42,13 @@ test("waitBus delegates to orchestra and formats terminal bus runs", async () =>
   );
 });
 
-test("waitBus formats timeout partial results", async () => {
+test("waitBusSettled formats timeout partial results", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWaitBusTool({ orchestra });
+  const tool = createWaitBusSettledTool({ orchestra });
   const bus = orchestra.createBus();
   const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
   orchestra.runs.set(runningRun.id, runningRun);
-  orchestra.nextWaitResult = {
+  orchestra.nextSettledResult = {
     bus,
     runs: [runningRun],
     runResults: [toRunResult(runningRun)],
@@ -56,15 +63,17 @@ test("waitBus formats timeout partial results", async () => {
   assert.deepEqual(output.pendingRunIds, [runningRun.id]);
   assert.equal(
     output.message,
-    [`Timed out waiting for bus ${bus.id}; 1 run(s) still pending.`, "", "Runs:", "- agent-1: running"].join("\n"),
+    [`Timed out waiting for bus ${bus.id} to settle; 1 run(s) still pending.`, "", "Runs:", "- agent-1: running"].join(
+      "\n",
+    ),
   );
 });
 
 class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();
-  waited?: { busId: string; options: WaitBusOptions };
-  nextWaitResult?: WaitBusResult;
+  waitedSettled?: { busId: string; options: WaitBusSettledOptions };
+  nextSettledResult?: WaitBusSettledResult;
 
   createBus(): Bus {
     const id = `bus-${this.buses.size + 1}`;
@@ -101,7 +110,7 @@ class FakeOrchestra implements OrchestraApi {
     return runs.filter((current) => current.busId === options.busId);
   }
 
-  async resumeAgent(id: string, _message: string): Promise<AgentRun> {
+  async messageAgent(id: string, _message: string): Promise<AgentRun> {
     const current = this.runs.get(id);
     if (!current) throw new Error(`Agent ${id} not found.`);
     return current;
@@ -111,19 +120,23 @@ class FakeOrchestra implements OrchestraApi {
     return this.runs.get(id);
   }
 
-  waitBus(busId: string, options: WaitBusOptions = {}): Promise<WaitBusResult> {
-    this.waited = { busId, options };
+  waitBusSettled(busId: string, options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
+    this.waitedSettled = { busId, options };
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     const runs = this.listRuns({ busId });
     return Promise.resolve(
-      this.nextWaitResult ?? { bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] },
+      this.nextSettledResult ?? { bus, runs, runResults: runs.map(toRunResult), timedOut: false, pendingRunIds: [] },
     );
+  }
+
+  waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
+    throw new Error("Not implemented.");
   }
 }
 
-function toRunResult(run: AgentRun): WaitBusResult["runResults"][number] {
-  const runResult: WaitBusResult["runResults"][number] = {
+function toRunResult(run: AgentRun): WaitBusSettledResult["runResults"][number] {
+  const runResult: WaitBusSettledResult["runResults"][number] = {
     runId: run.id,
     name: run.name,
     profile: run.profile,

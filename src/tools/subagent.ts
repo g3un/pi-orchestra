@@ -12,15 +12,18 @@ export type SubagentInput =
   | {
       action: "status";
       id: string;
+      busId?: string;
     }
   | {
-      action: "resume";
+      action: "message";
       id: string;
       message: string;
+      busId?: string;
     }
   | {
       action: "close";
       id: string;
+      busId?: string;
     };
 
 export interface SubagentOutput {
@@ -48,20 +51,20 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
       }
 
       if (input.action === "status") {
-        const run = orchestra.getRun(input.id);
+        const run = orchestra.getRun(input.id, { busId: input.busId });
         if (!run) return { message: `Subagent ${input.id} not found.` };
         return { run, message: formatRunMessage(run) };
       }
 
-      if (input.action === "resume") {
-        const run = await orchestra.resumeAgent(input.id, input.message);
+      if (input.action === "message") {
+        const run = await orchestra.messageAgent(input.id, input.message, { busId: input.busId });
         return {
           run,
-          message: formatRunMessage(run, `Resumed subagent ${formatRunLabel(run)}; it is ${run.state}.`),
+          message: formatRunMessage(run, `Messaged subagent ${formatRunLabel(run)}; it is ${run.state}.`),
         };
       }
 
-      const run = await orchestra.closeAgent(input.id);
+      const run = await orchestra.closeAgent(input.id, { busId: input.busId });
       return {
         run,
         message: run

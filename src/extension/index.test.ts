@@ -30,22 +30,38 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "resume", "close"]);
+  assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "message", "close"]);
   assert.match(parameters.properties.action?.description ?? "", /spawn creates a new subagent/);
   assert.match(parameters.properties.task?.description ?? "", /Required for action=spawn/);
   assert.match(parameters.properties.busId?.description ?? "", /bus id or name/);
   assert.match(parameters.properties.name?.description ?? "", /subagent run name/);
   assert.match(parameters.properties.id?.description ?? "", /run id or name/);
-  assert.match(parameters.properties.message?.description ?? "", /Required for action=resume/);
+  assert.match(parameters.properties.message?.description ?? "", /Required for action=message/);
 });
 
-test("waitBus parameters use an OpenAI-compatible root object schema", () => {
+test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   const registeredTools = registerExtensionTools();
 
-  const waitBus = registeredTools.find((tool) => tool.name === "waitBus");
-  assert.ok(waitBus);
+  const workgroup = registeredTools.find((tool) => tool.name === "workgroup");
+  assert.ok(workgroup);
 
-  const parameters = waitBus.parameters as JsonSchemaObject;
+  const parameters = workgroup.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.match(parameters.properties.busId?.description ?? "", /Existing work bus id or name/);
+  assert.match(parameters.properties.goal?.description ?? "", /Shared workgroup goal/);
+  assert.deepEqual(parameters.properties.mode?.enum, ["explore", "council"]);
+  assert.match(parameters.properties.members?.description ?? "", /workgroup members/);
+});
+
+test("waitBusSettled parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
+
+  const waitBusSettled = registeredTools.find((tool) => tool.name === "waitBusSettled");
+  assert.ok(waitBusSettled);
+
+  const parameters = waitBusSettled.parameters as JsonSchemaObject;
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
@@ -53,6 +69,21 @@ test("waitBus parameters use an OpenAI-compatible root object schema", () => {
   assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /null to wait indefinitely/);
   assert.match(parameters.properties.timeoutMs?.description ?? "", /latest collected state/);
+});
+
+test("waitNextRun parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
+
+  const waitNextRun = registeredTools.find((tool) => tool.name === "waitNextRun");
+  assert.ok(waitNextRun);
+
+  const parameters = waitNextRun.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.match(parameters.properties.busId?.description ?? "", /next current run/);
+  assert.match(parameters.properties.excludeRunIds?.description ?? "", /already handled/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /Defaults to 10 minutes/);
 });
 
 function registerExtensionTools(): ToolDefinition[] {

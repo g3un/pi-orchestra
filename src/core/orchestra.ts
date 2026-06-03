@@ -9,11 +9,12 @@ export interface OrchestraApi {
   publishBus(id: string, message: string, from?: string): Promise<PublishedBusMessage>;
 
   spawnAgent(profile: AgentProfile, task: string, busId: string, options?: SpawnAgentOptions): Promise<AgentRun>;
-  getRun(id: string): AgentRun | undefined;
+  getRun(id: string, options?: RunLookupOptions): AgentRun | undefined;
   listRuns(options?: ListRunsOptions): AgentRun[];
-  resumeAgent(id: string, message: string): Promise<AgentRun>;
-  closeAgent(id: string): Promise<AgentRun | undefined>;
-  waitBus(busId: string, options?: WaitBusOptions): Promise<WaitBusResult>;
+  messageAgent(id: string, message: string, options?: RunLookupOptions): Promise<AgentRun>;
+  closeAgent(id: string, options?: RunLookupOptions): Promise<AgentRun | undefined>;
+  waitBusSettled(busId: string, options?: WaitBusSettledOptions): Promise<WaitBusSettledResult>;
+  waitNextRun(busId: string, options?: WaitNextRunOptions): Promise<WaitNextRunResult>;
 }
 
 export interface CreateBusOptions {
@@ -29,15 +30,25 @@ export interface PublishedBusMessage {
   busMessage: BusMessage;
 }
 
-export interface WaitBusResult {
+export interface WaitBusSettledResult {
   bus: Bus;
   runs: AgentRun[];
-  runResults: WaitBusRunResult[];
+  runResults: WaitRunResult[];
   timedOut: boolean;
   pendingRunIds: string[];
 }
 
-export interface WaitBusRunResult {
+export interface WaitNextRunResult {
+  bus: Bus;
+  run?: AgentRun;
+  runResult?: WaitRunResult;
+  runs: AgentRun[];
+  runResults: WaitRunResult[];
+  timedOut: boolean;
+  pendingRunIds: string[];
+}
+
+export interface WaitRunResult {
   runId: string;
   name: string;
   profile: string;
@@ -45,12 +56,24 @@ export interface WaitBusRunResult {
   result?: AgentRun["result"];
 }
 
-export interface WaitBusOptions {
+export interface WaitBusSettledOptions {
   /** Defaults to 10 minutes. Use null to wait indefinitely. */
   timeoutMs?: number | null;
 }
 
+export interface WaitNextRunOptions {
+  /** Defaults to 10 minutes. Use null to wait indefinitely. */
+  timeoutMs?: number | null;
+  /** Run ids or names that have already been handled by the leader. */
+  excludeRunIds?: string[];
+}
+
 export interface ListRunsOptions {
+  busId?: string;
+}
+
+export interface RunLookupOptions {
+  /** Optional bus id or name for narrowing run lookup. */
   busId?: string;
 }
 
@@ -59,7 +82,7 @@ export interface OrchestraDeps {
   store: AgentStore;
 }
 
-const DEFAULT_WAIT_BUS_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class Orchestra implements OrchestraApi {
   private readonly runtime: AgentRuntime;
@@ -97,8 +120,8 @@ export class Orchestra implements OrchestraApi {
     return await this.runtime.spawn(profile, task, bus.id, this.createRunIdentity(profile, options.name));
   }
 
-  getRun(id: string): AgentRun | undefined {
-    return this.findRun(id);
+  getRun(id: string, options: RunLookupOptions = {}): AgentRun | undefined {
+    return this.findRun(id, options);
   }
 
   listRuns(options: ListRunsOptions = {}): AgentRun[] {
@@ -108,27 +131,22 @@ export class Orchestra implements OrchestraApi {
     return runs.filter((run) => run.busId === bus.id);
   }
 
-  async resumeAgent(id: string, message: string): Promise<AgentRun> {
-    const run = this.requireRun(id);
-    if (run.state === "running") throw new Error(`Agent ${id} is already running.`);
-    return await this.runtime.resume(run.id, message);
+  async messageAgent(id: string, message: string, options: RunLookupOptions = {}): Promise<AgentRun> {
+    const run = this.requireRun(id, options);
+    return await this.runtime.message(run.id, message);
   }
 
-  async closeAgent(id: string): Promise<AgentRun | undefined> {
-    const run = this.getRun(id);
+  async closeAgent(id: string, options: RunLookupOptions = {}): Promise<AgentRun | undefined> {
+    const run = this.getRun(id, options);
     return await this.runtime.close(run?.id ?? id);
   }
 
-  waitBus(busId: string, options: WaitBusOptions = {}): Promise<WaitBusResult> {
-    const timeoutMs = options.timeoutMs === undefined ? DEFAULT_WAIT_BUS_TIMEOUT_MS : options.timeoutMs;
-    if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
-      throw new Error("waitBus timeoutMs must be positive, or null to wait indefinitely.");
-    }
-
+  waitBusSettled(busId: string, options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
+    const timeoutMs = resolveTimeoutMs("waitBusSettled", options.timeoutMs);
     const bus = this.requireBus(busId);
     const initialRuns = this.listRuns({ busId: bus.id });
     if (initialRuns.every(isTerminalRun)) {
-      return Promise.resolve(buildWaitBusResult(bus, initialRuns, false));
+      return Promise.resolve(buildWaitBusSettledResult(bus, initialRuns, false));
     }
 
     return new Promise((resolve) => {
@@ -143,15 +161,14 @@ export class Orchestra implements OrchestraApi {
       };
 
       const getLatestRuns = () => initialRuns.map((run) => latestRuns.get(run.id) ?? run);
-      const getPendingRunIds = (runs: AgentRun[]) => runs.filter((run) => !isTerminalRun(run)).map((run) => run.id);
 
       const resolveIfDone = () => {
         const runs = getLatestRuns();
-        if (getPendingRunIds(runs).length > 0) return;
+        if (runs.some((run) => !isTerminalRun(run))) return;
 
         settled = true;
         cleanup();
-        resolve(buildWaitBusResult(bus, runs, false));
+        resolve(buildWaitBusSettledResult(bus, runs, false));
       };
 
       if (timeoutMs !== null) {
@@ -160,7 +177,7 @@ export class Orchestra implements OrchestraApi {
 
           settled = true;
           cleanup();
-          resolve(buildWaitBusResult(bus, getLatestRuns(), true));
+          resolve(buildWaitBusSettledResult(bus, getLatestRuns(), true));
         }, timeoutMs);
       }
 
@@ -179,6 +196,59 @@ export class Orchestra implements OrchestraApi {
     });
   }
 
+  waitNextRun(busId: string, options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
+    const timeoutMs = resolveTimeoutMs("waitNextRun", options.timeoutMs);
+    const bus = this.requireBus(busId);
+    const initialRuns = this.listRuns({ busId: bus.id });
+    const excludedRunIds = this.resolveExcludedRunIds(initialRuns, options.excludeRunIds ?? []);
+    const candidateRuns = initialRuns.filter((run) => !excludedRunIds.has(run.id));
+    const alreadyDone = candidateRuns.find(isTerminalRun);
+    if (alreadyDone || candidateRuns.length === 0) {
+      return Promise.resolve(buildWaitNextRunResult(bus, initialRuns, alreadyDone, false, excludedRunIds));
+    }
+
+    return new Promise((resolve) => {
+      const latestRuns = new Map(initialRuns.map((run) => [run.id, run]));
+      const unsubscribeAll: Array<() => void> = [];
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        if (timeout) clearTimeout(timeout);
+        for (const unsubscribe of unsubscribeAll.splice(0)) unsubscribe();
+      };
+
+      const getLatestRuns = () => initialRuns.map((run) => latestRuns.get(run.id) ?? run);
+
+      const resolveWithRun = (run: AgentRun) => {
+        settled = true;
+        cleanup();
+        resolve(buildWaitNextRunResult(bus, getLatestRuns(), run, false, excludedRunIds));
+      };
+
+      if (timeoutMs !== null) {
+        timeout = setTimeout(() => {
+          if (settled) return;
+
+          settled = true;
+          cleanup();
+          resolve(buildWaitNextRunResult(bus, getLatestRuns(), undefined, true, excludedRunIds));
+        }, timeoutMs);
+      }
+
+      for (const run of initialRuns) {
+        if (isTerminalRun(run)) continue;
+        unsubscribeAll.push(
+          this.store.subscribeRun(run.id, (updatedRun) => {
+            if (settled) return;
+            latestRuns.set(updatedRun.id, updatedRun);
+            if (!excludedRunIds.has(updatedRun.id) && isTerminalRun(updatedRun)) resolveWithRun(updatedRun);
+          }),
+        );
+      }
+    });
+  }
+
   private requireBus(id: string): Bus {
     const bus = this.findBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
@@ -189,14 +259,27 @@ export class Orchestra implements OrchestraApi {
     return this.store.getBus(id) ?? this.store.listBuses().find((bus) => bus.name === id);
   }
 
-  private requireRun(id: string): AgentRun {
-    const run = this.findRun(id);
+  private requireRun(id: string, options: RunLookupOptions = {}): AgentRun {
+    const run = this.findRun(id, options);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
 
-  private findRun(id: string): AgentRun | undefined {
-    return this.store.getRun(id) ?? this.store.listRuns().find((run) => run.name === id);
+  private findRun(id: string, options: RunLookupOptions = {}): AgentRun | undefined {
+    const bus = options.busId ? this.requireBus(options.busId) : undefined;
+    const runById = this.store.getRun(id);
+    if (runById && (!bus || runById.busId === bus.id)) return runById;
+
+    return this.store.listRuns().find((run) => run.name === id && (!bus || run.busId === bus.id));
+  }
+
+  private resolveExcludedRunIds(busRuns: AgentRun[], excludedRunIds: string[]): Set<string> {
+    const resolvedIds = new Set<string>();
+    for (const id of excludedRunIds) {
+      const run = busRuns.find((current) => current.id === id || current.name === id);
+      resolvedIds.add(run?.id ?? id);
+    }
+    return resolvedIds;
   }
 
   private createBusIdentity(name: string | undefined): EntityIdentity {
@@ -213,18 +296,46 @@ interface EntityIdentity {
   name: string;
 }
 
-function buildWaitBusResult(bus: Bus, runs: AgentRun[], timedOut: boolean): WaitBusResult {
+function resolveTimeoutMs(label: string, timeoutMs: number | null | undefined): number | null {
+  const resolvedTimeoutMs = timeoutMs === undefined ? DEFAULT_WAIT_TIMEOUT_MS : timeoutMs;
+  if (resolvedTimeoutMs !== null && (!Number.isFinite(resolvedTimeoutMs) || resolvedTimeoutMs <= 0)) {
+    throw new Error(`${label} timeoutMs must be positive, or null to wait indefinitely.`);
+  }
+  return resolvedTimeoutMs;
+}
+
+function buildWaitBusSettledResult(bus: Bus, runs: AgentRun[], timedOut: boolean): WaitBusSettledResult {
   return {
     bus,
     runs,
-    runResults: runs.map(toWaitBusRunResult),
+    runResults: runs.map(toWaitRunResult),
     timedOut,
     pendingRunIds: runs.filter((run) => !isTerminalRun(run)).map((run) => run.id),
   };
 }
 
-function toWaitBusRunResult(run: AgentRun): WaitBusRunResult {
-  const runResult: WaitBusRunResult = {
+function buildWaitNextRunResult(
+  bus: Bus,
+  runs: AgentRun[],
+  run: AgentRun | undefined,
+  timedOut: boolean,
+  excludedRunIds: Set<string>,
+): WaitNextRunResult {
+  return {
+    bus,
+    run,
+    runResult: run ? toWaitRunResult(run) : undefined,
+    runs,
+    runResults: runs.map(toWaitRunResult),
+    timedOut,
+    pendingRunIds: runs
+      .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
+      .map((current) => current.id),
+  };
+}
+
+function toWaitRunResult(run: AgentRun): WaitRunResult {
+  const runResult: WaitRunResult = {
     runId: run.id,
     name: run.name,
     profile: run.profile,
