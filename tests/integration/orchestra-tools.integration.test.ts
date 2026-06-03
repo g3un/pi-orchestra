@@ -156,12 +156,12 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   );
 
   const summaryWorkerTask = runtime.spawned.find((spawn) => spawn.options.name === "summary-worker")?.task ?? "";
-  assert.match(summaryWorkerTask, /Previous stage outputs:/);
-  assert.match(summaryWorkerTask, /Stage collect output:/);
+  assert.match(summaryWorkerTask, /<previous_stage_outputs>/);
+  assert.match(summaryWorkerTask, /<stage_output name="collect">/);
   assert.match(summaryWorkerTask, /collect-leader completed\./);
 
   const summaryLeaderTask = runtime.spawned.find((spawn) => spawn.options.name === "summary-leader")?.task ?? "";
-  assert.match(summaryLeaderTask, /Worker results for this stage:/);
+  assert.match(summaryLeaderTask, /<worker_results>/);
   assert.match(summaryLeaderTask, /summary-worker completed\./);
   assert.match(completed.message, /Workflow reached terminal state: release-flow; state=success result=success\./);
 });

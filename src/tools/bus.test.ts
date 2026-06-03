@@ -42,7 +42,7 @@ test("bus status returns stored bus messages", async () => {
   assert.equal(output.bus, bus);
   assert.equal(
     output.message,
-    ["Bus bus-1 has 1 message(s).", "", "Messages:", "- message-1 from main:", "  Initial context."].join("\n"),
+    ["Bus bus-1 has 1 message(s).", "", "Messages:", "- message-1 from main:", "Initial context."].join("\n"),
   );
   assert.equal(missingOutput.bus, undefined);
   assert.equal(missingOutput.message, "Bus missing not found.");
@@ -63,10 +63,7 @@ test("bus publish delegates to orchestra", async () => {
   });
   assert.deepEqual(output.busMessage, { id: "message-1", message: "New constraint.", from: "main" });
   assert.deepEqual(orchestra.getBus(bus.id)?.messages, [{ id: "message-1", message: "New constraint.", from: "main" }]);
-  assert.equal(
-    output.message,
-    "Published message to bus bus-1.\n\nMessages:\n- message-1 from main:\n  New constraint.",
-  );
+  assert.equal(output.message, "Published message to bus bus-1.\n\nMessages:\n- message-1 from main:\nNew constraint.");
 });
 
 test("bus publish preserves an explicit sender", async () => {

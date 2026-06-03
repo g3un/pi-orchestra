@@ -59,8 +59,9 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   );
   assert.equal(session.promptCalls.length, 1);
   assert.match(session.promptCalls[0]?.message ?? "", /You are subagent run "Agent 1" with profile "researcher"\./);
-  assert.match(session.promptCalls[0]?.message ?? "", /Task:\nInspect the code\./);
-  assert.match(session.promptCalls[0]?.message ?? "", /You MUST call the finish tool/);
+  assert.match(session.promptCalls[0]?.message ?? "", /## System prompt\nResearch the assigned task\./);
+  assert.match(session.promptCalls[0]?.message ?? "", /## Task\nInspect the code\./);
+  assert.match(session.promptCalls[0]?.message ?? "", /End by calling finish exactly once/);
   assert.deepEqual(session.promptCalls[0]?.options, { expandPromptTemplates: false });
 });
 
@@ -218,10 +219,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
   const session = queuedSessions[0];
 
   assert.equal(session?.promptCalls.length, 2);
-  assert.match(
-    session?.promptCalls[1]?.message ?? "",
-    /Your previous response ended without calling the finish tool\./,
-  );
+  assert.match(session?.promptCalls[1]?.message ?? "", /Your previous response ended without finish\./);
   assert.deepEqual(failedRun.result, {
     status: "failed",
     summary: "Agent stopped without calling finish.",

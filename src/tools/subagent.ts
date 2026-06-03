@@ -46,8 +46,7 @@ export interface SubagentToolDeps {
 }
 
 export const SubagentRunNameParam = Type.String({
-  description:
-    "Optional short, human-readable globally unique subagent run name. If omitted, a short name is generated from the profile name.",
+  description: "Optional globally unique short run name.",
 });
 
 export const AgentProfileParams = Type.Object(
@@ -57,7 +56,7 @@ export const AgentProfileParams = Type.Object(
     tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool allowlist for the subagent." })),
     model: Type.Optional(
       Type.String({
-        description: "Optional provider/model id, for example anthropic/claude-sonnet-4-5.",
+        description: "Optional provider/model id.",
       }),
     ),
   },
@@ -66,8 +65,7 @@ export const AgentProfileParams = Type.Object(
 
 const SubagentActionParams = Type.String({
   enum: ["spawn", "status", "message", "close"],
-  description:
-    "Action to perform. spawn creates a new subagent with profile, task, and an existing busId. status inspects an existing subagent by id or name. message sends an instruction by id or name, steering an active subagent or restarting a terminal one. close disposes a subagent by id or name.",
+  description: "spawn creates; status inspects; message steers/restarts; close disposes by id/name.",
 });
 
 const SubagentToolParams = Type.Object(
@@ -81,14 +79,13 @@ const SubagentToolParams = Type.Object(
     ),
     busId: Type.Optional(
       Type.String({
-        description: "Required for action=spawn. Existing bus id or name returned by bus action=create.",
+        description: "Required for action=spawn. Existing bus id/name.",
       }),
     ),
     name: Type.Optional(SubagentRunNameParam),
     id: Type.Optional(
       Type.String({
-        description:
-          "Required for action=status, action=message, and action=close. Subagent run id or name returned by spawn.",
+        description: "Required for status/message/close. Subagent run id/name.",
       }),
     ),
     message: Type.Optional(
@@ -116,7 +113,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
 
       if (input.action === "status") {
         const run = orchestra.getRun(input.id, { busId: input.busId });
-        if (!run) return { message: `Subagent ${input.id} not found.` };
+        if (!run) return { message: formatMissingSubagentMessage(input.id) };
         return { run, message: formatRunMessage(run) };
       }
 
@@ -133,7 +130,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
         run,
         message: run
           ? formatRunMessage(run, `Closed subagent ${formatNamedEntityLabel(run)}.`)
-          : `Closed subagent ${input.id}.`,
+          : formatClosedMissingSubagentMessage(input.id),
       };
     },
   };
@@ -143,16 +140,12 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
   return defineTool({
     name: "subagent",
     label: "Subagent",
-    description: "Create and manage an isolated subagent without polluting the parent context.",
-    promptSnippet: "Delegate isolated work to subagent and inspect, message, or close it later.",
+    description: "Create and manage isolated subagents.",
+    promptSnippet: "Spawn a subagent on an existing bus, then status/message/close it later.",
     promptGuidelines: [
-      "Use subagent for isolated research, inspection, or implementation tasks.",
-      "Create a bus first with bus action=create; the bus is the work grouping boundary for one delegated task or team.",
-      "Use action=spawn to create a new isolated subagent and attach it to an existing bus via busId; optionally provide a globally unique short run name.",
-      "Attach multiple subagents to the same bus when they are cooperating on the same work item.",
-      "Run names are globally unique; use the returned run id or name for status/message/close.",
-      "Use action=status before messaging or closing an existing subagent if its state is unclear.",
-      "Use bus action=publish to send updated parent context to agents attached to a bus.",
+      "Create a bus first; spawn attaches the subagent via busId.",
+      "Attach cooperating subagents to the same bus.",
+      "Use returned run id/name for status, message, or close.",
     ],
     parameters: SubagentToolParams,
     executionMode: "parallel",
@@ -205,6 +198,14 @@ export function withDefaultProfileModel(profile: AgentProfile, ctx: ExtensionCon
     ...profile,
     model: formatModelId(ctx.model),
   };
+}
+
+function formatMissingSubagentMessage(id: string): string {
+  return `Subagent ${id} not found.`;
+}
+
+function formatClosedMissingSubagentMessage(id: string): string {
+  return `Closed subagent ${id}.`;
 }
 
 function formatRunMessage(

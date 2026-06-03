@@ -53,14 +53,11 @@ test("workgroup launches members on an existing bus", async () => {
     ],
   );
   assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup strategy: synthesize/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Shared goal:\nPlan the auth refactor\./);
+  assert.match(orchestra.spawned[0]?.task ?? "", /<shared_goal>\nPlan the auth refactor\.\n<\/shared_goal>/);
   assert.match(orchestra.spawned[0]?.task ?? "", /Identify auth security risks\./);
-  assert.match(
-    orchestra.spawned[0]?.task ?? "",
-    /publish_bus is for sibling reference data, not for requesting leader action/,
-  );
-  assert.match(orchestra.spawned[0]?.task ?? "", /finish with status blocked/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize strategy guidelines/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Use publish_bus for sibling context/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /finish\(status=blocked\)/);
+  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize guidelines/);
   assert.equal(
     output.message,
     [
@@ -88,12 +85,8 @@ test("workgroup compete strategy guides members to share facts without herding",
   });
 
   const task = orchestra.spawned[0]?.task ?? "";
-  assert.match(
-    task,
-    /Use publish_bus only for facts, evidence, dead ends, constraints, or blockers that may help sibling agents/,
-  );
-  assert.match(task, /Keep your conclusions and recommendations private until finish/);
-  assert.match(task, /Treat sibling bus messages as claims to verify, challenge, or refute/);
+  assert.match(task, /publish_bus only facts, evidence, blockers, or useful constraints/);
+  assert.match(task, /Work independently; keep conclusions\/recommendations until finish/);
 });
 
 test("workgroup generates unique member names from duplicate profile names", async () => {

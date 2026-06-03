@@ -65,19 +65,17 @@ export const WorkgroupMemberParams = Type.Object(
 const WorkgroupToolParams = Type.Object(
   {
     busId: Type.String({
-      description:
-        "Existing work bus id or name. Workgroup does not create buses; create one with bus action=create first.",
+      description: "Existing bus id/name; create with bus action=create first.",
     }),
     goal: Type.String({
-      description: "Shared workgroup goal that every member should contribute to.",
+      description: "Shared workgroup goal.",
     }),
     strategy: Type.String({
       enum: [...WORKGROUP_STRATEGY_VALUES],
-      description:
-        "Coordination strategy for spawned members only; workgroup does not settle results automatically. Use compete when members are substitutable and any one successful result satisfies the goal; use synthesize when members are complementary and their findings, reviews, or tradeoffs must be combined or compared.",
+      description: "compete = one success is enough; synthesize = combine complementary findings.",
     }),
     members: Type.Array(WorkgroupMemberParams, {
-      description: "Subagents to spawn onto the existing bus as workgroup members.",
+      description: "Subagents to spawn.",
       minItems: 1,
     }),
   },
@@ -163,17 +161,13 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
   return defineTool({
     name: "workgroup",
     label: "Workgroup",
-    description:
-      "Launch multiple subagents onto an existing work bus. This tool only spawns members; the main agent remains the workgroup leader/executor.",
-    promptSnippet:
-      "Spawn a main-led workgroup on an existing bus; you collect, race, close, and summarize member results yourself.",
+    description: "Spawn multiple subagents onto an existing bus; you lead and collect results.",
+    promptSnippet: "Spawn a main-led workgroup on an existing bus, then collect results with bus wait actions.",
     promptGuidelines: [
-      "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
-      "Workgroup only launches members. You are the leader/executor: use bus action=wait_next or bus action=wait_settled to collect results, decide next actions, and summarize outputs yourself.",
-      "Use strategy=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with bus action=wait_next, close remaining members after the first success, and condense the winning result yourself.",
-      "Use strategy=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
-      "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
-      "Use bus action=wait_next to receive successful, blocked, or failed members; if a member needs leader action, respond with subagent message.",
+      "Create a bus first; workgroup only spawns members.",
+      "Use compete when one successful member is enough; use wait_next, then close losers and summarize.",
+      "Use synthesize when members provide complementary findings to combine; wait_settled usually fits.",
+      "publish_bus is peer-reference context, not a leader-request channel.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",
@@ -356,46 +350,46 @@ function toSubagentSpawnInput(
 }
 
 function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgroupMember): string {
-  const parts = [
-    "You are participating in a workgroup on a shared peer-reference bus.",
-    "The main agent is the workgroup leader, but it is outside the bus: publish_bus is for sibling reference data, not for requesting leader action.",
-    "If you need the leader to decide, approve, unblock, or act, call finish with status blocked so the leader can receive it via bus action=wait_next and respond with subagent message.",
+  return [
+    "You are a workgroup member on a shared peer-reference bus.",
+    "Use publish_bus for sibling context; use finish(status=blocked) for leader action or decisions.",
     "",
+    "## Workgroup context",
     `Workgroup strategy: ${input.strategy}`,
     "Shared goal:",
+    "<shared_goal>",
     input.goal,
+    "</shared_goal>",
     "",
     "Your assignment:",
+    "<assignment>",
     member.assignment ?? `Apply your profile "${member.profile.name}" to the shared goal.`,
+    "</assignment>",
     "",
     "Workgroup members:",
+    "<workgroup_members>",
     ...input.members.map(formatRosterMember),
+    "</workgroup_members>",
     "",
     ...buildStrategyGuidelines(input.strategy),
-  ];
-
-  return parts.join("\n");
+  ].join("\n");
 }
 
 function buildStrategyGuidelines(strategy: WorkgroupStrategy): string[] {
   if (strategy === "compete") {
     return [
-      "Compete strategy guidelines:",
-      "- Pursue your assigned approach independently; do not follow sibling agents' conclusions or recommendations.",
-      "- Use publish_bus only for facts, evidence, dead ends, constraints, or blockers that may help sibling agents.",
-      "- Keep your conclusions and recommendations private until finish so sibling agents do not converge too early.",
-      "- Treat sibling bus messages as claims to verify, challenge, or refute; keep developing your own approach independently.",
-      "- In finish, summarize your approach, evidence, tradeoffs, risks, and recommendation.",
+      "Compete guidelines:",
+      "- Work independently; keep conclusions/recommendations until finish.",
+      "- publish_bus only facts, evidence, blockers, or useful constraints.",
+      "- finish with approach, evidence, risks, and recommendation.",
     ];
   }
 
   return [
-    "Synthesize strategy guidelines:",
-    "- Act as a domain expert advising the main-agent leader from your assigned perspective.",
-    "- Use publish_bus for important findings, questions, blockers, context, conclusions, or rebuttals that sibling experts should see.",
-    "- If you need leader action, approval, or a decision, finish with status blocked instead of publishing that request to the bus.",
-    "- Engage critically with sibling experts' conclusions and counterarguments; synthesize strategy should converge through open debate.",
-    "- In finish, summarize your expert findings, open questions, risks, and recommended next actions.",
+    "Synthesize guidelines:",
+    "- Contribute your expert angle and engage peer findings.",
+    "- publish_bus important findings, questions, blockers, or rebuttals.",
+    "- finish with findings, gaps/risks, and next actions.",
   ];
 }
 

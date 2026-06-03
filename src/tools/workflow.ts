@@ -12,7 +12,6 @@ import {
   formatError,
   findWorkflow,
   formatNamedEntityLabel,
-  indent,
   isTerminalAgentState,
   normalizeEntityName,
   requireWorkflow,
@@ -72,16 +71,14 @@ const WorkflowStageParams = Type.Object(
       description: "Short unique stage name within this linear workflow.",
     }),
     goal: Type.String({
-      description: "Stage-specific goal. Previous stage leader outputs are supplied automatically.",
+      description: "Stage-specific goal.",
     }),
     strategy: Type.String({
       enum: [...WORKGROUP_STRATEGY_VALUES],
-      description:
-        "Stage strategy. Workflow executes stage settlement automatically. Use compete when workers are substitutable and any one successful result satisfies the stage goal; workflow races to first success, closes the rest, then a restricted stage leader condenses the winner. Use synthesize when workers are complementary and their findings/tradeoffs must be combined or compared; workflow waits for all workers, then a restricted stage leader synthesizes them.",
+      description: "compete = one success is enough; synthesize = combine complementary findings.",
     }),
     members: Type.Array(WorkgroupMemberParams, {
-      description:
-        "Worker subagents for this stage. In compete they should pursue substitutable alternatives where one success is enough; in synthesize they should provide complementary findings to combine or compare.",
+      description: "Worker subagents for this stage.",
       minItems: 1,
     }),
     leader: Type.Optional(WorkgroupMemberParams),
@@ -91,8 +88,7 @@ const WorkflowStageParams = Type.Object(
 
 const WorkflowActionParams = Type.String({
   enum: ["start", "status", "cancel", "wait"],
-  description:
-    "Action to perform. start launches a linear multi-stage workflow, status inspects it, cancel closes active stage runs, and wait waits for the workflow to reach terminal state.",
+  description: "start launches; status inspects; cancel closes active runs; wait awaits terminal workflow state.",
 });
 
 const WorkflowToolParams = Type.Object(
@@ -100,24 +96,22 @@ const WorkflowToolParams = Type.Object(
     action: WorkflowActionParams,
     name: Type.Optional(
       Type.String({
-        description: "Optional globally unique workflow name. If omitted, a short name is generated.",
+        description: "Optional workflow name.",
       }),
     ),
     id: Type.Optional(
       Type.String({
-        description:
-          "Required for action=status, action=cancel, and action=wait. Workflow id or name returned by action=start.",
+        description: "Required for status/cancel/wait. Workflow id/name.",
       }),
     ),
     goal: Type.Optional(
       Type.String({
-        description: "Required for action=start. Overall workflow goal shared with every stage.",
+        description: "Required for start. Overall workflow goal.",
       }),
     ),
     stages: Type.Optional(
       Type.Array(WorkflowStageParams, {
-        description:
-          "Required for action=start. Linear stages executed automatically in order. Choose compete for substitutable attempts where one success satisfies the stage goal; workflow races/settles that stage and condenses the winner via a restricted leader. Choose synthesize for complementary work where findings, reviews, or tradeoffs must be combined. Both strategies use a restricted leader and get a default one when omitted.",
+        description: "Required for action=start. Linear stages executed in order with automatic stage leaders.",
         minItems: 1,
       }),
     ),
@@ -130,8 +124,7 @@ const WorkflowToolParams = Type.Object(
           Type.Null(),
         ],
         {
-          description:
-            "Optional for action=wait. Positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, returns the latest workflow state instead of failing.",
+          description: "Optional for action=wait. Positive ms; default 10 min; null waits indefinitely.",
         },
       ),
     ),
@@ -165,8 +158,8 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
       const workflow = findWorkflow(store, input.id);
       if (!workflow) {
         return input.action === "wait"
-          ? { timedOut: false, message: `Workflow ${input.id} not found.` }
-          : { message: `Workflow ${input.id} not found.` };
+          ? { timedOut: false, message: formatWorkflowNotFound(input.id) }
+          : { message: formatWorkflowNotFound(input.id) };
       }
 
       if (input.action === "status") {
@@ -192,18 +185,13 @@ export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => Wor
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description:
-      "Run, inspect, cancel, and wait on a deterministic linear sequence of workgroup stages. Workflow owns stage execution and uses automatic restricted stage leaders instead of requiring the main agent to lead each workgroup.",
-    promptSnippet:
-      "Launch an automatically executed multi-stage workflow, then use workflow action=wait or action=status to collect progress and final output.",
+    description: "Run linear workgroup stages with automatic restricted stage leaders.",
+    promptSnippet: "Launch a multi-stage workflow, then use workflow wait/status for progress and final output.",
     promptGuidelines: [
-      "Use workflow for complex multi-stage work such as collect research, analyze findings, then synthesize a final report.",
-      "Workflow stages execute strictly in order; do not use workflow for branching or DAG plans.",
-      "Unlike workgroup, workflow leads each stage for you: it waits/races workers, closes losers in compete strategy, and invokes a restricted stage leader to produce canonical stage output.",
-      "Use strategy=compete when worker approaches are substitutable and any one success satisfies the stage goal; workflow automatically races to the first success, closes the rest, and has the stage leader condense the winner. This is for finding one working fix, repro, or answer, not for comparing alternatives.",
-      "Use strategy=synthesize when worker contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; workflow waits for all workers, then has the stage leader synthesize them.",
-      "Workflow automatically creates a separate bus per stage and injects previous stage outputs directly into the next stage's worker prompts.",
-      "Use action=status to inspect progress, or action=wait to wait for the whole workflow to reach state success, blocked, failed, or closed.",
+      "Use workflow for ordered multi-stage work; not branching/DAG plans.",
+      "Each stage gets its own bus and automatic leader; previous outputs feed the next stage.",
+      "Use compete when one worker success is enough; use synthesize when findings must be combined.",
+      "Use status for progress, wait for terminal success/blocked/failed/closed.",
     ],
     parameters: WorkflowToolParams,
     executionMode: "sequential",
@@ -492,14 +480,12 @@ function buildStageWorkerGoal(workflow: WorkflowRun, stageIndex: number): string
     `Current stage: ${stage.name}`,
     "Stage goal:",
     stage.goal,
+    "",
+    "Previous stage outputs:",
+    "<previous_stage_outputs>",
+    formatPreviousStageOutputs(workflow, stageIndex),
+    "</previous_stage_outputs>",
   ];
-
-  const previousOutputs = workflow.stages
-    .slice(0, stageIndex)
-    .flatMap((previousStage) =>
-      previousStage.output ? [`Stage ${previousStage.name} output:`, formatStageOutput(previousStage.output)] : [],
-    );
-  if (previousOutputs.length > 0) parts.push("", "Previous stage outputs:", ...previousOutputs);
   return parts.join("\n");
 }
 
@@ -507,20 +493,13 @@ function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResult
   const stage = workflow.stages[stageIndex];
   const strategyInstructions =
     stage.strategy === "compete"
-      ? [
-          "This stage uses the compete strategy. One worker has produced a successful winning result.",
-          "Condense the winning result into a concise canonical stage output: keep what the next stage needs, drop verbose detail and redundancy.",
-          "Do not broaden the scope, add new content, or merge unrelated alternatives.",
-        ]
-      : [
-          "This stage uses the synthesize strategy. Deduplicate, reconcile, and synthesize all worker results into one canonical stage output for the next stage.",
-        ];
+      ? ["Compete: condense the winning worker result; do not broaden scope."]
+      : ["Synthesize: reconcile worker results into one canonical stage output."];
 
   return [
     "You are the leader for this workflow stage.",
     ...strategyInstructions,
-    "Use only the provided previous stage outputs, current worker results, and any bus reference context delivered with this task; do not ask for or require external data.",
-    "Treat bus reference context as stage deliberation evidence from workers, but prefer finish results when they conflict.",
+    "Use supplied context only; prefer finish results over bus context.",
     "",
     "Workflow goal:",
     workflow.goal,
@@ -530,28 +509,31 @@ function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResult
     stage.goal,
     "",
     "Previous stage outputs:",
-    ...formatPreviousStageOutputs(workflow, stageIndex),
+    "<previous_stage_outputs>",
+    formatPreviousStageOutputs(workflow, stageIndex),
+    "</previous_stage_outputs>",
     "",
     "Worker results for this stage:",
+    "<worker_results>",
     formatWorkerResults(workerResults),
+    "</worker_results>",
     "",
-    "Finish requirements:",
-    "- Call finish exactly once when done.",
-    "- Treat blocked or failed worker results as available evidence to reconcile; synthesize usable findings from them and explicitly note unresolved gaps.",
-    "- Do not propagate blocked/failed worker status automatically.",
-    "- Use status=success whenever a useful canonical output can be produced from the provided results.",
-    "- Use status=blocked only when the provided results are insufficient to produce any useful stage output.",
-    "- Use status=failed only for unrecoverable synthesis failure.",
-    "- Any non-success status will terminate the workflow at this stage, so prefer success when useful synthesis is possible.",
-    "- Include a concise summary and structured data if useful for the next stage.",
+    "Finish:",
+    "- Call finish once with concise summary and useful data for the next stage.",
+    "- Use blocked/failed worker results as evidence; note gaps.",
+    "- Prefer status=success if any useful output exists; blocked if insufficient, failed if synthesis fails.",
   ].join("\n");
 }
 
-function formatPreviousStageOutputs(workflow: WorkflowRun, stageIndex: number): string[] {
+function formatPreviousStageOutputs(workflow: WorkflowRun, stageIndex: number): string {
   const outputs = workflow.stages
     .slice(0, stageIndex)
-    .flatMap((stage) => (stage.output ? [`Stage ${stage.name}:`, formatStageOutput(stage.output)] : []));
-  return outputs.length > 0 ? outputs : ["None."];
+    .flatMap((stage) => (stage.output ? [formatPreviousStageOutput(stage.name, stage.output)] : []));
+  return outputs.length > 0 ? outputs.join("\n\n") : "None.";
+}
+
+function formatPreviousStageOutput(stageName: string, output: WorkflowStageOutput): string {
+  return [`<stage_output name="${stageName}">`, formatStageOutputForPrompt(output), "</stage_output>"].join("\n");
 }
 
 function formatWorkerResults(workerResults: WaitRunResult[]): string {
@@ -560,12 +542,27 @@ function formatWorkerResults(workerResults: WaitRunResult[]): string {
 }
 
 function formatWorkerResult(result: WaitRunResult): string {
-  const lines = [`- ${result.name} (${result.runId})`, `  profile: ${result.profile}`, `  state: ${result.state}`];
+  const lines = [
+    `<worker_result run_id="${result.runId}" name="${result.name}" profile="${result.profile}" state="${result.state}">`,
+  ];
   if (result.result) {
-    lines.push(`  result: ${result.result.status}`, indent(result.result.summary));
-    if (result.result.data !== undefined) lines.push("  data:", indent(JSON.stringify(result.result.data, null, 2)));
+    lines.push(`result: ${result.result.status}`, "summary:", result.result.summary);
+    if (result.result.data !== undefined) lines.push("data_json:", formatJsonData(result.result.data));
+  } else {
+    lines.push("No result payload recorded.");
   }
+  lines.push("</worker_result>");
   return lines.join("\n");
+}
+
+function formatStageOutputForPrompt(output: WorkflowStageOutput): string {
+  const parts = [`status: ${output.status}`, "summary:", output.summary];
+  if (output.data !== undefined) parts.push("data_json:", formatJsonData(output.data));
+  return parts.join("\n");
+}
+
+function formatJsonData(data: unknown): string {
+  return JSON.stringify(data, null, 2) ?? String(data);
 }
 
 function buildCompeteNoWinnerOutput(workerResults: WaitRunResult[]): WorkflowStageOutput {
@@ -624,7 +621,7 @@ function toWorkflowRunResult(result: WaitRunResult) {
 
 function formatStageOutput(output: WorkflowStageOutput): string {
   const parts = [`status: ${output.status}`, `summary: ${output.summary}`];
-  if (output.data !== undefined) parts.push("data:", JSON.stringify(output.data, null, 2));
+  if (output.data !== undefined) parts.push("data:", formatJsonData(output.data));
   return parts.join("\n");
 }
 
@@ -671,8 +668,12 @@ function waitWorkflow(
   });
 }
 
+function formatWorkflowNotFound(id: string): string {
+  return `Workflow ${id} not found.`;
+}
+
 function formatWaitWorkflowMessage(workflow: WorkflowRun | undefined, timedOut: boolean, requestedId?: string): string {
-  if (!workflow) return "Workflow not found.";
+  if (!workflow) return formatWorkflowNotFound(requestedId ?? "");
   const label = requestedId === workflow.id ? workflow.id : formatNamedEntityLabel(workflow);
   const prefix = timedOut ? "Timed out waiting for" : "Workflow reached terminal state:";
   const result = workflow.result ? ` result=${workflow.result.status}` : "";

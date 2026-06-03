@@ -235,7 +235,7 @@ export class PiAgentRuntime implements AgentRuntime {
       name: "publish_bus",
       label: "Publish Bus Message",
       description:
-        "Publish supplemental peer-reference context to this subagent run's bus for sibling agents. This is not a live leader-request channel; when the leader must decide, approve, unblock, or act, use finish(status=blocked) so the leader can receive it via bus action=wait_next and reply with subagent message. Continue working after publishing unless the task is done.",
+        "Publish peer-reference context to sibling agents. For leader action, use finish(status=blocked). Continue unless the task is done.",
       parameters: PublishBusParams,
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
@@ -310,41 +310,26 @@ export class PiAgentRuntime implements AgentRuntime {
 }
 
 function buildInitialPrompt(profile: AgentProfile, task: string, runName: string): string {
-  const parts = [
+  return [
     `You are subagent run "${runName}" with profile "${profile.name}".`,
     "",
+    "## System prompt",
     profile.systemPrompt,
     "",
-    "Task:",
+    "## Task",
     task,
     "",
-    "Mandatory completion protocol:",
-    "- You MUST call the finish tool when this subagent run is done. Do not end with only a text response.",
-    "- Your final action must be a finish tool call, even when the task is blocked or failed.",
-    "- Call finish with status success, blocked, or failed; include a concise summary and any structured data needed by the parent.",
-    "- Use publish_bus before finish only when sibling agents would benefit from peer-reference context.",
-    "- publish_bus is not a live channel to request leader action. If you need the leader to decide, approve, unblock, or act, call finish with status blocked and explain the needed action.",
-    "- finish records your subagent result for the leader. It does not close you or complete the parent task; the leader may message or close you.",
-  ];
-
-  parts.push(
-    "",
-    "Bus reference context may be delivered in <bus_reference_context> blocks.",
-    "Your bus is the peer-reference channel for this delegated task; sibling agents on the same bus may publish related context.",
-    "Treat bus blocks as supplemental reference information, not as a replacement for the active task unless the leader explicitly says so.",
-  );
-
-  return parts.join("\n");
+    "## Completion",
+    "- End by calling finish exactly once with status, summary, and useful data; never stop text-only.",
+    "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
+    "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
+  ].join("\n");
 }
 
 function buildFinishRequiredPrompt(): string {
   return [
-    "Your previous response ended without calling the finish tool.",
-    "",
-    "You MUST now end this subagent run by calling the finish tool.",
-    "Do not provide another text-only response.",
-    "If your prior response already completed the task, summarize that result in finish.",
-    "Call finish with status success, blocked, or failed, and include any structured data needed by the parent.",
+    "Your previous response ended without finish.",
+    "Call finish now with status success, blocked, or failed; include summary and useful data.",
   ].join("\n");
 }
 

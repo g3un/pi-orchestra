@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, WaitBusSettledResult, WaitNextRunResult, WaitRunResult } from "../core/orchestra.ts";
-import { formatNamedEntityLabel, indent } from "../utils.ts";
+import { formatNamedEntityLabel } from "../utils.ts";
 
 export type BusInput =
   | {
@@ -58,8 +58,7 @@ export interface BusToolDeps {
 
 const BusActionParams = Type.String({
   enum: ["create", "status", "publish", "wait_settled", "wait_next"],
-  description:
-    "Action to perform. A bus is the work grouping boundary: create allocates one work bus, status inspects a work bus by id, publish sends shared context, wait_settled waits for every current attached run to reach terminal state, and wait_next waits for the next current run to reach terminal state.",
+  description: "create/status/publish; wait_settled waits all attached runs; wait_next waits the next terminal run.",
 });
 
 const BusToolParams = Type.Object(
@@ -67,24 +66,22 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     name: Type.Optional(
       Type.String({
-        description:
-          "Optional short, human-readable bus name for action=create. If omitted, a short name is generated.",
+        description: "Optional short bus name for action=create.",
       }),
     ),
     id: Type.Optional(
       Type.String({
-        description:
-          "Required for action=status, action=publish, action=wait_settled, and action=wait_next. Bus id or name returned by action=create; one bus groups the subagents for a delegated work item.",
+        description: "Required except create. Bus id/name returned by action=create.",
       }),
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=publish. Shared context to add to the work bus for all attached agents.",
+        description: "Required for action=publish. Shared context for attached agents.",
       }),
     ),
     excludeRunIds: Type.Optional(
       Type.Array(Type.String(), {
-        description: "Optional for action=wait_next. Run ids or names to ignore because they were already handled.",
+        description: "Optional for action=wait_next. Already handled run ids/names.",
       }),
     ),
     timeoutMs: Type.Optional(
@@ -96,8 +93,7 @@ const BusToolParams = Type.Object(
           Type.Null(),
         ],
         {
-          description:
-            "Optional for action=wait_settled and action=wait_next. Positive timeout in milliseconds. Defaults to 10 minutes. Use null to wait indefinitely. On timeout, returns the latest collected state.",
+          description: "Optional for wait actions. Positive ms; default 10 min; null waits indefinitely.",
         },
       ),
     ),
@@ -116,7 +112,7 @@ export function createBusTool({ orchestra }: BusToolDeps): BusTool {
       }
 
       const bus = orchestra.getBus(input.id);
-      if (!bus) return { message: `Bus ${input.id} not found.` };
+      if (!bus) return { message: formatBusNotFound(input.id) };
 
       if (input.action === "status") {
         return { bus, message: formatBusStatus(bus) };
@@ -165,18 +161,13 @@ export function defineBusPiTool(resolveTool: (ctx: ExtensionContext) => BusTool)
   return defineTool({
     name: "bus",
     label: "Bus",
-    description:
-      "Create, inspect, publish to, and wait on shared context buses. A bus is the work grouping boundary: one delegated task or team should share one bus, with one or more subagents attached to it.",
+    description: "Create, inspect, publish to, and wait on work buses.",
     promptSnippet:
-      "Create one bus per delegated work item, spawn related subagents on it, publish shared context to that bus, and use wait actions to collect run results.",
+      "Use one bus per delegated work item; spawn related subagents on it and collect results with wait actions.",
     promptGuidelines: [
-      "Use action=create before spawning a subagent or agent team; the returned bus is the work grouping boundary.",
-      "Give each bus a short name when useful, and pass the returned bus id or name as subagent action=spawn busId so each subagent joins that work group.",
-      "Multiple subagents can attach to the same bus when they are cooperating on the same delegated work item.",
-      "Use action=publish to send updated parent context to every active subagent attached to the bus.",
-      "Use action=wait_next when acting as a workgroup leader and you want to handle subagent results as they arrive.",
-      "Use action=wait_settled when you need the whole bus work group to reach a terminal state before continuing.",
-      "Use action=status to inspect the messages already published on a bus.",
+      "Create a bus before spawning related subagents; reuse it for that work item.",
+      "publish sends shared context to attached agents; status shows published messages.",
+      "wait_next handles results as they arrive; wait_settled waits for full fan-in.",
     ],
     parameters: BusToolParams,
     executionMode: "sequential",
@@ -219,6 +210,10 @@ function toBusInput(params: RawBusParams): BusInput {
   return { action: "publish", id: params.id, message: params.message };
 }
 
+function formatBusNotFound(id: string): string {
+  return `Bus ${id} not found.`;
+}
+
 function formatBusStatus(
   bus: Bus,
   headline = `Bus ${formatNamedEntityLabel(bus)} has ${bus.messages.length} message(s).`,
@@ -229,7 +224,7 @@ function formatBusStatus(
 }
 
 function formatBusMessage(message: BusMessage): string {
-  return [`- ${message.id} from ${message.from}:`, indent(message.message)].join("\n");
+  return [`- ${message.id} from ${message.from}:`, message.message].join("\n");
 }
 
 function formatWaitBusSettledMessage(result: WaitBusSettledResult): string {

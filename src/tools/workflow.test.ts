@@ -90,13 +90,16 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
     [...orchestra.buses.values()].flatMap((bus) => bus.messages),
     [],
   );
-  assert.match(orchestra.spawned.find((spawn) => spawn.name === "analyze-worker")?.task ?? "", /Stage collect output:/);
+  assert.match(
+    orchestra.spawned.find((spawn) => spawn.name === "analyze-worker")?.task ?? "",
+    /<stage_output name="collect">/,
+  );
   assert.match(orchestra.spawned.find((spawn) => spawn.name === "analyze-worker")?.task ?? "", /collect-lead summary/);
   const analyzeLeaderTask = orchestra.spawned.find((spawn) => spawn.name === "analyze-lead")?.task ?? "";
-  assert.match(analyzeLeaderTask, /Stage collect:/);
+  assert.match(analyzeLeaderTask, /<stage_output name="collect">/);
   assert.match(analyzeLeaderTask, /collect-lead summary/);
-  assert.match(analyzeLeaderTask, /bus reference context as stage deliberation evidence/);
-  assert.match(analyzeLeaderTask, /explicitly note unresolved gaps/);
+  assert.match(analyzeLeaderTask, /Use supplied context only/);
+  assert.match(analyzeLeaderTask, /note gaps/);
 });
 
 test("workflow compete stage races to first success then uses a leader", async () => {
@@ -129,10 +132,9 @@ test("workflow compete stage races to first success then uses a leader", async (
   assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
   assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
   const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-flow-options-leader")?.task ?? "";
-  assert.match(leaderTask, /This stage uses the compete strategy/);
-  assert.match(leaderTask, /Condense the winning result into a concise canonical stage output/);
-  assert.match(leaderTask, /drop verbose detail and redundancy/);
-  assert.match(leaderTask, /Call finish exactly once when done/);
+  assert.match(leaderTask, /Compete: condense the winning worker result/);
+  assert.match(leaderTask, /do not broaden scope/);
+  assert.match(leaderTask, /Call finish once/);
   assert.match(leaderTask, /option-worker summary/);
 });
 
@@ -309,9 +311,9 @@ test("workflow uses a default restricted leader when omitted", async () => {
   assert.equal(output.workflow.state, "success");
   assert.ok(leaderSpawn);
   assert.deepEqual(leaderSpawn.profile.tools, []);
-  assert.match(leaderSpawn.profile.systemPrompt, /Do not perform new research/);
-  assert.match(leaderSpawn.profile.systemPrompt, /bus reference context as stage deliberation evidence/);
-  assert.match(leaderSpawn.profile.systemPrompt, /explicitly note unresolved gaps/);
+  assert.match(leaderSpawn.profile.systemPrompt, /do not research, inspect files, run commands/);
+  assert.match(leaderSpawn.profile.systemPrompt, /prefer finish results over bus context/);
+  assert.match(leaderSpawn.profile.systemPrompt, /note conflicts\/gaps/);
 });
 
 test("workflow status and cancel report missing workflows", async () => {

@@ -9,10 +9,10 @@ test("stage leader profile is restricted by default and accepts name/model overr
   assert.equal(defaultProfile.name, "stage-leader");
   assert.equal(defaultProfile.model, undefined);
   assert.deepEqual(defaultProfile.tools, []);
-  assert.match(defaultProfile.systemPrompt, /You are a stage leader in a workflow\./);
-  assert.match(defaultProfile.systemPrompt, /Do not perform new research, inspect files, run commands/);
-  assert.match(defaultProfile.systemPrompt, /Use only the supplied context/);
-  assert.match(defaultProfile.systemPrompt, /Use status=blocked only when the supplied context is insufficient/);
+  assert.match(defaultProfile.systemPrompt, /workflow stage leader/);
+  assert.match(defaultProfile.systemPrompt, /do not research, inspect files, run commands/);
+  assert.match(defaultProfile.systemPrompt, /Use only supplied context/);
+  assert.match(defaultProfile.systemPrompt, /blocked if context is insufficient/);
 
   assert.equal(customProfile.name, "analysis-leader");
   assert.equal(customProfile.model, "mock/model");
