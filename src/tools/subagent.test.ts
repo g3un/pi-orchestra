@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { AgentRuntime } from "../core/runtime.ts";
@@ -96,7 +96,11 @@ test("subagent push_bus sends parent messages as main and stores the bus message
   store.saveRun(existing);
   store.saveBus({ id: existing.busId, messages: [] });
 
-  const output = await tool.execute({ action: "push_bus", id: existing.id, message: "New constraint." });
+  const output = await tool.execute({
+    action: "push_bus",
+    id: existing.id,
+    message: "New constraint.",
+  });
 
   assert.deepEqual(runtime.pushed, {
     id: existing.id,
@@ -141,7 +145,13 @@ class FakeRuntime implements AgentRuntime {
 
   async create(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
     this.created = { profile, task, bus };
-    const createdRun = run({ id: "agent-1", profile: profile.name, task, busId: bus.id, state: "running" });
+    const createdRun = run({
+      id: "agent-1",
+      profile: profile.name,
+      task,
+      busId: bus.id,
+      state: "running",
+    });
     this.runs.set(createdRun.id, createdRun);
     return createdRun;
   }

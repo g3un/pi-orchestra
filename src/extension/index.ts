@@ -12,7 +12,9 @@ const AgentProfileParams = Type.Object(
     systemPrompt: Type.String({ description: "System prompt for the subagent." }),
     tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool allowlist for the subagent." })),
     model: Type.Optional(
-      Type.String({ description: "Optional provider/model id, for example anthropic/claude-sonnet-4-5." }),
+      Type.String({
+        description: "Optional provider/model id, for example anthropic/claude-sonnet-4-5.",
+      }),
     ),
   },
   { description: "Required for action=spawn. Defines the subagent role." },
@@ -29,7 +31,9 @@ const SubagentToolParams = Type.Object(
     action: SubagentActionParams,
     profile: Type.Optional(AgentProfileParams),
     task: Type.Optional(
-      Type.String({ description: "Required for action=spawn. Task to delegate to the new subagent." }),
+      Type.String({
+        description: "Required for action=spawn. Task to delegate to the new subagent.",
+      }),
     ),
     id: Type.Optional(
       Type.String({

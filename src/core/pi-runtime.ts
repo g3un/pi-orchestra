@@ -141,7 +141,12 @@ export class PiAgentRuntime implements AgentRuntime {
         run.result = result;
         run.state = result.status === "failed" ? "failed" : "finished";
         return {
-          content: [{ type: "text" as const, text: "Finish payload recorded. The parent may resume or close you." }],
+          content: [
+            {
+              type: "text" as const,
+              text: "Finish payload recorded. The parent may resume or close you.",
+            },
+          ],
           details: result,
           terminate: true,
         };

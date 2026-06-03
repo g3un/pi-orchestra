@@ -66,7 +66,10 @@ export function createSubagentTool({ runtime, store }: SubagentToolDeps): Subage
       if (input.action === "resume") {
         const run = await runtime.resume(input.id, input.message);
         store.saveRun(run);
-        return { run, message: formatRunMessage(run, `Resumed subagent ${run.id}; it is ${run.state}.`) };
+        return {
+          run,
+          message: formatRunMessage(run, `Resumed subagent ${run.id}; it is ${run.state}.`),
+        };
       }
 
       if (input.action === "push_bus") {

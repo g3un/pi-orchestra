@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { formatBusMessages } from "./bus-format.ts";
 
 test("formats bus messages as supplemental reference context", () => {
