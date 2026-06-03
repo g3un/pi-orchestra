@@ -11,23 +11,35 @@ const profile: AgentProfile = {
   systemPrompt: "Research the assigned task.",
 };
 
-test("subagent spawn creates a bus, starts the runtime, and stores the run", async () => {
+test("subagent spawn uses an existing bus, starts the runtime, and stores the run", async () => {
+  const runtime = new FakeRuntime();
+  const store = new FakeStore();
+  const tool = createSubagentTool({ runtime, store });
+  const bus: Bus = { id: "bus-1", messages: [] };
+  store.saveBus(bus);
+
+  const output = await tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: bus.id });
+
+  assert.ok(output.run);
+  assert.equal(output.run.id, "agent-1");
+  assert.equal(output.run.busId, bus.id);
+  assert.deepEqual(runtime.spawned, {
+    profile,
+    task: "Inspect the code.",
+    bus,
+  });
+  assert.deepEqual(store.savedRuns, [output.run]);
+});
+
+test("subagent spawn rejects missing buses", async () => {
   const runtime = new FakeRuntime();
   const store = new FakeStore();
   const tool = createSubagentTool({ runtime, store });
 
-  const output = await tool.execute({ action: "spawn", profile, task: "Inspect the code." });
-
-  assert.ok(output.run);
-  assert.equal(output.run.id, "agent-1");
-  assert.equal(output.run.busId, runtime.spawned?.bus.id);
-  assert.match(output.run.busId, uuid7Pattern);
-  assert.deepEqual(runtime.spawned, {
-    profile,
-    task: "Inspect the code.",
-    bus: store.savedBuses[0],
-  });
-  assert.deepEqual(store.savedRuns, [output.run]);
+  await assert.rejects(
+    () => tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: "missing" }),
+    /Bus missing not found\./,
+  );
 });
 
 test("subagent status prefers runtime state and falls back to store state", async () => {
@@ -87,38 +99,6 @@ test("subagent resume delegates to runtime and stores the returned run", async (
   assert.equal(store.getRun(existing.id), output.run);
 });
 
-test("subagent push_bus sends parent messages as main and stores the bus message", async () => {
-  const runtime = new FakeRuntime();
-  const store = new FakeStore();
-  const tool = createSubagentTool({ runtime, store });
-  const existing = run({ id: "agent-1", busId: "bus-1", state: "running" });
-  runtime.runs.set(existing.id, existing);
-  store.saveRun(existing);
-  store.saveBus({ id: existing.busId, messages: [] });
-
-  const output = await tool.execute({
-    action: "push_bus",
-    id: existing.id,
-    message: "New constraint.",
-  });
-
-  assert.deepEqual(runtime.pushed, {
-    id: existing.id,
-    message: "New constraint.",
-    from: "main",
-  });
-  assert.ok(output.run);
-  assert.deepEqual(store.busMessagesAdded, [
-    {
-      busId: existing.busId,
-      message: { id: "message-1", message: "New constraint.", from: "main" },
-    },
-  ]);
-  assert.deepEqual(store.getBus(existing.busId)?.messages, [
-    { id: "message-1", message: "New constraint.", from: "main" },
-  ]);
-});
-
 test("subagent close delegates to runtime and records the closed state", async () => {
   const runtime = new FakeRuntime();
   const store = new FakeStore();
@@ -134,13 +114,11 @@ test("subagent close delegates to runtime and records the closed state", async (
   assert.equal(store.getRun(existing.id)?.state, "closed");
 });
 
-const uuid7Pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 class FakeRuntime implements AgentRuntime {
   runs = new Map<string, AgentRun>();
   spawned?: { profile: AgentProfile; task: string; bus: Bus };
   resumed?: { id: string; message: string };
-  pushed?: { id: string; message: string; from: string };
+  published?: { bus: Bus; message: string; from: string };
   closedIds: string[] = [];
 
   async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
@@ -164,8 +142,8 @@ class FakeRuntime implements AgentRuntime {
     return resumedRun;
   }
 
-  async pushBus(id: string, message: string, from: string): Promise<BusMessage> {
-    this.pushed = { id, message, from };
+  async publishBus(bus: Bus, message: string, from: string): Promise<BusMessage> {
+    this.published = { bus, message, from };
     return { id: "message-1", message, from };
   }
 

@@ -16,12 +16,14 @@ export interface PiAgentRuntimeOptions {
   cwd?: string;
   resolveModel?: (model: string) => Model<any> | Promise<Model<any> | undefined> | undefined;
   onRunUpdate?: (run: AgentRun) => void;
+  onBusMessage?: (bus: Bus, message: BusMessage) => void;
 }
 
 interface RuntimeEntry {
   run: AgentRun;
   session: AgentSession;
   bus: Bus;
+  seenBusMessageIds: Set<string>;
   promptTask?: Promise<void>;
 }
 
@@ -31,6 +33,10 @@ const FinishAgentParams = Type.Object({
   data: Type.Optional(Type.Unknown()),
 });
 
+const PublishBusParams = Type.Object({
+  message: Type.String(),
+});
+
 const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"];
 
 export class PiAgentRuntime implements AgentRuntime {
@@ -38,11 +44,13 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly cwd: string;
   private readonly resolveModel?: PiAgentRuntimeOptions["resolveModel"];
   private readonly onRunUpdate?: PiAgentRuntimeOptions["onRunUpdate"];
+  private readonly onBusMessage?: PiAgentRuntimeOptions["onBusMessage"];
 
   constructor(options: PiAgentRuntimeOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
     this.onRunUpdate = options.onRunUpdate;
+    this.onBusMessage = options.onBusMessage;
   }
 
   async spawn(profile: AgentProfile, task: string, bus: Bus): Promise<AgentRun> {
@@ -66,7 +74,7 @@ export class PiAgentRuntime implements AgentRuntime {
       sessionManager: SessionManager.inMemory(this.cwd),
     });
 
-    const entry: RuntimeEntry = { run, session, bus };
+    const entry: RuntimeEntry = { run, session, bus, seenBusMessageIds: new Set() };
     this.entries.set(run.id, entry);
     this.startPromptTask(entry, withBusMessages(entry, buildInitialPrompt(profile, task)));
     return run;
@@ -82,19 +90,26 @@ export class PiAgentRuntime implements AgentRuntime {
     return entry.run;
   }
 
-  async pushBus(id: string, message: string, from: string): Promise<BusMessage> {
-    const entry = this.requireEntry(id);
-    this.assertOpen(entry);
+  async publishBus(bus: Bus, message: string, from: string): Promise<BusMessage> {
     const busMessage: BusMessage = {
       id: uuid7(),
       message,
       from,
     };
-    entry.bus.messages.push(busMessage);
-    if (!entry.session.isStreaming) {
-      return busMessage;
+
+    addOrReplaceBusMessage(bus, busMessage);
+    this.emitBusMessage(bus, busMessage);
+
+    const steeringMessage = formatBusMessages([busMessage]);
+    for (const entry of this.entries.values()) {
+      if (entry.bus.id !== bus.id) continue;
+      if (entry.bus !== bus) addOrReplaceBusMessage(entry.bus, busMessage);
+      if (entry.run.id === from || this.isClosed(entry) || !entry.session.isStreaming) continue;
+
+      entry.seenBusMessageIds.add(busMessage.id);
+      await entry.session.steer(steeringMessage);
     }
-    await entry.session.steer(formatBusMessages([busMessage]));
+
     return busMessage;
   }
 
@@ -178,7 +193,29 @@ export class PiAgentRuntime implements AgentRuntime {
       },
     } satisfies ToolDefinition<typeof FinishAgentParams, AgentResult>;
 
-    return [finishAgent];
+    const publishBus = {
+      name: "publish_bus",
+      label: "Publish Bus Message",
+      description:
+        "Publish supplemental context to this subagent run's bus for the parent or sibling agents. Continue working after publishing unless the task is done.",
+      parameters: PublishBusParams,
+      execute: async (_toolCallId, params) => {
+        const entry = this.requireEntry(run.id);
+        this.assertOpen(entry);
+        const busMessage = await this.publishBus(entry.bus, params.message, run.id);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Published message ${busMessage.id} to bus ${entry.bus.id}.`,
+            },
+          ],
+          details: busMessage,
+        };
+      },
+    } satisfies ToolDefinition<typeof PublishBusParams, BusMessage>;
+
+    return [finishAgent, publishBus];
   }
 
   private emitRunUpdate(run: AgentRun): void {
@@ -186,6 +223,14 @@ export class PiAgentRuntime implements AgentRuntime {
       this.onRunUpdate?.(run);
     } catch {
       // Keep runtime state transitions from being interrupted by persistence errors.
+    }
+  }
+
+  private emitBusMessage(bus: Bus, message: BusMessage): void {
+    try {
+      this.onBusMessage?.(bus, message);
+    } catch {
+      // Keep runtime message delivery from being interrupted by persistence errors.
     }
   }
 
@@ -225,6 +270,7 @@ function buildInitialPrompt(profile: AgentProfile, task: string): string {
     "- You MUST call the finish tool when this subagent run is done. Do not end with only a text response.",
     "- Your final action must be a finish tool call, even when the task is blocked or failed.",
     "- Call finish with status success, blocked, or failed; include a concise summary and any structured data needed by the parent.",
+    "- Use publish_bus before finish if you need to share interim context with the parent or sibling agents.",
     "- finish records your subagent result. It does not close you or complete the parent task; the parent may resume or close you.",
   ];
 
@@ -255,7 +301,23 @@ function withBusMessages(entry: RuntimeEntry, message: string): string {
 }
 
 function drainBusMessages(entry: RuntimeEntry): BusMessage[] {
-  return entry.bus.messages.filter((message) => message.from !== entry.run.id);
+  const unreadMessages = entry.bus.messages.filter((message) => {
+    if (message.from === entry.run.id) return false;
+    return !entry.seenBusMessageIds.has(message.id);
+  });
+
+  for (const message of unreadMessages) entry.seenBusMessageIds.add(message.id);
+  return unreadMessages;
+}
+
+function addOrReplaceBusMessage(bus: Bus, message: BusMessage): void {
+  const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
+  if (existingIndex >= 0) {
+    bus.messages[existingIndex] = message;
+    return;
+  }
+
+  bus.messages.push(message);
 }
 
 function getLastAssistantText(session: AgentSession): string | undefined {

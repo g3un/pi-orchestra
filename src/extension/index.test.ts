@@ -3,14 +3,24 @@ import { test } from "vitest";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import piOrchestraExtension from "./index.ts";
 
-test("subagent parameters use an OpenAI-compatible root object schema", () => {
-  const registeredTools: ToolDefinition[] = [];
+test("bus parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
 
-  piOrchestraExtension({
-    registerTool(tool: ToolDefinition) {
-      registeredTools.push(tool);
-    },
-  } as unknown as ExtensionAPI);
+  const bus = registeredTools.find((tool) => tool.name === "bus");
+  assert.ok(bus);
+
+  const parameters = bus.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish"]);
+  assert.match(parameters.properties.action?.description ?? "", /create allocates a standalone bus/);
+  assert.match(parameters.properties.id?.description ?? "", /Required for action=status/);
+  assert.match(parameters.properties.message?.description ?? "", /Required for action=publish/);
+});
+
+test("subagent parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
 
   const subagent = registeredTools.find((tool) => tool.name === "subagent");
   assert.ok(subagent);
@@ -19,12 +29,25 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "resume", "push_bus", "close"]);
+  assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "resume", "close"]);
   assert.match(parameters.properties.action?.description ?? "", /spawn creates a new subagent/);
   assert.match(parameters.properties.task?.description ?? "", /Required for action=spawn/);
+  assert.match(parameters.properties.busId?.description ?? "", /Required for action=spawn/);
   assert.match(parameters.properties.id?.description ?? "", /Required for action=status/);
   assert.match(parameters.properties.message?.description ?? "", /Required for action=resume/);
 });
+
+function registerExtensionTools(): ToolDefinition[] {
+  const registeredTools: ToolDefinition[] = [];
+
+  piOrchestraExtension({
+    registerTool(tool: ToolDefinition) {
+      registeredTools.push(tool);
+    },
+  } as unknown as ExtensionAPI);
+
+  return registeredTools;
+}
 
 interface JsonSchemaObject {
   type?: string;

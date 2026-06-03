@@ -1,6 +1,4 @@
-import { v7 as uuid7 } from "uuid";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
-import type { Bus } from "../core/bus.ts";
 import type { AgentRuntime } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
 
@@ -9,6 +7,7 @@ export type SubagentInput =
       action: "spawn";
       profile: AgentProfile;
       task: string;
+      busId: string;
     }
   | {
       action: "status";
@@ -16,11 +15,6 @@ export type SubagentInput =
     }
   | {
       action: "resume";
-      id: string;
-      message: string;
-    }
-  | {
-      action: "push_bus";
       id: string;
       message: string;
     }
@@ -50,8 +44,9 @@ export function createSubagentTool({ runtime, store }: SubagentToolDeps): Subage
 
     async execute(input) {
       if (input.action === "spawn") {
-        const bus: Bus = { id: uuid7(), messages: [] };
-        store.saveBus(bus);
+        const bus = store.getBus(input.busId);
+        if (!bus) throw new Error(`Bus ${input.busId} not found.`);
+
         const run = await runtime.spawn(input.profile, input.task, bus);
         store.saveRun(run);
         return { run, message: formatRunMessage(run) };
@@ -69,19 +64,6 @@ export function createSubagentTool({ runtime, store }: SubagentToolDeps): Subage
         return {
           run,
           message: formatRunMessage(run, `Resumed subagent ${run.id}; it is ${run.state}.`),
-        };
-      }
-
-      if (input.action === "push_bus") {
-        const busMessage = await runtime.pushBus(input.id, input.message, "main");
-        const run = runtime.get(input.id) ?? store.getRun(input.id);
-        if (run) store.addBusMessage(run.busId, busMessage);
-        if (run) store.saveRun(run);
-        return {
-          run,
-          message: run
-            ? formatRunMessage(run, `Pushed bus message to subagent ${input.id}; it is ${run.state}.`)
-            : `Pushed bus message to subagent ${input.id}.`,
         };
       }
 
