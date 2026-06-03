@@ -173,7 +173,7 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
       "Use strategy=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with waitNextRun, close remaining members after the first success, and condense the winning result yourself.",
       "Use strategy=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
       "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
-      "Use waitNextRun to receive finished or blocked members; if a member needs leader action, respond with subagent message.",
+      "Use waitNextRun to receive successful, blocked, or failed members; if a member needs leader action, respond with subagent message.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",

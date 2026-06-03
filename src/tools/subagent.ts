@@ -67,7 +67,7 @@ export const AgentProfileParams = Type.Object(
 const SubagentActionParams = Type.String({
   enum: ["spawn", "status", "message", "close"],
   description:
-    "Action to perform. spawn creates a new subagent with profile, task, and an existing busId. status inspects an existing subagent by id or name. message sends an instruction by id or name, steering a running subagent or restarting a finished one. close disposes a subagent by id or name.",
+    "Action to perform. spawn creates a new subagent with profile, task, and an existing busId. status inspects an existing subagent by id or name. message sends an instruction by id or name, steering an active subagent or restarting a terminal one. close disposes a subagent by id or name.",
 });
 
 const SubagentToolParams = Type.Object(

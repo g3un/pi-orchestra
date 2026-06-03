@@ -11,7 +11,7 @@ import type {
   WaitNextRunResult,
 } from "../core/orchestra.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
-import { isTerminalRun, slugify, toWaitRunResult } from "../utils.ts";
+import { isTerminalAgentState, slugify, toWaitRunResult } from "../utils.ts";
 import { createWaitWorkflowTool } from "./wait-workflow.ts";
 import { createWorkflowTool } from "./workflow.ts";
 
@@ -82,10 +82,10 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
   const output = await waitWorkflowTool.execute({ id: "research-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
-  assert.equal(output.workflow.state, "finished");
+  assert.equal(output.workflow.state, "success");
   assert.equal(output.workflow.stages.length, 2);
-  assert.equal(output.workflow.stages[0]?.state, "finished");
-  assert.equal(output.workflow.stages[1]?.state, "finished");
+  assert.equal(output.workflow.stages[0]?.state, "success");
+  assert.equal(output.workflow.stages[1]?.state, "success");
   assert.equal(output.workflow.result?.leaderRunId, "analyze-lead");
   assert.deepEqual(orchestra.spawned.find((spawn) => spawn.name === "collect-lead")?.profile.tools, []);
   assert.deepEqual(
@@ -127,7 +127,7 @@ test("workflow compete stage races to first success then uses a leader", async (
   const output = await waitWorkflowTool.execute({ id: "compete-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
-  assert.equal(output.workflow.state, "finished");
+  assert.equal(output.workflow.state, "success");
   assert.equal(output.workflow.result?.leaderRunId, "compete-flow-options-leader");
   assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
   assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
@@ -171,8 +171,9 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
   const output = await waitWorkflowTool.execute({ id: "blocked-compete-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
-  assert.equal(output.workflow.state, "finished");
+  assert.equal(output.workflow.state, "blocked");
   assert.equal(output.workflow.result?.status, "blocked");
+  assert.equal(output.workflow.stages[0]?.state, "blocked");
   assert.equal(output.workflow.stages[1]?.state, "idle");
   assert.equal(
     orchestra.spawned.some((spawn) => spawn.name === "never-after-blocked-compete"),
@@ -243,7 +244,7 @@ test("workflow uses a default restricted leader when omitted", async () => {
   const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-leader");
 
   assert.ok(output.workflow);
-  assert.equal(output.workflow.state, "finished");
+  assert.equal(output.workflow.state, "success");
   assert.ok(leaderSpawn);
   assert.deepEqual(leaderSpawn.profile.tools, []);
   assert.match(leaderSpawn.profile.systemPrompt, /Do not perform new research/);
@@ -353,9 +354,9 @@ test("workflow stops when a stage leader blocks", async () => {
   const output = await waitWorkflowTool.execute({ id: "blocked-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
-  assert.equal(output.workflow.state, "finished");
+  assert.equal(output.workflow.state, "blocked");
   assert.equal(output.workflow.result?.status, "blocked");
-  assert.equal(output.workflow.stages[0]?.state, "finished");
+  assert.equal(output.workflow.stages[0]?.state, "blocked");
   assert.equal(output.workflow.stages[0]?.output?.status, "blocked");
   assert.equal(output.workflow.stages[1]?.state, "idle");
   assert.equal(
@@ -432,7 +433,7 @@ class FakeOrchestra implements OrchestraApi {
           profile: profile.name,
           task,
           busId: bus.id,
-          state: "running",
+          state: "idle",
         }
       : {
           id: name,
@@ -440,7 +441,7 @@ class FakeOrchestra implements OrchestraApi {
           profile: profile.name,
           task,
           busId: bus.id,
-          state: "finished",
+          state: resultStatus,
           result: {
             status: resultStatus,
             summary: `${name} summary`,
@@ -495,7 +496,8 @@ class FakeOrchestra implements OrchestraApi {
     const runs = this.listRuns({ busId: bus.id });
     const excludedRunIds = new Set(options.excludeRunIds ?? []);
     const run = runs.find(
-      (current) => !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalRun(current),
+      (current) =>
+        !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalAgentState(current.state),
     );
     return Promise.resolve({
       bus,
@@ -505,7 +507,7 @@ class FakeOrchestra implements OrchestraApi {
       runResults: runs.map(toWaitRunResult),
       timedOut: false,
       pendingRunIds: runs
-        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
+        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalAgentState(current.state))
         .map((current) => current.id),
     });
   }

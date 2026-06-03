@@ -13,14 +13,14 @@ import type {
 import { toWaitRunResult } from "../utils.ts";
 import { createWaitNextRunTool } from "./wait-next-run.ts";
 
-test("waitNextRun delegates to orchestra and formats the completed run", async () => {
+test("waitNextRun delegates to orchestra and formats the terminal run", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWaitNextRunTool({ orchestra });
   const bus = orchestra.createBus();
   const completedRun = run({
     id: "agent-1",
     busId: bus.id,
-    state: "finished",
+    state: "success",
     result: { status: "success", summary: "Found a plan." },
   });
   orchestra.runs.set(completedRun.id, completedRun);
@@ -44,22 +44,22 @@ test("waitNextRun delegates to orchestra and formats the completed run", async (
   assert.deepEqual(output.runResult, toWaitRunResult(completedRun));
   assert.equal(
     output.message,
-    [`Next completed run on bus ${bus.id}: agent-1 is finished.`, "", "Result: success", "Found a plan."].join("\n"),
+    [`Next terminal run on bus ${bus.id}: agent-1 is success.`, "", "Result: success", "Found a plan."].join("\n"),
   );
 });
 
-test("waitNextRun formats timeout without a completed run", async () => {
+test("waitNextRun formats timeout without a terminal run", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWaitNextRunTool({ orchestra });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  orchestra.runs.set(runningRun.id, runningRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  orchestra.runs.set(idleRun.id, idleRun);
   orchestra.nextRunResult = {
     bus,
-    runs: [runningRun],
-    runResults: [toWaitRunResult(runningRun)],
+    runs: [idleRun],
+    runResults: [toWaitRunResult(idleRun)],
     timedOut: true,
-    pendingRunIds: [runningRun.id],
+    pendingRunIds: [idleRun.id],
   };
 
   const output = await tool.execute({ busId: bus.id, timeoutMs: 1000 });
@@ -95,7 +95,7 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
-    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "running" });
+    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "idle" });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
   }

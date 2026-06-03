@@ -7,7 +7,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentResult, AgentRun } from "../core/subagent.ts";
+import {
+  AGENT_RESULT_STATUS_VALUES,
+  type AgentProfile,
+  type AgentResult,
+  type AgentResultStatus,
+  type AgentRun,
+} from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
@@ -26,7 +32,7 @@ interface RuntimeEntry {
 }
 
 const FinishAgentParams = Type.Object({
-  status: Type.Union([Type.Literal("success"), Type.Literal("blocked"), Type.Literal("failed")]),
+  status: Type.String({ enum: [...AGENT_RESULT_STATUS_VALUES] }),
   summary: Type.String(),
   data: Type.Optional(Type.Unknown()),
 });
@@ -63,7 +69,7 @@ export class PiAgentRuntime implements AgentRuntime {
       profile: profile.name,
       task,
       busId,
-      state: "running",
+      state: "idle",
     };
 
     const childTools = this.createChildTools(run.id);
@@ -95,12 +101,12 @@ export class PiAgentRuntime implements AgentRuntime {
     this.assertOpenRun(run);
     const messageWithBusContext = this.withBusMessages(id, entry, message);
 
-    if (run.state === "running" && entry.session.isStreaming) {
+    if (run.state === "idle" && entry.session.isStreaming) {
       await entry.session.steer(messageWithBusContext);
       return run;
     }
 
-    const messagedRun: AgentRun = run.state === "running" ? run : { ...run, state: "running", result: undefined };
+    const messagedRun: AgentRun = run.state === "idle" ? run : { ...run, state: "idle", result: undefined };
     if (messagedRun !== run) this.store.saveRun(messagedRun);
     this.startPromptTask(id, entry, messageWithBusContext);
     return messagedRun;
@@ -161,12 +167,12 @@ export class PiAgentRuntime implements AgentRuntime {
     try {
       await entry.session.prompt(message, { expandPromptTemplates: false });
       if (this.isClosed(id)) return;
-      if (this.store.getRun(id)?.state === "running") {
+      if (this.store.getRun(id)?.state === "idle") {
         await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
       }
       if (this.isClosed(id)) return;
       const run = this.store.getRun(id);
-      if (run?.state === "running") {
+      if (run?.state === "idle") {
         this.store.saveRun({
           ...run,
           state: "failed",
@@ -203,14 +209,14 @@ export class PiAgentRuntime implements AgentRuntime {
         const run = this.requireRun(runId);
         this.assertOpenRun(run);
         const result: AgentResult = {
-          status: params.status,
+          status: params.status as AgentResultStatus,
           summary: params.summary,
           data: params.data,
         };
         this.store.saveRun({
           ...run,
           result,
-          state: result.status === "failed" ? "failed" : "finished",
+          state: result.status,
         });
         return {
           content: [

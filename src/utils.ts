@@ -1,5 +1,5 @@
 import type { OrchestraApi, WaitRunResult } from "./core/orchestra.ts";
-import type { AgentRun } from "./core/subagent.ts";
+import type { AgentRun, AgentState } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
 import type { WorkflowRun } from "./core/workflow.ts";
 
@@ -70,8 +70,8 @@ export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
   return workflow;
 }
 
-export function isTerminalWorkflowState(state: WorkflowRun["state"]): boolean {
-  return state === "finished" || state === "failed" || state === "closed";
+export function isTerminalAgentState(state: AgentState): boolean {
+  return state !== "idle";
 }
 
 export function indent(text: string, prefix = "  "): string {
@@ -83,14 +83,6 @@ export function indent(text: string, prefix = "  "): string {
 
 export function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-export function isDefined<T>(value: T | undefined): value is T {
-  return value !== undefined;
-}
-
-export function isTerminalRun(run: AgentRun): boolean {
-  return run.state === "finished" || run.state === "failed" || run.state === "closed";
 }
 
 export function toWaitRunResult(run: AgentRun): WaitRunResult {

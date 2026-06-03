@@ -1,7 +1,7 @@
 import type { AgentProfile, AgentRun } from "./subagent.ts";
 import type { Bus, BusMessage } from "./bus.ts";
 import type { AgentRuntime } from "./runtime.ts";
-import { createEntityIdentity, isTerminalRun, resolveWaitTimeoutMs, toWaitRunResult } from "../utils.ts";
+import { createEntityIdentity, isTerminalAgentState, resolveWaitTimeoutMs, toWaitRunResult } from "../utils.ts";
 import type { AgentStore } from "./store.ts";
 
 export interface OrchestraApi {
@@ -144,7 +144,7 @@ export class Orchestra implements OrchestraApi {
     const timeoutMs = resolveWaitTimeoutMs("waitBusSettled", options.timeoutMs);
     const bus = this.requireBus(busId);
     const initialRuns = this.listRuns({ busId: bus.id });
-    if (initialRuns.every(isTerminalRun)) {
+    if (initialRuns.every((run) => isTerminalAgentState(run.state))) {
       return Promise.resolve(buildWaitBusSettledResult(bus, initialRuns, false));
     }
 
@@ -163,7 +163,7 @@ export class Orchestra implements OrchestraApi {
 
       const resolveIfDone = () => {
         const runs = getLatestRuns();
-        if (runs.some((run) => !isTerminalRun(run))) return;
+        if (runs.some((run) => !isTerminalAgentState(run.state))) return;
 
         settled = true;
         cleanup();
@@ -181,7 +181,7 @@ export class Orchestra implements OrchestraApi {
       }
 
       for (const run of initialRuns) {
-        if (isTerminalRun(run)) continue;
+        if (isTerminalAgentState(run.state)) continue;
         unsubscribeAll.push(
           this.store.subscribeRun(run.id, (updatedRun) => {
             if (settled) return;
@@ -201,7 +201,7 @@ export class Orchestra implements OrchestraApi {
     const initialRuns = this.listRuns({ busId: bus.id });
     const excludedRunIds = this.resolveExcludedRunIds(initialRuns, options.excludeRunIds ?? []);
     const candidateRuns = initialRuns.filter((run) => !excludedRunIds.has(run.id));
-    const alreadyDone = candidateRuns.find(isTerminalRun);
+    const alreadyDone = candidateRuns.find((run) => isTerminalAgentState(run.state));
     if (alreadyDone || candidateRuns.length === 0) {
       return Promise.resolve(buildWaitNextRunResult(bus, initialRuns, alreadyDone, false, excludedRunIds));
     }
@@ -236,12 +236,13 @@ export class Orchestra implements OrchestraApi {
       }
 
       for (const run of initialRuns) {
-        if (isTerminalRun(run)) continue;
+        if (isTerminalAgentState(run.state)) continue;
         unsubscribeAll.push(
           this.store.subscribeRun(run.id, (updatedRun) => {
             if (settled) return;
             latestRuns.set(updatedRun.id, updatedRun);
-            if (!excludedRunIds.has(updatedRun.id) && isTerminalRun(updatedRun)) resolveWithRun(updatedRun);
+            if (!excludedRunIds.has(updatedRun.id) && isTerminalAgentState(updatedRun.state))
+              resolveWithRun(updatedRun);
           }),
         );
       }
@@ -296,7 +297,7 @@ function buildWaitBusSettledResult(bus: Bus, runs: AgentRun[], timedOut: boolean
     runs,
     runResults: runs.map(toWaitRunResult),
     timedOut,
-    pendingRunIds: runs.filter((run) => !isTerminalRun(run)).map((run) => run.id),
+    pendingRunIds: runs.filter((run) => !isTerminalAgentState(run.state)).map((run) => run.id),
   };
 }
 
@@ -315,7 +316,7 @@ function buildWaitNextRunResult(
     runResults: runs.map(toWaitRunResult),
     timedOut,
     pendingRunIds: runs
-      .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
+      .filter((current) => !excludedRunIds.has(current.id) && !isTerminalAgentState(current.state))
       .map((current) => current.id),
   };
 }

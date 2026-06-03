@@ -86,7 +86,7 @@ test("orchestra resolves global run names for lifecycle actions", async () => {
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus({ name: "Frontend Audit" });
   const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, { name: "Reviewer" });
-  store.saveRun({ ...run, state: "finished" });
+  store.saveRun({ ...run, state: "success" });
 
   const messagedRun = await orchestra.messageAgent("Reviewer", "Continue.");
   const closedRun = await orchestra.closeAgent("Reviewer");
@@ -104,7 +104,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   const bus = orchestra.createBus();
 
   const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id);
-  store.saveRun({ ...run, state: "finished" });
+  store.saveRun({ ...run, state: "success" });
   const messagedRun = await orchestra.messageAgent(run.id, "Continue.");
   const closedRun = await orchestra.closeAgent(run.id);
 
@@ -113,7 +113,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   assert.deepEqual(runtime.closedIds, [run.id]);
   assert.equal(orchestra.getRun(run.id), closedRun);
   assert.equal(store.getRun(run.id), closedRun);
-  assert.equal(messagedRun.state, "running");
+  assert.equal(messagedRun.state, "idle");
   assert.equal(closedRun?.state, "closed");
 });
 
@@ -130,17 +130,17 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.equal(store.getBus(bus.id), output.bus);
 });
 
-test("orchestra messages running agents", async () => {
+test("orchestra messages idle agents", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const runningRun = run({ id: "agent-1", state: "running" });
-  store.saveRun(runningRun);
+  const idleRun = run({ id: "agent-1", state: "idle" });
+  store.saveRun(idleRun);
 
-  const output = await orchestra.messageAgent(runningRun.id, "Continue.");
+  const output = await orchestra.messageAgent(idleRun.id, "Continue.");
 
-  assert.deepEqual(runtime.messaged, { id: runningRun.id, message: "Continue." });
-  assert.equal(output, runningRun);
+  assert.deepEqual(runtime.messaged, { id: idleRun.id, message: "Continue." });
+  assert.equal(output, idleRun);
 });
 
 test("orchestra waitBusSettled resolves immediately for terminal bus runs", async () => {
@@ -148,19 +148,22 @@ test("orchestra waitBusSettled resolves immediately for terminal bus runs", asyn
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const finishedRun = run({ id: "agent-1", busId: bus.id, state: "finished" });
-  const failedRun = run({ id: "agent-2", busId: bus.id, state: "failed" });
-  const otherBusRun = run({ id: "agent-3", busId: "other-bus", state: "running" });
-  store.saveRun(finishedRun);
+  const successRun = run({ id: "agent-1", busId: bus.id, state: "success" });
+  const blockedRun = run({ id: "agent-2", busId: bus.id, state: "blocked" });
+  const failedRun = run({ id: "agent-3", busId: bus.id, state: "failed" });
+  const otherBusRun = run({ id: "agent-4", busId: "other-bus", state: "idle" });
+  store.saveRun(successRun);
+  store.saveRun(blockedRun);
   store.saveRun(failedRun);
   store.saveRun(otherBusRun);
 
   const output = await orchestra.waitBusSettled(bus.id);
 
   assert.equal(output.bus, bus);
-  assert.deepEqual(output.runs, [finishedRun, failedRun]);
+  assert.deepEqual(output.runs, [successRun, blockedRun, failedRun]);
   assert.deepEqual(output.runResults, [
-    { runId: finishedRun.id, name: finishedRun.name, profile: finishedRun.profile, state: finishedRun.state },
+    { runId: successRun.id, name: successRun.name, profile: successRun.profile, state: successRun.state },
+    { runId: blockedRun.id, name: blockedRun.name, profile: blockedRun.profile, state: blockedRun.state },
     { runId: failedRun.id, name: failedRun.name, profile: failedRun.profile, state: failedRun.state },
   ]);
   assert.equal(output.timedOut, false);
@@ -172,19 +175,19 @@ test("orchestra waitBusSettled waits for every current bus run to become termina
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  const finishedRun = run({ id: "agent-2", busId: bus.id, state: "finished" });
-  store.saveRun(runningRun);
-  store.saveRun(finishedRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  const successRun = run({ id: "agent-2", busId: bus.id, state: "success" });
+  store.saveRun(idleRun);
+  store.saveRun(successRun);
 
   const waitPromise = orchestra.waitBusSettled(bus.id, { timeoutMs: 1000 });
-  const completedRun = { ...runningRun, state: "finished" as const };
+  const completedRun = { ...idleRun, state: "success" as const };
   store.saveRun(completedRun);
 
   const output = await waitPromise;
 
   assert.equal(output.bus, bus);
-  assert.deepEqual(output.runs, [completedRun, finishedRun]);
+  assert.deepEqual(output.runs, [completedRun, successRun]);
   assert.equal(output.timedOut, false);
   assert.deepEqual(output.pendingRunIds, []);
 });
@@ -194,18 +197,18 @@ test("orchestra waitBusSettled returns partial results on timeout", async () => 
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  store.saveRun(runningRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  store.saveRun(idleRun);
 
   const output = await orchestra.waitBusSettled(bus.id, { timeoutMs: 1 });
 
   assert.equal(output.bus, bus);
-  assert.deepEqual(output.runs, [runningRun]);
+  assert.deepEqual(output.runs, [idleRun]);
   assert.deepEqual(output.runResults, [
-    { runId: runningRun.id, name: runningRun.name, profile: runningRun.profile, state: runningRun.state },
+    { runId: idleRun.id, name: idleRun.name, profile: idleRun.profile, state: idleRun.state },
   ]);
   assert.equal(output.timedOut, true);
-  assert.deepEqual(output.pendingRunIds, [runningRun.id]);
+  assert.deepEqual(output.pendingRunIds, [idleRun.id]);
 });
 
 test("orchestra waitBusSettled rejects non-positive timeouts", () => {
@@ -222,11 +225,11 @@ test("orchestra waitBusSettled accepts null timeout to wait indefinitely", async
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  store.saveRun(runningRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  store.saveRun(idleRun);
 
   const waitPromise = orchestra.waitBusSettled(bus.id, { timeoutMs: null });
-  const completedRun = { ...runningRun, state: "finished" as const };
+  const completedRun = { ...idleRun, state: "success" as const };
   store.saveRun(completedRun);
 
   const output = await waitPromise;
@@ -241,8 +244,8 @@ test("orchestra waitNextRun returns an already completed unexcluded run", async 
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const firstRun = run({ id: "agent-1", busId: bus.id, state: "finished" });
-  const secondRun = run({ id: "agent-2", busId: bus.id, state: "finished" });
+  const firstRun = run({ id: "agent-1", busId: bus.id, state: "success" });
+  const secondRun = run({ id: "agent-2", busId: bus.id, state: "success" });
   store.saveRun(firstRun);
   store.saveRun(secondRun);
 
@@ -263,14 +266,14 @@ test("orchestra waitNextRun waits for the next unexcluded run", async () => {
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const excludedRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  const targetRun = run({ id: "agent-2", busId: bus.id, state: "running" });
+  const excludedRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  const targetRun = run({ id: "agent-2", busId: bus.id, state: "idle" });
   store.saveRun(excludedRun);
   store.saveRun(targetRun);
 
   const waitPromise = orchestra.waitNextRun(bus.id, { excludeRunIds: [excludedRun.id], timeoutMs: 1000 });
-  store.saveRun({ ...excludedRun, state: "finished" });
-  const completedTargetRun = { ...targetRun, state: "finished" as const };
+  store.saveRun({ ...excludedRun, state: "success" });
+  const completedTargetRun = { ...targetRun, state: "success" as const };
   store.saveRun(completedTargetRun);
 
   const output = await waitPromise;
@@ -284,14 +287,14 @@ test("orchestra waitNextRun returns latest state on timeout", async () => {
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  store.saveRun(runningRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  store.saveRun(idleRun);
 
   const output = await orchestra.waitNextRun(bus.id, { timeoutMs: 1 });
 
   assert.equal(output.run, undefined);
   assert.equal(output.timedOut, true);
-  assert.deepEqual(output.pendingRunIds, [runningRun.id]);
+  assert.deepEqual(output.pendingRunIds, [idleRun.id]);
 });
 
 class FakeRuntime implements AgentRuntime {
@@ -318,7 +321,7 @@ class FakeRuntime implements AgentRuntime {
       profile: profile.name,
       task,
       busId,
-      state: "running",
+      state: "idle",
     };
     this.store.saveRun(run);
     return run;
@@ -328,9 +331,9 @@ class FakeRuntime implements AgentRuntime {
     this.messaged = { id, message };
     const run = this.store.getRun(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
-    if (run.state === "running") return run;
+    if (run.state === "idle") return run;
 
-    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "idle", result: undefined };
     this.store.saveRun(messagedRun);
     return messagedRun;
   }

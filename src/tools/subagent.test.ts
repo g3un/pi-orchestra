@@ -49,25 +49,25 @@ test("subagent spawn rejects missing buses", async () => {
 test("subagent status reads orchestra state", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const finishedRun = run({
+  const successRun = run({
     id: "agent-1",
-    state: "finished",
+    state: "success",
     result: {
       status: "success",
       summary: "Found the relevant implementation.",
       data: { file: "src/tools/subagent.ts" },
     },
   });
-  orchestra.runs.set(finishedRun.id, finishedRun);
+  orchestra.runs.set(successRun.id, successRun);
 
-  const output = await tool.execute({ action: "status", id: finishedRun.id });
+  const output = await tool.execute({ action: "status", id: successRun.id });
   const missingOutput = await tool.execute({ action: "status", id: "missing" });
 
-  assert.equal(output.run, finishedRun);
+  assert.equal(output.run, successRun);
   assert.equal(
     output.message,
     [
-      "Subagent agent-1 is finished.",
+      "Subagent agent-1 is success.",
       "",
       "Result: success",
       "Found the relevant implementation.",
@@ -83,21 +83,21 @@ test("subagent status reads orchestra state", async () => {
 test("subagent message delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const existing = run({ id: "agent-1", state: "finished" });
+  const existing = run({ id: "agent-1", state: "success" });
   orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "message", id: existing.id, message: "Continue." });
 
   assert.deepEqual(orchestra.messaged, { id: existing.id, message: "Continue." });
   assert.ok(output.run);
-  assert.equal(output.run.state, "running");
+  assert.equal(output.run.state, "idle");
   assert.equal(orchestra.getRun(existing.id), output.run);
 });
 
 test("subagent close delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const existing = run({ id: "agent-1", state: "finished" });
+  const existing = run({ id: "agent-1", state: "success" });
   orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "close", id: existing.id });
@@ -144,7 +144,7 @@ class FakeOrchestra implements OrchestraApi {
       profile: profile.name,
       task,
       busId,
-      state: "running",
+      state: "idle",
     });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
@@ -163,7 +163,7 @@ class FakeOrchestra implements OrchestraApi {
   async messageAgent(id: string, message: string): Promise<AgentRun> {
     this.messaged = { id, message };
     const current = this.runs.get(id) ?? run({ id });
-    const messagedRun = { ...current, state: "running" as const };
+    const messagedRun = { ...current, state: "idle" as const };
     this.runs.set(id, messagedRun);
     return messagedRun;
   }

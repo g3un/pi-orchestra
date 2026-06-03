@@ -18,8 +18,9 @@ test("waitBusSettled delegates to orchestra and formats terminal bus runs", asyn
   const tool = createWaitBusSettledTool({ orchestra });
   const bus = orchestra.createBus();
   const runs = [
-    run({ id: "agent-1", busId: bus.id, state: "finished", result: { status: "success", summary: "Done." } }),
-    run({ id: "agent-2", busId: bus.id, state: "failed", result: { status: "failed", summary: "Failed." } }),
+    run({ id: "agent-1", busId: bus.id, state: "success", result: { status: "success", summary: "Done." } }),
+    run({ id: "agent-2", busId: bus.id, state: "blocked", result: { status: "blocked", summary: "Needs input." } }),
+    run({ id: "agent-3", busId: bus.id, state: "failed", result: { status: "failed", summary: "Failed." } }),
   ];
   for (const current of runs) orchestra.runs.set(current.id, current);
 
@@ -34,11 +35,12 @@ test("waitBusSettled delegates to orchestra and formats terminal bus runs", asyn
   assert.equal(
     output.message,
     [
-      `All 2 run(s) attached to bus ${bus.id} reached terminal state.`,
+      `All 3 run(s) attached to bus ${bus.id} reached terminal state.`,
       "",
       "Runs:",
-      "- agent-1: finished result=success summary=Done.",
-      "- agent-2: failed result=failed summary=Failed.",
+      "- agent-1: success result=success summary=Done.",
+      "- agent-2: blocked result=blocked summary=Needs input.",
+      "- agent-3: failed result=failed summary=Failed.",
     ].join("\n"),
   );
 });
@@ -47,24 +49,24 @@ test("waitBusSettled formats timeout partial results", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWaitBusSettledTool({ orchestra });
   const bus = orchestra.createBus();
-  const runningRun = run({ id: "agent-1", busId: bus.id, state: "running" });
-  orchestra.runs.set(runningRun.id, runningRun);
+  const idleRun = run({ id: "agent-1", busId: bus.id, state: "idle" });
+  orchestra.runs.set(idleRun.id, idleRun);
   orchestra.nextSettledResult = {
     bus,
-    runs: [runningRun],
-    runResults: [toWaitRunResult(runningRun)],
+    runs: [idleRun],
+    runResults: [toWaitRunResult(idleRun)],
     timedOut: true,
-    pendingRunIds: [runningRun.id],
+    pendingRunIds: [idleRun.id],
   };
 
   const output = await tool.execute({ busId: bus.id, timeoutMs: 1000 });
 
   assert.equal(output.timedOut, true);
-  assert.deepEqual(output.runResults, [toWaitRunResult(runningRun)]);
-  assert.deepEqual(output.pendingRunIds, [runningRun.id]);
+  assert.deepEqual(output.runResults, [toWaitRunResult(idleRun)]);
+  assert.deepEqual(output.pendingRunIds, [idleRun.id]);
   assert.equal(
     output.message,
-    [`Timed out waiting for bus ${bus.id} to settle; 1 run(s) still pending.`, "", "Runs:", "- agent-1: running"].join(
+    [`Timed out waiting for bus ${bus.id} to settle; 1 run(s) still pending.`, "", "Runs:", "- agent-1: idle"].join(
       "\n",
     ),
   );
@@ -96,7 +98,7 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
-    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "running" });
+    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "idle" });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
   }

@@ -90,7 +90,8 @@ export function defineWaitNextRunPiTool(resolveTool: (ctx: ExtensionContext) => 
     name: "waitNextRun",
     label: "Wait Next Run",
     description: "Wait for the next current run attached to a work bus to reach a terminal state.",
-    promptSnippet: "Wait for one more subagent on a bus to finish so the leader can react and coordinate.",
+    promptSnippet:
+      "Wait for one more subagent on a bus to reach a terminal state so the leader can react and coordinate.",
     promptGuidelines: [
       "Use waitNextRun when acting as a workgroup leader and you want to handle subagent results as they arrive.",
       "Pass excludeRunIds with run ids or names you have already handled to avoid receiving the same terminal run again.",
@@ -118,7 +119,7 @@ function formatWaitNextRunMessage(result: WaitNextRunResult): string {
   const busLabel = formatNamedEntityLabel(result.bus);
   if (result.run) {
     return [
-      `Next completed run on bus ${busLabel}: ${formatNamedEntityLabel(result.run)} is ${result.run.state}.`,
+      `Next terminal run on bus ${busLabel}: ${formatNamedEntityLabel(result.run)} is ${result.run.state}.`,
       "",
       formatRunResult(result.run),
     ].join("\n");

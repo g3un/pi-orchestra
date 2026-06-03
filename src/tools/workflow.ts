@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentRun } from "../core/subagent.ts";
+import type { AgentResultStatus, AgentRun } from "../core/subagent.ts";
 import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageOutput, WorkflowStageRun, WorkflowStageSpec } from "../core/workflow.ts";
@@ -13,8 +13,7 @@ import {
   findWorkflow,
   formatNamedEntityLabel,
   indent,
-  isDefined,
-  isTerminalWorkflowState,
+  isTerminalAgentState,
   normalizeEntityName,
   requireWorkflow,
 } from "../utils.ts";
@@ -168,7 +167,7 @@ export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => Wor
       "Use strategy=compete when worker approaches are substitutable and any one success satisfies the stage goal; workflow automatically races to the first success, closes the rest, and has the stage leader condense the winner. This is for finding one working fix, repro, or answer, not for comparing alternatives.",
       "Use strategy=synthesize when worker contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; workflow waits for all workers, then has the stage leader synthesize them.",
       "Workflow automatically creates a separate bus per stage and injects previous stage outputs directly into the next stage's worker prompts.",
-      "Use workflow status to inspect progress, or waitWorkflow to wait for the whole workflow to become finished, failed, or closed.",
+      "Use workflow status to inspect progress, or waitWorkflow to wait for the whole workflow to reach state success, blocked, failed, or closed.",
     ],
     parameters: WorkflowToolParams,
     executionMode: "sequential",
@@ -194,14 +193,14 @@ interface WorkflowRunnerDeps {
 async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promise<void> {
   for (;;) {
     const workflow = deps.store.getWorkflow(workflowId);
-    if (!workflow || workflow.state === "closed") return;
+    if (!workflow || isTerminalAgentState(workflow.state)) return;
 
-    const stageIndex = workflow.stages.findIndex((stage) => stage.state === "idle");
+    const stageIndex = workflow.stages.findIndex((stage) => stage.state === "idle" && !stage.phase);
     if (stageIndex < 0) {
-      if (workflow.state === "running")
-        saveWorkflow(deps.store, {
+      if (workflow.state === "idle")
+        deps.store.saveWorkflow({
           ...workflow,
-          state: "finished",
+          state: "success",
           currentStageIndex: workflow.stages.length - 1,
           result: workflow.result,
         });
@@ -211,7 +210,7 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
     await runStage(workflowId, stageIndex, deps);
 
     const updatedWorkflow = deps.store.getWorkflow(workflowId);
-    if (!updatedWorkflow || isTerminalWorkflowState(updatedWorkflow.state)) return;
+    if (!updatedWorkflow || isTerminalAgentState(updatedWorkflow.state)) return;
   }
 }
 
@@ -219,7 +218,7 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
   const workflow = requireWorkflow(deps.store, workflowId);
   const stage = workflow.stages[stageIndex];
   const bus = deps.orchestra.createBus({ name: `${workflow.name}-${stage.name}` });
-  updateStage(deps.store, workflow, stageIndex, { state: "running", phase: "workers", busId: bus.id });
+  updateStage(deps.store, workflow, stageIndex, { state: "idle", phase: "workers", busId: bus.id });
 
   const workgroupOutput = await deps.workgroupTool.execute({
     busId: bus.id,
@@ -258,13 +257,13 @@ async function runStageLeader(
   workerResults: WaitRunResult[],
   deps: WorkflowRunnerDeps,
 ): Promise<void> {
-  const stage = requireWorkflowStage(requireWorkflow(deps.store, workflowId), stageIndex);
-  const leader = requireStageLeader(stage);
+  const workflow = requireWorkflow(deps.store, workflowId);
+  const stage = workflow.stages[stageIndex];
   const leaderRun = await deps.orchestra.spawnAgent(
-    leader.profile,
-    buildLeaderTask(requireWorkflow(deps.store, workflowId), stageIndex, workerResults),
+    stage.leader.profile,
+    buildLeaderTask(workflow, stageIndex, workerResults),
     busId,
-    { name: leader.name },
+    { name: stage.leader.name },
   );
   if (isWorkflowClosed(deps.store, workflowId)) {
     await deps.orchestra.closeAgent(leaderRun.id);
@@ -272,7 +271,7 @@ async function runStageLeader(
   }
 
   updateStage(deps.store, requireWorkflow(deps.store, workflowId), stageIndex, {
-    state: "running",
+    state: "idle",
     phase: "leader",
     leaderRunId: leaderRun.id,
   });
@@ -287,7 +286,7 @@ async function runStageLeader(
 
 async function closeWorkflow(orchestra: OrchestraApi, store: AgentStore, workflow: WorkflowRun): Promise<WorkflowRun> {
   const closedWorkflow = markWorkflowClosed(workflow);
-  saveWorkflow(store, closedWorkflow);
+  store.saveWorkflow(closedWorkflow);
 
   const runIds = collectWorkflowRunIds(workflow);
   const busRunIds = workflow.stages.flatMap((stage) =>
@@ -297,7 +296,7 @@ async function closeWorkflow(orchestra: OrchestraApi, store: AgentStore, workflo
 
   const latestWorkflow = store.getWorkflow(workflow.id) ?? closedWorkflow;
   const latestClosedWorkflow = markWorkflowClosed(latestWorkflow);
-  saveWorkflow(store, latestClosedWorkflow);
+  store.saveWorkflow(latestClosedWorkflow);
   return latestClosedWorkflow;
 }
 
@@ -310,7 +309,7 @@ function createWorkflowRun(
   return {
     ...identity,
     goal: input.goal,
-    state: "running",
+    state: "idle",
     currentStageIndex: 0,
     stages: input.stages.map((stage) => {
       const stageRun = {
@@ -348,18 +347,6 @@ function resolveStageLeader(stage: WorkflowStageSpec, workflowName: string): Wor
       tools: [],
     },
   };
-}
-
-function requireWorkflowStage(workflow: WorkflowRun, stageIndex: number): WorkflowStageRun {
-  const stage = workflow.stages.at(stageIndex);
-  if (!stage) throw new Error(`Workflow ${workflow.name} stage index ${stageIndex} not found.`);
-  return stage;
-}
-
-function requireStageLeader(stage: WorkflowStageRun): WorkgroupMember {
-  const leader = (stage as { leader?: WorkgroupMember }).leader;
-  if (!leader) throw new Error(`Workflow stage "${stage.name}" is missing a resolved leader.`);
-  return leader;
 }
 
 function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
@@ -407,25 +394,22 @@ function updateStage(
   stageIndex: number,
   updates: Partial<WorkflowStageRun>,
 ): void {
-  if (store.getWorkflow(workflow.id)?.state === "closed") return;
+  if (isWorkflowClosed(store, workflow.id)) return;
 
   const stages = workflow.stages.map((stage, index) => (index === stageIndex ? { ...stage, ...updates } : stage));
-  saveWorkflow(store, { ...workflow, currentStageIndex: stageIndex, stages });
+  store.saveWorkflow({ ...workflow, currentStageIndex: stageIndex, stages });
 }
 
 function finishStage(store: AgentStore, workflow: WorkflowRun, stageIndex: number, output: WorkflowStageOutput): void {
-  const stageState = output.status === "success" || output.status === "blocked" ? "finished" : "failed";
-  const workflowState = output.status === "success" ? "running" : output.status === "blocked" ? "finished" : "failed";
-  const result = stageIndex === workflow.stages.length - 1 ? output : undefined;
-  updateStage(store, workflow, stageIndex, { state: stageState, phase: undefined, output });
+  updateStage(store, workflow, stageIndex, { state: output.status, phase: undefined, output });
 
   const updatedWorkflow = requireWorkflow(store, workflow.id);
-  if (workflowState !== "running" || stageIndex === updatedWorkflow.stages.length - 1) {
-    saveWorkflow(store, {
+  const isLastStage = stageIndex === updatedWorkflow.stages.length - 1;
+  if (output.status !== "success" || isLastStage) {
+    store.saveWorkflow({
       ...updatedWorkflow,
-      state:
-        stageIndex === updatedWorkflow.stages.length - 1 && workflowState === "running" ? "finished" : workflowState,
-      result: result ?? output,
+      state: output.status,
+      result: output,
     });
   }
 }
@@ -434,30 +418,26 @@ function markWorkflowClosed(workflow: WorkflowRun): WorkflowRun {
   return {
     ...workflow,
     state: "closed",
-    stages: workflow.stages.map((stage) =>
-      stage.state === "finished" || stage.state === "failed" ? stage : { ...stage, state: "closed" },
-    ),
+    stages: workflow.stages.map((stage) => (isTerminalAgentState(stage.state) ? stage : { ...stage, state: "closed" })),
   };
 }
 
 function collectWorkflowRunIds(workflow: WorkflowRun): string[] {
-  return workflow.stages.flatMap((stage) => [stage.leaderRunId, ...stage.workerRunIds]).filter(isDefined);
+  return workflow.stages
+    .flatMap((stage) => [stage.leaderRunId, ...stage.workerRunIds])
+    .filter((runId): runId is string => runId !== undefined);
 }
 
 function failWorkflow(store: AgentStore, workflowId: string, error: string): void {
   const workflow = store.getWorkflow(workflowId);
-  if (!workflow || workflow.state === "closed") return;
+  if (!workflow || isTerminalAgentState(workflow.state)) return;
 
   const stages = workflow.stages.map((stage, index) =>
-    index === workflow.currentStageIndex && stage.state !== "finished"
+    index === workflow.currentStageIndex && !isTerminalAgentState(stage.state)
       ? { ...stage, state: "failed" as const, error }
       : stage,
   );
-  saveWorkflow(store, { ...workflow, state: "failed", stages, error });
-}
-
-function saveWorkflow(store: AgentStore, workflow: WorkflowRun): void {
-  store.saveWorkflow(workflow);
+  store.saveWorkflow({ ...workflow, state: "failed", stages, error });
 }
 
 function isWorkflowClosed(store: AgentStore, id: string): boolean {
@@ -563,12 +543,12 @@ function buildCompeteNoWinnerOutput(workerResults: WaitRunResult[]): WorkflowSta
   };
 }
 
-function countWorkerResultStatuses(workerResults: WaitRunResult[]): Record<"success" | "blocked" | "failed", number> {
-  return {
-    success: workerResults.filter((worker) => worker.result?.status === "success").length,
-    blocked: workerResults.filter((worker) => worker.result?.status === "blocked").length,
-    failed: workerResults.filter((worker) => worker.result?.status === "failed").length,
-  };
+function countWorkerResultStatuses(workerResults: WaitRunResult[]): Record<AgentResultStatus, number> {
+  const counts: Record<AgentResultStatus, number> = { success: 0, blocked: 0, failed: 0 };
+  for (const worker of workerResults) {
+    if (worker.result) counts[worker.result.status]++;
+  }
+  return counts;
 }
 
 function buildStageOutput(
@@ -617,7 +597,7 @@ function formatWorkflowMessage(
 ): string {
   const parts = [headline, "", `Goal: ${workflow.goal}`, "", "Stages:"];
   for (const [index, stage] of workflow.stages.entries()) {
-    const current = index === workflow.currentStageIndex && workflow.state === "running" ? " current" : "";
+    const current = index === workflow.currentStageIndex && workflow.state === "idle" ? " current" : "";
     parts.push(`- ${stage.name}: ${stage.state}${current}${stage.busId ? ` bus=${stage.busId}` : ""}`);
   }
   if (workflow.result) parts.push("", "Result:", formatStageOutput(workflow.result));

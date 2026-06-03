@@ -21,7 +21,7 @@ test("waitWorkflow resolves immediately for terminal workflows", async () => {
   const workflow = workflowRun({
     id: "research-flow",
     name: "Research Flow",
-    state: "finished",
+    state: "success",
     result: {
       status: "success",
       summary: "Final synthesis.",
@@ -37,43 +37,43 @@ test("waitWorkflow resolves immediately for terminal workflows", async () => {
   assert.equal(output.timedOut, false);
   assert.equal(
     output.message,
-    "Workflow reached terminal state: Research Flow (research-flow); state=finished result=success.",
+    "Workflow reached terminal state: Research Flow (research-flow); state=success result=success.",
   );
 });
 
 test("waitWorkflow waits for workflow terminal state", async () => {
   const store = new InMemoryAgentStore();
   const tool = createWaitWorkflowTool({ store });
-  const workflow = workflowRun({ state: "running" });
+  const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
   const waitPromise = tool.execute({ id: workflow.id, timeoutMs: null });
-  const finishedWorkflow = { ...workflow, state: "finished" as const };
-  store.saveWorkflow(finishedWorkflow);
+  const successWorkflow = { ...workflow, state: "success" as const };
+  store.saveWorkflow(successWorkflow);
 
   const output = await waitPromise;
 
-  assert.equal(output.workflow, finishedWorkflow);
+  assert.equal(output.workflow, successWorkflow);
   assert.equal(output.timedOut, false);
 });
 
 test("waitWorkflow returns latest workflow on timeout", async () => {
   const store = new InMemoryAgentStore();
   const tool = createWaitWorkflowTool({ store });
-  const workflow = workflowRun({ state: "running" });
+  const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
   const output = await tool.execute({ id: workflow.id, timeoutMs: 1 });
 
   assert.equal(output.workflow, workflow);
   assert.equal(output.timedOut, true);
-  assert.equal(output.message, "Timed out waiting for workflow; state=running.");
+  assert.equal(output.message, "Timed out waiting for workflow; state=idle.");
 });
 
 test("waitWorkflow rejects non-positive timeouts", async () => {
   const store = new InMemoryAgentStore();
   const tool = createWaitWorkflowTool({ store });
-  const workflow = workflowRun({ state: "running" });
+  const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
   await assert.rejects(
@@ -87,7 +87,7 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: "workflow",
     name: "workflow",
     goal: "Complete the workflow.",
-    state: "running",
+    state: "idle",
     currentStageIndex: 0,
     stages: [],
     ...overrides,

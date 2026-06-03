@@ -10,7 +10,7 @@ import type {
   WaitNextRunOptions,
   WaitNextRunResult,
 } from "../core/orchestra.ts";
-import { isTerminalRun, slugify, toWaitRunResult } from "../utils.ts";
+import { isTerminalAgentState, slugify, toWaitRunResult } from "../utils.ts";
 import { createWorkgroupTool, settleWorkgroupRuns } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
@@ -67,8 +67,8 @@ test("workgroup launches members on an existing bus", async () => {
       "Launched synthesize workgroup on bus auth-work with 2 run(s).",
       "",
       "Runs:",
-      "- security-review: running",
-      "- backend-review: running",
+      "- security-review: idle",
+      "- backend-review: idle",
       "",
       "Use waitNextRun to handle member results as they finish, or waitBusSettled for full fan-in.",
     ].join("\n"),
@@ -123,7 +123,7 @@ test("workgroup member name checks are global", async () => {
     profile: "security",
     task: "Existing work.",
     busId: otherBus.id,
-    state: "running",
+    state: "idle",
   });
 
   await assert.rejects(
@@ -145,10 +145,10 @@ test("workgroup compete settlement closes pending runs after first success", asy
     id: "winner",
     name: "winner",
     busId: bus.id,
-    state: "finished",
+    state: "success",
     result: { status: "success", summary: "Found input." },
   });
-  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
+  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "idle" });
   orchestra.runs.set(winner.id, winner);
   orchestra.runs.set(pending.id, pending);
 
@@ -171,7 +171,7 @@ test("workgroup synthesize settlement waits for every run", async () => {
     id: "first",
     name: "first",
     busId: bus.id,
-    state: "finished",
+    state: "success",
     result: { status: "success", summary: "First." },
   });
   const second = run({
@@ -261,7 +261,7 @@ class FakeOrchestra implements OrchestraApi {
       profile: profile.name,
       task,
       busId: bus.id,
-      state: "running",
+      state: "idle",
     };
     this.runs.set(run.id, run);
     return run;
@@ -302,7 +302,7 @@ class FakeOrchestra implements OrchestraApi {
       runs,
       runResults: runs.map(toWaitRunResult),
       timedOut: false,
-      pendingRunIds: runs.filter((current) => !isTerminalRun(current)).map((current) => current.id),
+      pendingRunIds: runs.filter((current) => !isTerminalAgentState(current.state)).map((current) => current.id),
     });
   }
 
@@ -313,7 +313,8 @@ class FakeOrchestra implements OrchestraApi {
     const excludedRunIds = new Set(options.excludeRunIds ?? []);
     const runs = this.listRuns({ busId: bus.id });
     const run = runs.find(
-      (current) => !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalRun(current),
+      (current) =>
+        !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalAgentState(current.state),
     );
     return Promise.resolve({
       bus,
@@ -323,7 +324,7 @@ class FakeOrchestra implements OrchestraApi {
       runResults: runs.map(toWaitRunResult),
       timedOut: false,
       pendingRunIds: runs
-        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalRun(current))
+        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalAgentState(current.state))
         .map((current) => current.id),
     });
   }

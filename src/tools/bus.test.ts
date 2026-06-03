@@ -102,7 +102,7 @@ class FakeOrchestra implements OrchestraApi {
       profile: profile.name,
       task,
       busId,
-      state: "running",
+      state: "idle",
     };
     this.runs.set(run.id, run);
     return run;

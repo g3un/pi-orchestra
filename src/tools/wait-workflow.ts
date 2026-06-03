@@ -5,7 +5,7 @@ import type { WorkflowRun } from "../core/workflow.ts";
 import {
   findWorkflow,
   formatNamedEntityLabel,
-  isTerminalWorkflowState,
+  isTerminalAgentState,
   requireWorkflow,
   resolveWaitTimeoutMs,
 } from "../utils.ts";
@@ -72,8 +72,8 @@ export function defineWaitWorkflowPiTool(resolveTool: (ctx: ExtensionContext) =>
   return defineTool({
     name: "waitWorkflow",
     label: "Wait Workflow",
-    description: "Wait for a workflow to reach finished, failed, or closed state.",
-    promptSnippet: "Wait for the whole workflow to complete after launching it.",
+    description: "Wait for a workflow to reach state success, blocked, failed, or closed.",
+    promptSnippet: "Wait for the whole workflow to reach a terminal state after launching it.",
     promptGuidelines: [
       "Use waitWorkflow after workflow action=start when you do not need to inspect or intervene in intermediate stages.",
       "By default waitWorkflow times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
@@ -99,7 +99,7 @@ function waitWorkflow(
 ): Promise<{ workflow: WorkflowRun; timedOut: boolean }> {
   const resolvedTimeoutMs = resolveWaitTimeoutMs("waitWorkflow", timeoutMs);
   const initialWorkflow = requireWorkflow(store, workflowId);
-  if (isTerminalWorkflowState(initialWorkflow.state)) {
+  if (isTerminalAgentState(initialWorkflow.state)) {
     return Promise.resolve({ workflow: initialWorkflow, timedOut: false });
   }
 
@@ -116,7 +116,7 @@ function waitWorkflow(
     const unsubscribe = store.subscribeWorkflow(workflowId, (workflow) => {
       if (settled) return;
       latestWorkflow = workflow;
-      if (!isTerminalWorkflowState(workflow.state)) return;
+      if (!isTerminalAgentState(workflow.state)) return;
 
       settled = true;
       cleanup();

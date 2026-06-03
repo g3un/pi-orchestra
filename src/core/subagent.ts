@@ -1,6 +1,7 @@
-export type AgentState = "idle" | "running" | "finished" | "failed" | "closed";
+export const AGENT_RESULT_STATUS_VALUES = ["success", "blocked", "failed"] as const;
+export type AgentResultStatus = (typeof AGENT_RESULT_STATUS_VALUES)[number];
 
-export type AgentResultStatus = "success" | "blocked" | "failed";
+export type AgentState = "idle" | "closed" | AgentResultStatus;
 
 export interface AgentProfile {
   name: string;

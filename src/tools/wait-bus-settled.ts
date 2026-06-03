@@ -33,7 +33,7 @@ const WaitBusSettledToolParams = Type.Object(
   {
     busId: Type.String({
       description:
-        "Work bus id or name to wait for. The tool returns when every current run attached to this bus is finished, failed, or closed.",
+        "Work bus id or name to wait for. The tool returns when every current run attached to this bus has state success, blocked, failed, or closed.",
     }),
     timeoutMs: Type.Optional(
       Type.Union(
@@ -76,9 +76,10 @@ export function defineWaitBusSettledPiTool(resolveTool: (ctx: ExtensionContext) 
     name: "waitBusSettled",
     label: "Wait Bus Settled",
     description: "Wait until all current agent runs attached to a work bus reach a terminal state.",
-    promptSnippet: "Wait for every current subagent on a bus to finish before collecting their statuses.",
+    promptSnippet:
+      "Wait for every current subagent on a bus to reach a terminal state before collecting their statuses.",
     promptGuidelines: [
-      "Use waitBusSettled when you need the whole bus work group to finish before continuing.",
+      "Use waitBusSettled when you need the whole bus work group to reach a terminal state before continuing.",
       "Pass the busId for the delegated work item; the tool waits for every current run attached to that bus.",
       "By default waitBusSettled times out after 10 minutes. Set timeoutMs to a positive millisecond value, or null to wait indefinitely.",
       "On timeout, the tool returns the latest collected run states for the bus instead of failing.",
