@@ -12,7 +12,6 @@ import type {
 } from "../core/orchestra.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { isTerminalAgentState, slugify, toWaitRunResult } from "../utils.ts";
-import { createWaitWorkflowTool } from "./wait-workflow.ts";
 import { createWorkflowTool } from "./workflow.ts";
 
 const workerProfile: AgentProfile = {
@@ -55,7 +54,6 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -79,7 +77,7 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "research-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "research-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
@@ -105,7 +103,6 @@ test("workflow compete stage races to first success then uses a leader", async (
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -124,7 +121,7 @@ test("workflow compete stage races to first success then uses a leader", async (
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "compete-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "compete-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
@@ -143,7 +140,6 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -168,7 +164,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "blocked-compete-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "blocked-compete-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "blocked");
@@ -185,7 +181,6 @@ test("workflow compete stage fails when every worker fails", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -207,7 +202,7 @@ test("workflow compete stage fails when every worker fails", async () => {
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "failed-compete-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "failed-compete-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "failed");
@@ -224,7 +219,6 @@ test("workflow status returns the latest workflow by name", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -239,7 +233,7 @@ test("workflow status returns the latest workflow by name", async () => {
       },
     ],
   });
-  await waitWorkflowTool.execute({ id: "status-flow", timeoutMs: null });
+  await workflowTool.execute({ action: "wait", id: "status-flow", timeoutMs: null });
 
   const output = await workflowTool.execute({ action: "status", id: "status-flow" });
 
@@ -293,7 +287,6 @@ test("workflow uses a default restricted leader when omitted", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -309,7 +302,7 @@ test("workflow uses a default restricted leader when omitted", async () => {
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "default-leader-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "default-leader-flow", timeoutMs: null });
   const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-leader");
 
   assert.ok(output.workflow);
@@ -369,7 +362,6 @@ test("workflow fails when a stage leader fails", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -393,7 +385,7 @@ test("workflow fails when a stage leader fails", async () => {
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "failed-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "failed-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "failed");
@@ -410,7 +402,6 @@ test("workflow stops when a stage leader blocks", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const waitWorkflowTool = createWaitWorkflowTool({ store });
 
   await workflowTool.execute({
     action: "start",
@@ -434,7 +425,7 @@ test("workflow stops when a stage leader blocks", async () => {
     ],
   });
 
-  const output = await waitWorkflowTool.execute({ id: "blocked-flow", timeoutMs: null });
+  const output = await workflowTool.execute({ action: "wait", id: "blocked-flow", timeoutMs: null });
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "blocked");

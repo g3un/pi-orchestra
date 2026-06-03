@@ -235,7 +235,7 @@ export class PiAgentRuntime implements AgentRuntime {
       name: "publish_bus",
       label: "Publish Bus Message",
       description:
-        "Publish supplemental peer-reference context to this subagent run's bus for sibling agents. This is not a live leader-request channel; when the leader must decide, approve, unblock, or act, use finish(status=blocked) so the leader can receive it via waitNextRun and reply with subagent message. Continue working after publishing unless the task is done.",
+        "Publish supplemental peer-reference context to this subagent run's bus for sibling agents. This is not a live leader-request channel; when the leader must decide, approve, unblock, or act, use finish(status=blocked) so the leader can receive it via bus action=wait_next and reply with subagent message. Continue working after publishing unless the task is done.",
       parameters: PublishBusParams,
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);

@@ -70,7 +70,7 @@ test("workgroup launches members on an existing bus", async () => {
       "- security-review: idle",
       "- backend-review: idle",
       "",
-      "Use waitNextRun to handle member results as they finish, or waitBusSettled for full fan-in.",
+      "Use bus action=wait_next to handle member results as they finish, or bus action=wait_settled for full fan-in.",
     ].join("\n"),
   );
 });

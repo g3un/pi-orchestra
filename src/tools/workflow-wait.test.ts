@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
-import { createWaitWorkflowTool } from "./wait-workflow.ts";
+import { createWorkflowTool } from "./workflow.ts";
 
-test("waitWorkflow returns missing workflow status", async () => {
+test("workflow wait returns missing workflow status", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
 
-  const output = await tool.execute({ id: "missing" });
+  const output = await tool.execute({ action: "wait", id: "missing" });
 
   assert.equal(output.workflow, undefined);
   assert.equal(output.timedOut, false);
   assert.equal(output.message, "Workflow missing not found.");
 });
 
-test("waitWorkflow resolves immediately for terminal workflows", async () => {
+test("workflow wait resolves immediately for terminal workflows", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
   const workflow = workflowRun({
     id: "research-flow",
     name: "Research Flow",
@@ -31,7 +32,7 @@ test("waitWorkflow resolves immediately for terminal workflows", async () => {
   });
   store.saveWorkflow(workflow);
 
-  const output = await tool.execute({ id: workflow.name });
+  const output = await tool.execute({ action: "wait", id: workflow.name });
 
   assert.equal(output.workflow, workflow);
   assert.equal(output.timedOut, false);
@@ -41,9 +42,9 @@ test("waitWorkflow resolves immediately for terminal workflows", async () => {
   );
 });
 
-test("waitWorkflow resolves immediately for blocked workflows", async () => {
+test("workflow wait resolves immediately for blocked workflows", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
   const workflow = workflowRun({
     id: "blocked-flow",
     state: "blocked",
@@ -51,20 +52,20 @@ test("waitWorkflow resolves immediately for blocked workflows", async () => {
   });
   store.saveWorkflow(workflow);
 
-  const output = await tool.execute({ id: workflow.id });
+  const output = await tool.execute({ action: "wait", id: workflow.id });
 
   assert.equal(output.workflow, workflow);
   assert.equal(output.timedOut, false);
   assert.equal(output.message, "Workflow reached terminal state: blocked-flow; state=blocked result=blocked.");
 });
 
-test("waitWorkflow waits for workflow terminal state", async () => {
+test("workflow wait waits for workflow terminal state", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
   const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
-  const waitPromise = tool.execute({ id: workflow.id, timeoutMs: null });
+  const waitPromise = tool.execute({ action: "wait", id: workflow.id, timeoutMs: null });
   const successWorkflow = { ...workflow, state: "success" as const };
   store.saveWorkflow(successWorkflow);
 
@@ -74,28 +75,28 @@ test("waitWorkflow waits for workflow terminal state", async () => {
   assert.equal(output.timedOut, false);
 });
 
-test("waitWorkflow returns latest workflow on timeout", async () => {
+test("workflow wait returns latest workflow on timeout", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
   const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
-  const output = await tool.execute({ id: workflow.id, timeoutMs: 1 });
+  const output = await tool.execute({ action: "wait", id: workflow.id, timeoutMs: 1 });
 
   assert.equal(output.workflow, workflow);
   assert.equal(output.timedOut, true);
   assert.equal(output.message, "Timed out waiting for workflow; state=idle.");
 });
 
-test("waitWorkflow rejects non-positive timeouts", async () => {
+test("workflow wait rejects non-positive timeouts", async () => {
   const store = new InMemoryAgentStore();
-  const tool = createWaitWorkflowTool({ store });
+  const tool = createWorkflowTool({ orchestra: {} as OrchestraApi, store });
   const workflow = workflowRun({ state: "idle" });
   store.saveWorkflow(workflow);
 
   await assert.rejects(
-    () => tool.execute({ id: workflow.id, timeoutMs: 0 }),
-    /waitWorkflow timeoutMs must be positive/,
+    () => tool.execute({ action: "wait", id: workflow.id, timeoutMs: 0 }),
+    /workflow wait timeoutMs must be positive/,
   );
 });
 

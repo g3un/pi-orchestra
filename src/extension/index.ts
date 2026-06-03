@@ -4,13 +4,6 @@ import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
 import { Orchestra } from "../core/orchestra.ts";
 import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
 import { createSubagentTool, defineSubagentPiTool, type SubagentTool } from "../tools/subagent.ts";
-import {
-  createWaitBusSettledTool,
-  defineWaitBusSettledPiTool,
-  type WaitBusSettledTool,
-} from "../tools/wait-bus-settled.ts";
-import { createWaitNextRunTool, defineWaitNextRunPiTool, type WaitNextRunTool } from "../tools/wait-next-run.ts";
-import { createWaitWorkflowTool, defineWaitWorkflowPiTool, type WaitWorkflowTool } from "../tools/wait-workflow.ts";
 import { createWorkflowTool, defineWorkflowPiTool, type WorkflowTool } from "../tools/workflow.ts";
 import { createWorkgroupTool, defineWorkgroupPiTool, type WorkgroupTool } from "../tools/workgroup.ts";
 
@@ -19,9 +12,6 @@ interface ToolBundle {
   subagentTool: SubagentTool;
   workgroupTool: WorkgroupTool;
   workflowTool: WorkflowTool;
-  waitBusSettledTool: WaitBusSettledTool;
-  waitNextRunTool: WaitNextRunTool;
-  waitWorkflowTool: WaitWorkflowTool;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -32,9 +22,6 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   pi.registerTool(defineSubagentPiTool((ctx) => getToolBundle(ctx).subagentTool));
   pi.registerTool(defineWorkgroupPiTool((ctx) => getToolBundle(ctx).workgroupTool));
   pi.registerTool(defineWorkflowPiTool((ctx) => getToolBundle(ctx).workflowTool));
-  pi.registerTool(defineWaitBusSettledPiTool((ctx) => getToolBundle(ctx).waitBusSettledTool));
-  pi.registerTool(defineWaitNextRunPiTool((ctx) => getToolBundle(ctx).waitNextRunTool));
-  pi.registerTool(defineWaitWorkflowPiTool((ctx) => getToolBundle(ctx).waitWorkflowTool));
 }
 
 function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): ToolBundle {
@@ -53,9 +40,6 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
     subagentTool: createSubagentTool({ orchestra }),
     workgroupTool: createWorkgroupTool({ orchestra }),
     workflowTool: createWorkflowTool({ orchestra, store }),
-    waitBusSettledTool: createWaitBusSettledTool({ orchestra }),
-    waitNextRunTool: createWaitNextRunTool({ orchestra }),
-    waitWorkflowTool: createWaitWorkflowTool({ store }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;

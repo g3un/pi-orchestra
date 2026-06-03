@@ -169,11 +169,11 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
       "Spawn a main-led workgroup on an existing bus; you collect, race, close, and summarize member results yourself.",
     promptGuidelines: [
       "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
-      "Workgroup only launches members. You are the leader/executor: use waitNextRun or waitBusSettled to collect results, decide next actions, and summarize outputs yourself.",
-      "Use strategy=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with waitNextRun, close remaining members after the first success, and condense the winning result yourself.",
+      "Workgroup only launches members. You are the leader/executor: use bus action=wait_next or bus action=wait_settled to collect results, decide next actions, and summarize outputs yourself.",
+      "Use strategy=compete when member approaches are substitutable and one success satisfies the goal, such as finding a working fix, repro, or answer; in workgroup, you drive the race with bus action=wait_next, close remaining members after the first success, and condense the winning result yourself.",
       "Use strategy=synthesize when member contributions are complementary and value comes from combining or comparing them, such as multi-angle review, research fan-out, or design tradeoff analysis; members should exchange conclusions, rebuttals, and next actions to converge.",
       "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
-      "Use waitNextRun to receive successful, blocked, or failed members; if a member needs leader action, respond with subagent message.",
+      "Use bus action=wait_next to receive successful, blocked, or failed members; if a member needs leader action, respond with subagent message.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",
@@ -359,7 +359,7 @@ function buildMemberTask(input: PreparedWorkgroupInput, member: PreparedWorkgrou
   const parts = [
     "You are participating in a workgroup on a shared peer-reference bus.",
     "The main agent is the workgroup leader, but it is outside the bus: publish_bus is for sibling reference data, not for requesting leader action.",
-    "If you need the leader to decide, approve, unblock, or act, call finish with status blocked so the leader can receive it via waitNextRun and respond with subagent message.",
+    "If you need the leader to decide, approve, unblock, or act, call finish with status blocked so the leader can receive it via bus action=wait_next and respond with subagent message.",
     "",
     `Workgroup strategy: ${input.strategy}`,
     "Shared goal:",
@@ -410,7 +410,7 @@ function formatWorkgroupMessage(bus: Bus, input: PreparedWorkgroupInput, runs: A
     "Runs:",
     ...runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`),
     "",
-    "Use waitNextRun to handle member results as they finish, or waitBusSettled for full fan-in.",
+    "Use bus action=wait_next to handle member results as they finish, or bus action=wait_settled for full fan-in.",
   ].join("\n");
 }
 
