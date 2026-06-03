@@ -5,9 +5,11 @@ import type { AgentStore } from "../core/store.ts";
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
+  private readonly runListeners = new Map<string, Set<(run: AgentRun) => void>>();
 
   saveRun(run: AgentRun): void {
     this.runs.set(run.id, run);
+    for (const listener of this.runListeners.get(run.id) ?? []) listener(run);
   }
 
   getRun(id: string): AgentRun | undefined {
@@ -16,6 +18,17 @@ export class InMemoryAgentStore implements AgentStore {
 
   listRuns(): AgentRun[] {
     return [...this.runs.values()];
+  }
+
+  subscribeRun(id: string, listener: (run: AgentRun) => void): () => void {
+    const listeners = this.runListeners.get(id) ?? new Set<(run: AgentRun) => void>();
+    listeners.add(listener);
+    this.runListeners.set(id, listeners);
+
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.runListeners.delete(id);
+    };
   }
 
   saveBus(bus: Bus): void {

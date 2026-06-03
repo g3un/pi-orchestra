@@ -55,6 +55,51 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.equal(store.getBus(bus.id), output.bus);
 });
 
+test("orchestra waitRuns resolves immediately for terminal runs", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const finishedRun = run({ id: "agent-1", state: "finished" });
+  const failedRun = run({ id: "agent-2", state: "failed" });
+  store.saveRun(finishedRun);
+  store.saveRun(failedRun);
+
+  const runs = await orchestra.waitRuns([finishedRun.id, failedRun.id]);
+
+  assert.deepEqual(runs, [finishedRun, failedRun]);
+});
+
+test("orchestra waitRuns waits for every run to become terminal", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const runningRun = run({ id: "agent-1", state: "running" });
+  const finishedRun = run({ id: "agent-2", state: "finished" });
+  store.saveRun(runningRun);
+  store.saveRun(finishedRun);
+
+  const waitPromise = orchestra.waitRuns([runningRun.id, finishedRun.id], { timeoutMs: 1000 });
+  const completedRun = { ...runningRun, state: "finished" as const };
+  store.saveRun(completedRun);
+
+  const runs = await waitPromise;
+
+  assert.deepEqual(runs, [completedRun, finishedRun]);
+});
+
+test("orchestra waitRuns rejects on timeout", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const runningRun = run({ id: "agent-1", state: "running" });
+  store.saveRun(runningRun);
+
+  await assert.rejects(
+    () => orchestra.waitRuns([runningRun.id], { timeoutMs: 0 }),
+    /Timed out waiting for agent run\(s\): agent-1\./,
+  );
+});
+
 class FakeRuntime implements AgentRuntime {
   private readonly store: AgentStore;
   spawned?: { profile: AgentProfile; task: string; busId: string };
@@ -105,4 +150,15 @@ class FakeRuntime implements AgentRuntime {
     this.store.saveRun(closedRun);
     return closedRun;
   }
+}
+
+function run(overrides: Partial<AgentRun>): AgentRun {
+  return {
+    id: "agent-1",
+    profile: "researcher",
+    task: "Inspect the code.",
+    busId: "bus-1",
+    state: "idle",
+    ...overrides,
+  };
 }

@@ -37,6 +37,20 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.match(parameters.properties.message?.description ?? "", /Required for action=resume/);
 });
 
+test("waitRuns parameters use an OpenAI-compatible root object schema", () => {
+  const registeredTools = registerExtensionTools();
+
+  const waitRuns = registeredTools.find((tool) => tool.name === "waitRuns");
+  assert.ok(waitRuns);
+
+  const parameters = waitRuns.parameters as JsonSchemaObject;
+  assert.equal(parameters.type, "object");
+  assert.equal(parameters.additionalProperties, false);
+  assert.ok(parameters.properties);
+  assert.match(parameters.properties.runIds?.description ?? "", /Run ids to wait for/);
+  assert.match(parameters.properties.timeoutMs?.description ?? "", /timeout in milliseconds/);
+});
+
 function registerExtensionTools(): ToolDefinition[] {
   const registeredTools: ToolDefinition[] = [];
 

@@ -161,6 +161,10 @@ class FakeOrchestra implements OrchestraApi {
     this.runs.set(id, closedRun);
     return closedRun;
   }
+
+  waitRuns(runIds: string[]): Promise<AgentRun[]> {
+    return Promise.resolve(runIds.map((id) => this.runs.get(id)).filter((run): run is AgentRun => run !== undefined));
+  }
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {

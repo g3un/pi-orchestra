@@ -8,6 +8,8 @@ import type { BusInput } from "../tools/bus.ts";
 import { createBusTool, type BusTool } from "../tools/bus.ts";
 import type { SubagentInput } from "../tools/subagent.ts";
 import { createSubagentTool, type SubagentTool } from "../tools/subagent.ts";
+import type { WaitRunsInput } from "../tools/wait-runs.ts";
+import { createWaitRunsTool, type WaitRunsTool } from "../tools/wait-runs.ts";
 
 const BusActionParams = Type.String({
   enum: ["create", "status", "publish"],
@@ -26,6 +28,21 @@ const BusToolParams = Type.Object(
     message: Type.Optional(
       Type.String({
         description: "Required for action=publish. Shared context to add to the bus.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const WaitRunsToolParams = Type.Object(
+  {
+    runIds: Type.Array(Type.String(), {
+      description: "Run ids to wait for. The tool returns when every listed run is finished, failed, or closed.",
+      minItems: 1,
+    }),
+    timeoutMs: Type.Optional(
+      Type.Number({
+        description: "Optional timeout in milliseconds for waiting for all runs.",
       }),
     ),
   },
@@ -83,6 +100,7 @@ const SubagentToolParams = Type.Object(
 interface ToolBundle {
   busTool: BusTool;
   subagentTool: SubagentTool;
+  waitRunsTool: WaitRunsTool;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -141,6 +159,31 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       },
     }),
   );
+
+  pi.registerTool(
+    defineTool({
+      name: "waitRuns",
+      label: "Wait Runs",
+      description: "Wait until one or more agent runs reach a terminal state.",
+      promptSnippet: "Wait for spawned subagents or agent team runs to finish before collecting their status.",
+      promptGuidelines: [
+        "Use waitRuns after spawning one or more subagents when you need their final results before continuing.",
+        "Pass all run ids in runIds; the tool returns when every run is finished, failed, or closed.",
+        "Use timeoutMs to avoid waiting indefinitely when a run may be stuck.",
+      ],
+      parameters: WaitRunsToolParams,
+      executionMode: "parallel",
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const bundle = getBundle(bundles, ctx);
+        const output = await bundle.waitRunsTool.execute(toWaitRunsInput(params as RawWaitRunsParams));
+
+        return {
+          content: [{ type: "text", text: output.message }],
+          details: output,
+        };
+      },
+    }),
+  );
 }
 
 type RawBusParams = {
@@ -158,6 +201,11 @@ type RawSubagentParams = {
   message?: string;
 };
 
+type RawWaitRunsParams = {
+  runIds?: string[];
+  timeoutMs?: number;
+};
+
 function toBusInput(params: RawBusParams): BusInput {
   if (params.action === "create") return { action: "create" };
 
@@ -169,6 +217,11 @@ function toBusInput(params: RawBusParams): BusInput {
   if (!params.id) throw new Error("bus action=publish requires id.");
   if (!params.message) throw new Error("bus action=publish requires message.");
   return { action: "publish", id: params.id, message: params.message };
+}
+
+function toWaitRunsInput(params: RawWaitRunsParams): WaitRunsInput {
+  if (!params.runIds || params.runIds.length === 0) throw new Error("waitRuns requires runIds.");
+  return { runIds: params.runIds, timeoutMs: params.timeoutMs };
 }
 
 function toSubagentInput(params: RawSubagentParams): SubagentInput {
@@ -208,6 +261,7 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
   const bundle = {
     busTool: createBusTool({ orchestra }),
     subagentTool: createSubagentTool({ orchestra }),
+    waitRunsTool: createWaitRunsTool({ orchestra }),
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;
