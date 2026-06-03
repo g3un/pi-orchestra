@@ -41,6 +41,23 @@ test("waitWorkflow resolves immediately for terminal workflows", async () => {
   );
 });
 
+test("waitWorkflow resolves immediately for blocked workflows", async () => {
+  const store = new InMemoryAgentStore();
+  const tool = createWaitWorkflowTool({ store });
+  const workflow = workflowRun({
+    id: "blocked-flow",
+    state: "blocked",
+    result: { status: "blocked", summary: "Needs approval.", workerResults: [] },
+  });
+  store.saveWorkflow(workflow);
+
+  const output = await tool.execute({ id: workflow.id });
+
+  assert.equal(output.workflow, workflow);
+  assert.equal(output.timedOut, false);
+  assert.equal(output.message, "Workflow reached terminal state: blocked-flow; state=blocked result=blocked.");
+});
+
 test("waitWorkflow waits for workflow terminal state", async () => {
   const store = new InMemoryAgentStore();
   const tool = createWaitWorkflowTool({ store });

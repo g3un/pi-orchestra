@@ -220,6 +220,75 @@ test("workflow compete stage fails when every worker fails", async () => {
   );
 });
 
+test("workflow status returns the latest workflow by name", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra();
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  const waitWorkflowTool = createWaitWorkflowTool({ store });
+
+  await workflowTool.execute({
+    action: "start",
+    name: "status-flow",
+    goal: "Research the topic.",
+    stages: [
+      {
+        name: "collect",
+        goal: "Collect source material.",
+        strategy: "synthesize",
+        members: [{ name: "status-worker", profile: workerProfile }],
+      },
+    ],
+  });
+  await waitWorkflowTool.execute({ id: "status-flow", timeoutMs: null });
+
+  const output = await workflowTool.execute({ action: "status", id: "status-flow" });
+
+  assert.equal(output.workflow?.state, "success");
+  assert.match(output.message, /Workflow status-flow is success\./);
+  assert.match(output.message, /- collect: success/);
+});
+
+test("workflow start validates unique stage names and non-empty members", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra();
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "start",
+        name: "duplicate-stage-flow",
+        goal: "Research the topic.",
+        stages: [
+          {
+            name: "collect",
+            goal: "Collect source material.",
+            strategy: "synthesize",
+            members: [{ profile: workerProfile }],
+          },
+          {
+            name: "collect",
+            goal: "Collect more material.",
+            strategy: "synthesize",
+            members: [{ profile: workerProfile }],
+          },
+        ],
+      }),
+    /Workflow stage name "collect" is already in use\./,
+  );
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "start",
+        name: "empty-members-flow",
+        goal: "Research the topic.",
+        stages: [{ name: "collect", goal: "Collect source material.", strategy: "synthesize", members: [] }],
+      }),
+    /Workflow stage "collect" requires at least one member\./,
+  );
+});
+
 test("workflow uses a default restricted leader when omitted", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra();
@@ -250,6 +319,20 @@ test("workflow uses a default restricted leader when omitted", async () => {
   assert.match(leaderSpawn.profile.systemPrompt, /Do not perform new research/);
   assert.match(leaderSpawn.profile.systemPrompt, /bus reference context as stage deliberation evidence/);
   assert.match(leaderSpawn.profile.systemPrompt, /explicitly note unresolved gaps/);
+});
+
+test("workflow status and cancel report missing workflows", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra();
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  const statusOutput = await workflowTool.execute({ action: "status", id: "missing-flow" });
+  const cancelOutput = await workflowTool.execute({ action: "cancel", id: "missing-flow" });
+
+  assert.equal(statusOutput.workflow, undefined);
+  assert.equal(statusOutput.message, "Workflow missing-flow not found.");
+  assert.equal(cancelOutput.workflow, undefined);
+  assert.equal(cancelOutput.message, "Workflow missing-flow not found.");
 });
 
 test("workflow cancel closes workers spawned during cancellation race", async () => {

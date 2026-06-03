@@ -80,6 +80,24 @@ test("subagent status reads orchestra state", async () => {
   assert.equal(missingOutput.message, "Subagent missing not found.");
 });
 
+test("subagent status formats blocked results", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
+  const blockedRun = run({
+    id: "agent-1",
+    state: "blocked",
+    result: { status: "blocked", summary: "Need a decision from the leader." },
+  });
+  orchestra.runs.set(blockedRun.id, blockedRun);
+
+  const output = await tool.execute({ action: "status", id: blockedRun.id });
+
+  assert.equal(
+    output.message,
+    ["Subagent agent-1 is blocked.", "", "Result: blocked", "Need a decision from the leader."].join("\n"),
+  );
+});
+
 test("subagent message delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
@@ -106,6 +124,17 @@ test("subagent close delegates to orchestra", async () => {
   assert.ok(output.run);
   assert.equal(output.run.state, "closed");
   assert.equal(orchestra.getRun(existing.id)?.state, "closed");
+});
+
+test("subagent close handles missing runs", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createSubagentTool({ orchestra });
+
+  const output = await tool.execute({ action: "close", id: "missing" });
+
+  assert.equal(output.run, undefined);
+  assert.equal(output.message, "Closed subagent missing.");
+  assert.deepEqual(orchestra.closedIds, ["missing"]);
 });
 
 class FakeOrchestra implements OrchestraApi {

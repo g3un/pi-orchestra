@@ -63,7 +63,7 @@ export function createWaitWorkflowTool({ store }: WaitWorkflowToolDeps): WaitWor
       if (!workflow) return { timedOut: false, message: `Workflow ${input.id} not found.` };
 
       const result = await waitWorkflow(store, workflow.id, input.timeoutMs);
-      return { ...result, message: formatWaitWorkflowMessage(result.workflow, result.timedOut) };
+      return { ...result, message: formatWaitWorkflowMessage(result.workflow, result.timedOut, input.id) };
     },
   };
 }
@@ -135,9 +135,9 @@ function waitWorkflow(
   });
 }
 
-function formatWaitWorkflowMessage(workflow: WorkflowRun | undefined, timedOut: boolean): string {
+function formatWaitWorkflowMessage(workflow: WorkflowRun | undefined, timedOut: boolean, requestedId?: string): string {
   if (!workflow) return "Workflow not found.";
-  const label = formatNamedEntityLabel(workflow);
+  const label = requestedId === workflow.id ? workflow.id : formatNamedEntityLabel(workflow);
   const prefix = timedOut ? "Timed out waiting for" : "Workflow reached terminal state:";
   const result = workflow.result ? ` result=${workflow.result.status}` : "";
   return `${prefix} ${label}; state=${workflow.state}${result}.`;

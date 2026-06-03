@@ -69,6 +69,22 @@ test("bus publish delegates to orchestra", async () => {
   );
 });
 
+test("bus publish preserves an explicit sender", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createBusTool({ orchestra });
+  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
+  orchestra.buses.set(bus.id, bus);
+
+  const output = await tool.execute({ action: "publish", id: bus.id, message: "Peer context.", from: "agent-1" });
+
+  assert.deepEqual(orchestra.published, {
+    id: bus.id,
+    message: "Peer context.",
+    from: "agent-1",
+  });
+  assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
+});
+
 class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();

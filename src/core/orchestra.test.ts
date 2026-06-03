@@ -170,6 +170,21 @@ test("orchestra waitBusSettled resolves immediately for terminal bus runs", asyn
   assert.deepEqual(output.pendingRunIds, []);
 });
 
+test("orchestra waitBusSettled resolves empty buses immediately", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus();
+
+  const output = await orchestra.waitBusSettled(bus.id);
+
+  assert.equal(output.bus, bus);
+  assert.deepEqual(output.runs, []);
+  assert.deepEqual(output.runResults, []);
+  assert.equal(output.timedOut, false);
+  assert.deepEqual(output.pendingRunIds, []);
+});
+
 test("orchestra waitBusSettled waits for every current bus run to become terminal", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
@@ -258,6 +273,57 @@ test("orchestra waitNextRun returns an already completed unexcluded run", async 
     profile: secondRun.profile,
     state: secondRun.state,
   });
+  assert.equal(output.timedOut, false);
+});
+
+test("orchestra waitNextRun treats blocked runs as terminal", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus();
+  const blockedRun = run({
+    id: "agent-1",
+    busId: bus.id,
+    state: "blocked",
+    result: { status: "blocked", summary: "Need approval." },
+  });
+  const pendingRun = run({ id: "agent-2", busId: bus.id, state: "idle" });
+  store.saveRun(blockedRun);
+  store.saveRun(pendingRun);
+
+  const output = await orchestra.waitNextRun(bus.id);
+
+  assert.equal(output.run, blockedRun);
+  assert.deepEqual(output.runResult, {
+    runId: blockedRun.id,
+    name: blockedRun.name,
+    profile: blockedRun.profile,
+    state: "blocked",
+    result: { status: "blocked", summary: "Need approval." },
+  });
+  assert.deepEqual(output.pendingRunIds, [pendingRun.id]);
+  assert.equal(output.timedOut, false);
+});
+
+test("orchestra waitNextRun resolves excluded run names before waiting", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus();
+  const excludedRun = run({ id: "agent-1", name: "already-handled", busId: bus.id, state: "idle" });
+  const targetRun = run({ id: "agent-2", name: "target", busId: bus.id, state: "idle" });
+  store.saveRun(excludedRun);
+  store.saveRun(targetRun);
+
+  const waitPromise = orchestra.waitNextRun(bus.id, { excludeRunIds: [excludedRun.name], timeoutMs: 1000 });
+  store.saveRun({ ...excludedRun, state: "success" });
+  const completedTargetRun = { ...targetRun, state: "failed" as const };
+  store.saveRun(completedTargetRun);
+
+  const output = await waitPromise;
+
+  assert.equal(output.run, completedTargetRun);
+  assert.deepEqual(output.pendingRunIds, []);
   assert.equal(output.timedOut, false);
 });
 

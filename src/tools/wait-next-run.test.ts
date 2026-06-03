@@ -48,6 +48,29 @@ test("waitNextRun delegates to orchestra and formats the terminal run", async ()
   );
 });
 
+test("waitNextRun formats terminal runs without result payloads", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWaitNextRunTool({ orchestra });
+  const bus = orchestra.createBus();
+  const closedRun = run({ id: "agent-1", busId: bus.id, state: "closed" });
+  orchestra.nextRunResult = {
+    bus,
+    run: closedRun,
+    runResult: toWaitRunResult(closedRun),
+    runs: [closedRun],
+    runResults: [toWaitRunResult(closedRun)],
+    timedOut: false,
+    pendingRunIds: [],
+  };
+
+  const output = await tool.execute({ busId: bus.id });
+
+  assert.equal(
+    output.message,
+    [`Next terminal run on bus ${bus.id}: agent-1 is closed.`, "", "No result payload recorded."].join("\n"),
+  );
+});
+
 test("waitNextRun formats timeout without a terminal run", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWaitNextRunTool({ orchestra });

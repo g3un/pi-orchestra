@@ -96,6 +96,28 @@ test("workgroup compete strategy guides members to share facts without herding",
   assert.match(task, /Treat sibling bus messages as claims to verify, challenge, or refute/);
 });
 
+test("workgroup generates unique member names from duplicate profile names", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool({ orchestra });
+  const bus = orchestra.createBus({ name: "backend-work" });
+
+  const output = await tool.execute({
+    busId: bus.id,
+    goal: "Review backend changes.",
+    strategy: "synthesize",
+    members: [{ profile: backendProfile }, { profile: backendProfile }],
+  });
+
+  assert.deepEqual(
+    output.runs.map((run) => run.name),
+    ["backend", "backend-2"],
+  );
+  assert.deepEqual(
+    orchestra.spawned.map((spawn) => spawn.options?.name),
+    ["backend", "backend-2"],
+  );
+});
+
 test("workgroup rejects missing buses", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool({ orchestra });
@@ -164,6 +186,43 @@ test("workgroup compete settlement closes pending runs after first success", asy
   assert.equal(orchestra.runs.get(pending.id)?.state, "closed");
 });
 
+test("workgroup compete settlement keeps waiting after blocked results until success", async () => {
+  const orchestra = new FakeOrchestra();
+  const bus = orchestra.createBus({ name: "blocked-then-success" });
+  const blocked = run({
+    id: "blocked",
+    name: "blocked",
+    busId: bus.id,
+    state: "blocked",
+    result: { status: "blocked", summary: "Need input." },
+  });
+  const winner = run({
+    id: "winner",
+    name: "winner",
+    busId: bus.id,
+    state: "success",
+    result: { status: "success", summary: "Solved." },
+  });
+  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "idle" });
+  orchestra.runs.set(blocked.id, blocked);
+  orchestra.runs.set(winner.id, winner);
+  orchestra.runs.set(pending.id, pending);
+
+  const output = await settleWorkgroupRuns(orchestra, bus.id, "compete");
+
+  assert.equal(output.status, "success");
+  assert.equal(output.winner?.runId, winner.id);
+  assert.deepEqual(
+    output.completedResults.map((result) => result.runId),
+    [blocked.id, winner.id],
+  );
+  assert.deepEqual(
+    output.workerResults.map((result) => result.runId),
+    [winner.id],
+  );
+  assert.deepEqual(orchestra.closedIds, [pending.id]);
+});
+
 test("workgroup synthesize settlement waits for every run", async () => {
   const orchestra = new FakeOrchestra();
   const bus = orchestra.createBus({ name: "synthesize-work" });
@@ -192,6 +251,35 @@ test("workgroup synthesize settlement waits for every run", async () => {
     [first.id, second.id],
   );
   assert.deepEqual(orchestra.closedIds, []);
+});
+
+test("workgroup synthesize settlement reports blocked when no run succeeds", async () => {
+  const orchestra = new FakeOrchestra();
+  const bus = orchestra.createBus({ name: "blocked-synthesize" });
+  const blocked = run({
+    id: "blocked",
+    name: "blocked",
+    busId: bus.id,
+    state: "blocked",
+    result: { status: "blocked", summary: "Need decision." },
+  });
+  const failed = run({
+    id: "failed",
+    name: "failed",
+    busId: bus.id,
+    state: "failed",
+    result: { status: "failed", summary: "Could not finish." },
+  });
+  orchestra.runs.set(blocked.id, blocked);
+  orchestra.runs.set(failed.id, failed);
+
+  const output = await settleWorkgroupRuns(orchestra, bus.id, "synthesize");
+
+  assert.equal(output.status, "blocked");
+  assert.deepEqual(
+    output.workerResults.map((result) => result.runId),
+    [blocked.id, failed.id],
+  );
 });
 
 test("workgroup closes successfully spawned members when launch is incomplete", async () => {

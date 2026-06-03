@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import type { AgentRun } from "./core/subagent.ts";
+import type { WorkflowRun } from "./core/workflow.ts";
+import { InMemoryAgentStore } from "./adapters/in-memory-store.ts";
+import {
+  closeAgentRuns,
+  createEntityIdentity,
+  DEFAULT_WAIT_TIMEOUT_MS,
+  findWorkflow,
+  formatError,
+  formatNamedEntityLabel,
+  indent,
+  isTerminalAgentState,
+  normalizeEntityName,
+  requireWorkflow,
+  resolveWaitTimeoutMs,
+  slugify,
+  toWaitRunResult,
+} from "./utils.ts";
+
+test("slugify and normalizeEntityName validate stable short names", () => {
+  assert.equal(slugify("  Frontend Audit!! "), "frontend-audit");
+  assert.equal(normalizeEntityName("  Reviewer A  ", "Agent"), "Reviewer A");
+  assert.throws(() => normalizeEntityName("   ", "Agent"), /Agent name must not be empty\./);
+  assert.throws(() => normalizeEntityName("x".repeat(65), "Agent"), /Agent name must be 64 characters or fewer\./);
+});
+
+test("createEntityIdentity accepts unique requested names and rejects duplicates", () => {
+  const existing = [{ id: "reviewer", name: "Reviewer" }];
+
+  assert.deepEqual(createEntityIdentity("Security Lead", "agent", existing, "Agent"), {
+    id: "security-lead",
+    name: "Security Lead",
+  });
+  assert.throws(() => createEntityIdentity("Reviewer", "agent", existing, "Agent"), /already in use/);
+  assert.throws(() => createEntityIdentity("!!!", "agent", existing, "Agent"), /must contain letters or numbers/);
+});
+
+test("createEntityIdentity generates collision-free names from auto seeds", () => {
+  const existing = [
+    { id: "researcher", name: "researcher" },
+    { id: "researcher-2", name: "researcher-2" },
+  ];
+
+  assert.deepEqual(createEntityIdentity(undefined, "Researcher", existing, "Agent"), {
+    id: "researcher-3",
+    name: "researcher-3",
+  });
+});
+
+test("format helpers handle names, indentation, and unknown errors", () => {
+  assert.equal(formatNamedEntityLabel({ id: "agent-1", name: "Reviewer" }), "Reviewer (agent-1)");
+  assert.equal(formatNamedEntityLabel({ id: "agent-1", name: "agent-1" }), "agent-1");
+  assert.equal(indent("one\ntwo", "> "), "> one\n> two");
+  assert.equal(formatError(new Error("Boom")), "Boom");
+  assert.equal(formatError("plain"), "plain");
+});
+
+test("wait timeout resolution applies defaults and validates positive values", () => {
+  assert.equal(resolveWaitTimeoutMs("wait", undefined), DEFAULT_WAIT_TIMEOUT_MS);
+  assert.equal(resolveWaitTimeoutMs("wait", null), null);
+  assert.equal(resolveWaitTimeoutMs("wait", 250), 250);
+  assert.throws(() => resolveWaitTimeoutMs("wait", 0), /wait timeoutMs must be positive/);
+  assert.throws(() => resolveWaitTimeoutMs("wait", Number.POSITIVE_INFINITY), /wait timeoutMs must be positive/);
+});
+
+test("terminal agent state matches the shared AgentState model", () => {
+  assert.equal(isTerminalAgentState("idle"), false);
+  assert.equal(isTerminalAgentState("success"), true);
+  assert.equal(isTerminalAgentState("blocked"), true);
+  assert.equal(isTerminalAgentState("failed"), true);
+  assert.equal(isTerminalAgentState("closed"), true);
+});
+
+test("workflow lookup helpers resolve by id or name", () => {
+  const store = new InMemoryAgentStore();
+  const workflow = workflowRun({ id: "research-flow", name: "Research Flow" });
+  store.saveWorkflow(workflow);
+
+  assert.equal(findWorkflow(store, workflow.id), workflow);
+  assert.equal(findWorkflow(store, workflow.name), workflow);
+  assert.equal(requireWorkflow(store, workflow.id), workflow);
+  assert.throws(() => requireWorkflow(store, "missing"), /Workflow missing not found\./);
+});
+
+test("toWaitRunResult copies result payloads only when present", () => {
+  const idleRun = run({ state: "idle" });
+  const successRun = run({
+    id: "agent-2",
+    state: "success",
+    result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
+  });
+
+  assert.deepEqual(toWaitRunResult(idleRun), {
+    runId: idleRun.id,
+    name: idleRun.name,
+    profile: idleRun.profile,
+    state: "idle",
+  });
+  assert.deepEqual(toWaitRunResult(successRun), {
+    runId: successRun.id,
+    name: successRun.name,
+    profile: successRun.profile,
+    state: "success",
+    result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
+  });
+});
+
+test("closeAgentRuns closes unique run ids and tolerates close failures", async () => {
+  const closedIds: string[] = [];
+  await closeAgentRuns(
+    {
+      closeAgent(id: string) {
+        closedIds.push(id);
+        if (id === "broken") throw new Error("Close failed.");
+        return Promise.resolve(undefined);
+      },
+    } as Parameters<typeof closeAgentRuns>[0],
+    ["agent-1", "agent-1", "broken", "agent-2"],
+  );
+
+  assert.deepEqual(closedIds, ["agent-1", "broken", "agent-2"]);
+});
+
+function run(overrides: Partial<AgentRun> = {}): AgentRun {
+  const id = overrides.id ?? "agent-1";
+  return {
+    id,
+    name: overrides.name ?? id,
+    profile: "researcher",
+    task: "Inspect the code.",
+    busId: "bus-1",
+    state: "idle",
+    ...overrides,
+  };
+}
+
+function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  return {
+    id: "workflow-1",
+    name: "workflow-1",
+    goal: "Complete the workflow.",
+    state: "idle",
+    currentStageIndex: 0,
+    stages: [],
+    ...overrides,
+  };
+}
