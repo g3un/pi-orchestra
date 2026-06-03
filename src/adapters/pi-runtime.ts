@@ -83,6 +83,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const entry = this.requireEntry(id);
     const run = this.requireRun(id);
     this.assertOpenRun(run);
+    if (run.state === "running") throw new Error(`Agent ${id} is already running.`);
 
     const resumedRun: AgentRun = {
       ...run,

@@ -30,6 +30,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   const bus = orchestra.createBus();
 
   const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id);
+  store.saveRun({ ...run, state: "finished" });
   const resumedRun = await orchestra.resumeAgent(run.id, "Continue.");
   const closedRun = await orchestra.closeAgent(run.id);
 
@@ -53,6 +54,17 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.deepEqual(runtime.published, { busId: bus.id, message: "New constraint.", from: "main" });
   assert.deepEqual(output.bus.messages, [output.busMessage]);
   assert.equal(store.getBus(bus.id), output.bus);
+});
+
+test("orchestra rejects resume for running agents", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const runningRun = run({ id: "agent-1", state: "running" });
+  store.saveRun(runningRun);
+
+  await assert.rejects(() => orchestra.resumeAgent(runningRun.id, "Continue."), /Agent agent-1 is already running\./);
+  assert.equal(runtime.resumed, undefined);
 });
 
 test("orchestra waitRuns resolves immediately for terminal runs", async () => {

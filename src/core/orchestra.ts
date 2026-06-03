@@ -65,6 +65,8 @@ export class Orchestra implements OrchestraApi {
   }
 
   async resumeAgent(id: string, message: string): Promise<AgentRun> {
+    const run = this.requireRun(id);
+    if (run.state === "running") throw new Error(`Agent ${id} is already running.`);
     return await this.runtime.resume(id, message);
   }
 
@@ -137,6 +139,12 @@ export class Orchestra implements OrchestraApi {
     const bus = this.store.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
     return bus;
+  }
+
+  private requireRun(id: string): AgentRun {
+    const run = this.store.getRun(id);
+    if (!run) throw new Error(`Agent ${id} not found.`);
+    return run;
   }
 }
 
