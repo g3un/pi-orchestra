@@ -1,6 +1,9 @@
+import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { AgentProfile, AgentRun } from "../core/agent.ts";
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
+import { AgentProfileParams, withDefaultProfileModel } from "./subagent.ts";
 
 export type WorkgroupMode = "explore" | "council";
 
@@ -33,6 +36,45 @@ export interface WorkgroupTool {
 export interface WorkgroupToolDeps {
   orchestra: OrchestraApi;
 }
+
+const WorkgroupMemberParams = Type.Object(
+  {
+    profile: AgentProfileParams,
+    name: Type.Optional(
+      Type.String({
+        description: "Optional short, human-readable globally unique run name for this workgroup member.",
+      }),
+    ),
+    assignment: Type.Optional(
+      Type.String({
+        description: "Optional member-specific assignment or focus within the shared goal.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const WorkgroupToolParams = Type.Object(
+  {
+    busId: Type.String({
+      description:
+        "Existing work bus id or name. Workgroup does not create buses; create one with bus action=create first.",
+    }),
+    goal: Type.String({
+      description: "Shared workgroup goal that every member should contribute to.",
+    }),
+    mode: Type.String({
+      enum: ["explore", "council"],
+      description:
+        "Coordination style. explore fans out diverse approaches; council asks domain experts to advise the main-agent leader.",
+    }),
+    members: Type.Array(WorkgroupMemberParams, {
+      description: "Subagents to spawn onto the existing bus as workgroup members.",
+      minItems: 1,
+    }),
+  },
+  { additionalProperties: false },
+);
 
 interface PreparedWorkgroupMember extends WorkgroupMember {
   name: string;
@@ -91,6 +133,62 @@ export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): Workgroup
         message: formatWorkgroupMessage(bus, preparedInput, runs),
       };
     },
+  };
+}
+
+export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => WorkgroupTool) {
+  return defineTool({
+    name: "workgroup",
+    label: "Workgroup",
+    description:
+      "Launch multiple subagents onto an existing work bus so the main agent can lead exploration or expert coordination.",
+    promptSnippet:
+      "Attach several subagents to an existing bus for explore fan-out or council-style expert collaboration.",
+    promptGuidelines: [
+      "Create a bus first with bus action=create; workgroup requires an existing busId and never creates a bus automatically.",
+      "Use mode=explore to fan out diverse approaches: members may share facts, evidence, dead ends, and constraints with siblings, but should keep conclusions/recommendations until finish.",
+      "Use mode=council when the main agent should act as leader and coordinate domain experts that actively exchange conclusions, rebuttals, and next actions.",
+      "Treat publish_bus as a peer-reference channel between members, not as a live channel to the leader.",
+      "Use waitNextRun to receive finished or blocked members; if a member needs leader action, respond with subagent message.",
+    ],
+    parameters: WorkgroupToolParams,
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const input = withDefaultModelsForWorkgroup(toWorkgroupInput(params as RawWorkgroupParams), ctx);
+      const output = await resolveTool(ctx).execute(input);
+
+      return {
+        content: [{ type: "text", text: output.message }],
+        details: output,
+      };
+    },
+  });
+}
+
+function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
+  if (!params.busId) throw new Error("workgroup requires busId.");
+  if (!params.goal) throw new Error("workgroup requires goal.");
+  if (!params.mode) throw new Error("workgroup requires mode.");
+  if (!params.members || params.members.length === 0) throw new Error("workgroup requires members.");
+
+  return {
+    busId: params.busId,
+    goal: params.goal,
+    mode: params.mode,
+    members: params.members.map((member, index) => {
+      if (!member.profile) throw new Error(`workgroup member ${index + 1} requires profile.`);
+      return { profile: member.profile, name: member.name, assignment: member.assignment };
+    }),
+  };
+}
+
+function withDefaultModelsForWorkgroup(input: WorkgroupInput, ctx: ExtensionContext): WorkgroupInput {
+  return {
+    ...input,
+    members: input.members.map((member) => ({
+      ...member,
+      profile: withDefaultProfileModel(member.profile, ctx),
+    })),
   };
 }
 
@@ -252,3 +350,14 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+type RawWorkgroupParams = {
+  busId?: string;
+  goal?: string;
+  mode?: WorkgroupMode;
+  members?: Array<{
+    profile?: AgentProfile;
+    name?: string;
+    assignment?: string;
+  }>;
+};
