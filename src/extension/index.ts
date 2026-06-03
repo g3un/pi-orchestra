@@ -1,9 +1,9 @@
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AgentProfile } from "../core/agent.ts";
-import { InMemoryAgentStore } from "../core/in-memory-store.ts";
+import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
+import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
 import { Orchestra } from "../core/orchestra.ts";
-import { PiAgentRuntime } from "../core/pi-runtime.ts";
 import type { BusInput } from "../tools/bus.ts";
 import { createBusTool, type BusTool } from "../tools/bus.ts";
 import type { SubagentInput } from "../tools/subagent.ts";

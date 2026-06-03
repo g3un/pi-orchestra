@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "./agent.ts";
 import type { BusMessage } from "./bus.ts";
-import { InMemoryAgentStore } from "./in-memory-store.ts";
+import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { Orchestra } from "./orchestra.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import type { AgentStore } from "./store.ts";

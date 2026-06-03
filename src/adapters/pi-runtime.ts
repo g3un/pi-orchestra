@@ -7,11 +7,11 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentResult, AgentRun } from "./agent.ts";
-import type { Bus, BusMessage } from "./bus.ts";
-import { formatBusMessages } from "./bus-format.ts";
-import type { AgentRuntime } from "./runtime.ts";
-import type { AgentStore } from "./store.ts";
+import type { AgentProfile, AgentResult, AgentRun } from "../core/agent.ts";
+import type { Bus, BusMessage } from "../core/bus.ts";
+import { formatBusMessages } from "../core/bus-format.ts";
+import type { AgentRuntime } from "../core/runtime.ts";
+import type { AgentStore } from "../core/store.ts";
 
 export interface PiAgentRuntimeOptions {
   store: AgentStore;

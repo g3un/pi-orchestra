@@ -1,6 +1,6 @@
-import type { AgentRun } from "./agent.ts";
-import type { Bus, BusMessage } from "./bus.ts";
-import type { AgentStore } from "./store.ts";
+import type { AgentRun } from "../core/agent.ts";
+import type { Bus, BusMessage } from "../core/bus.ts";
+import type { AgentStore } from "../core/store.ts";
 
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
