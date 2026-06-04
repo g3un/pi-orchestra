@@ -43,7 +43,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     profile: "researcher",
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
   });
   assert.equal(store.getRun(run.id), run);
   assert.deepEqual(resolveModel.mock.calls, [["mock-provider/mock-model"]]);
@@ -170,7 +170,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   assert.equal(finishOutput.terminate, true);
   assert.deepEqual(finishOutput.details, { status: "success", summary: "Inspection complete.", data: { files: 3 } });
   assert.deepEqual(store.getRun(run.id)?.result, finishOutput.details);
-  assert.equal(store.getRun(run.id)?.state, "success");
+  assert.equal(store.getRun(run.id)?.state, "idle");
 
   await runtime.close(run.id);
   assert.equal(session.disposed, true);
@@ -180,7 +180,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   );
 });
 
-test("pi runtime steers streaming idle runs and restarts terminal runs on message", async () => {
+test("pi runtime steers streaming running runs and restarts idle result runs on message", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
   const session = queueSession();
@@ -200,16 +200,16 @@ test("pi runtime steers streaming idle runs and restarts terminal runs on messag
 
   store.saveRun({
     ...run,
-    state: "blocked",
+    state: "idle",
     result: { status: "blocked", summary: "Need direction." },
   });
   session.isStreaming = false;
 
   const restartedRun = await runtime.message(run.id, "Use option B.");
 
-  assert.equal(restartedRun.state, "idle");
+  assert.equal(restartedRun.state, "running");
   assert.equal(restartedRun.result, undefined);
-  assert.equal(store.getRun(run.id)?.state, "idle");
+  assert.equal(store.getRun(run.id)?.state, "running");
   assert.equal(session.promptCalls.at(-1)?.message, "Use option B.");
 });
 
@@ -235,7 +235,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
       name: "Agent 1",
     },
   );
-  const failedRun = await waitForRunState(store, "agent-1", "failed");
+  const failedRun = await waitForRunResultStatus(store, "agent-1", "failed");
   const session = queuedSessions[0];
 
   assert.equal(session?.promptCalls.length, 2);
@@ -387,14 +387,18 @@ function model(overrides: Partial<Model<"openai-responses">> = {}): Model<"opena
   };
 }
 
-function waitForRunState(store: InMemoryAgentStore, id: string, state: AgentRun["state"]): Promise<AgentRun> {
+function waitForRunResultStatus(
+  store: InMemoryAgentStore,
+  id: string,
+  status: NonNullable<AgentRun["result"]>["status"],
+): Promise<AgentRun> {
   const currentRun = store.getRun(id);
-  if (currentRun?.state === state) return Promise.resolve(currentRun);
+  if (currentRun?.result?.status === status) return Promise.resolve(currentRun);
 
   return new Promise((resolve) => {
     const unsubscribe = store.subscribeRuns(
       (run) => {
-        if (run.state !== state) return;
+        if (run.result?.status !== status) return;
         unsubscribe();
         resolve(run);
       },

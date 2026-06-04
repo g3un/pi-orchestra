@@ -2,7 +2,7 @@ import type { AgentRun, AgentRunResult, AgentState } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupStrategy } from "../core/workgroup.ts";
-import { formatNamedEntityLabel, isTerminalAgentState, toAgentRunResult } from "../utils.ts";
+import { formatNamedEntityLabel, isAgentRunActive, isTerminalAgentState, toAgentRunResult } from "../utils.ts";
 
 export const ORCHESTRA_EVENT_CUSTOM_TYPE = "pi-orchestra.event";
 
@@ -51,7 +51,7 @@ export class OrchestraEventController {
   private readonly store: AgentStore;
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
   private readonly flushDelayMs: number;
-  private readonly runStates = new Map<string, AgentState>();
+  private readonly runFinished = new Map<string, boolean>();
   private readonly workflowStates = new Map<string, AgentState>();
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
@@ -65,7 +65,7 @@ export class OrchestraEventController {
     this.sendEvents = options.sendEvents;
     this.flushDelayMs = options.flushDelayMs ?? 50;
 
-    for (const run of this.store.listRuns()) this.runStates.set(run.id, run.state);
+    for (const run of this.store.listRuns()) this.runFinished.set(run.id, isAgentFinishRun(run));
     for (const workflow of this.store.listWorkflows()) this.workflowStates.set(workflow.id, workflow.state);
 
     this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run), undefined);
@@ -115,10 +115,11 @@ export class OrchestraEventController {
   }
 
   private handleRunSaved(run: AgentRun): void {
-    const previousState = this.runStates.get(run.id);
-    this.runStates.set(run.id, run.state);
+    const wasFinished = this.runFinished.get(run.id) ?? false;
+    const isFinished = isAgentFinishRun(run);
+    this.runFinished.set(run.id, isFinished);
 
-    if (!isAgentFinishState(run.state) || isAgentFinishState(previousState)) return;
+    if (!isFinished || wasFinished) return;
     if (this.isWorkflowBus(run.busId)) return;
 
     const registeredWorkgroup = this.mainWorkgroupsByBusId.get(run.busId);
@@ -153,7 +154,8 @@ export class OrchestraEventController {
     const previousState = this.workflowStates.get(workflow.id);
     this.workflowStates.set(workflow.id, workflow.state);
 
-    if (!isTerminalAgentState(workflow.state) || isTerminalWorkflowState(previousState)) return;
+    if (!isTerminalAgentState(workflow.state) || (previousState !== undefined && isTerminalAgentState(previousState)))
+      return;
     this.queueEvent({ type: "workflow.finished", workflow });
   }
 
@@ -164,14 +166,14 @@ export class OrchestraEventController {
   private getPendingWorkgroupRunIds(busId: string, runIds: Set<string>): string[] {
     return this.store
       .listRuns()
-      .filter((run) => run.busId === busId && runIds.has(run.id) && run.state === "idle")
+      .filter((run) => run.busId === busId && runIds.has(run.id) && isAgentRunActive(run))
       .map((run) => run.id);
   }
 
   private getPendingBusRunIds(busId: string): string[] {
     return this.store
       .listRuns()
-      .filter((run) => run.busId === busId && run.state === "idle")
+      .filter((run) => run.busId === busId && isAgentRunActive(run))
       .map((run) => run.id);
   }
 
@@ -198,11 +200,11 @@ function formatOrchestraEvent(event: OrchestraMainEvent): string {
   const lines =
     event.type === "workgroup.member_finished"
       ? [
-          `- Workgroup member finished on bus ${event.busId}: ${runLabel} is ${event.run.state}.`,
+          `- Workgroup member finished on bus ${event.busId}: ${runLabel} ${formatRunFinishedState(event.run)}.`,
           `  Strategy: ${event.strategy}`,
           `  Pending workgroup run ids: ${event.pendingRunIds.length > 0 ? event.pendingRunIds.join(", ") : "none"}`,
         ]
-      : [`- Subagent finished on bus ${event.busId}: ${runLabel} is ${event.run.state}.`];
+      : [`- Subagent finished on bus ${event.busId}: ${runLabel} ${formatRunFinishedState(event.run)}.`];
 
   lines.push(...formatRunResultLines(event.run));
   return lines.join("\n");
@@ -225,10 +227,14 @@ function formatRunResultLines(run: AgentRunResult): string[] {
   return lines;
 }
 
-function isAgentFinishState(state: AgentState | undefined): boolean {
-  return state === "success" || state === "blocked" || state === "failed";
+function formatRunFinishedState(run: AgentRunResult): string {
+  return run.result ? `finished with ${run.result.status}; state=${run.state}` : `is ${run.state}`;
 }
 
-function isTerminalWorkflowState(state: AgentState | undefined): boolean {
-  return state !== undefined && isTerminalAgentState(state);
+function isAgentFinishRun(run: AgentRun | AgentRunResult): boolean {
+  return run.result !== undefined || isAgentResultState(run.state);
+}
+
+function isAgentResultState(state: AgentState | undefined): boolean {
+  return state === "success" || state === "blocked" || state === "failed";
 }

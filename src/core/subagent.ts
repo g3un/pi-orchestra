@@ -1,7 +1,9 @@
 export const AGENT_RESULT_STATUS_VALUES = ["success", "blocked", "failed"] as const;
 export type AgentResultStatus = (typeof AGENT_RESULT_STATUS_VALUES)[number];
 
-export type AgentState = "idle" | "closed" | AgentResultStatus;
+// AgentRun uses running/idle/closed for lifecycle; success/blocked/failed are retained in AgentState
+// because workflows and older run records use the same shared state vocabulary.
+export type AgentState = "idle" | "running" | "closed" | AgentResultStatus;
 
 export interface AgentProfile {
   name: string;

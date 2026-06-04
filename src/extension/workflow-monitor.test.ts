@@ -12,8 +12,8 @@ const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
 
 test("workflow monitor renders the current stage progress", () => {
   const store = new InMemoryAgentStore();
-  store.saveRun(run({ id: "collector", name: "collector", state: "idle" }));
-  store.saveRun(run({ id: "critic", name: "critic", state: "success" }));
+  store.saveRun(run({ id: "collector", name: "collector", state: "running" }));
+  store.saveRun(run({ id: "critic", name: "critic", state: "idle", result: { status: "success", summary: "Done." } }));
   store.saveWorkflow(
     workflowRun({
       id: "research-flow",
@@ -37,8 +37,10 @@ test("workflow monitor renders the current stage progress", () => {
 
 test("workflow monitor counts the stage leader while synthesizing", () => {
   const store = new InMemoryAgentStore();
-  store.saveRun(run({ id: "collector", name: "collector", state: "success" }));
-  store.saveRun(run({ id: "collect-leader", name: "collect-leader", state: "idle" }));
+  store.saveRun(
+    run({ id: "collector", name: "collector", state: "idle", result: { status: "success", summary: "Done." } }),
+  );
+  store.saveRun(run({ id: "collect-leader", name: "collect-leader", state: "running" }));
   store.saveWorkflow(
     workflowRun({
       stages: [
@@ -111,7 +113,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     profile: "researcher",
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
   };
 }
@@ -122,7 +124,7 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     name: "workflow",
     goal: "Complete the workflow.",
     startedAtMs: WORKFLOW_STARTED_AT_MS,
-    state: "idle",
+    state: "running",
     currentStageIndex: 0,
     stages: [],
     ...overrides,

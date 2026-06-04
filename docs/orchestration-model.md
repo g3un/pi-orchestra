@@ -33,8 +33,10 @@ Every subagent must call the `finish` tool with:
 - `summary`: concise handoff text
 - `data`: optional structured output
 
-State follows the result status. `closed` is separate and means the run has been
-disposed.
+While a subagent is working, its state is `running`. Calling `finish` records the
+result status and returns the reusable run to `idle`, so the leader can message it
+again without recreating the session. `closed` is separate and means the run has
+been disposed.
 
 ## Workgroup
 

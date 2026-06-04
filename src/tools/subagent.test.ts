@@ -51,7 +51,7 @@ test("subagent status reads orchestra state", async () => {
   const tool = createSubagentTool({ orchestra });
   const successRun = run({
     id: "agent-1",
-    state: "success",
+    state: "idle",
     result: {
       status: "success",
       summary: "Found the relevant implementation.",
@@ -67,7 +67,7 @@ test("subagent status reads orchestra state", async () => {
   assert.equal(
     output.message,
     [
-      "Subagent agent-1 is success.",
+      "Subagent agent-1 is idle.",
       "",
       "Result: success",
       "Found the relevant implementation.",
@@ -85,7 +85,7 @@ test("subagent status formats blocked results", async () => {
   const tool = createSubagentTool({ orchestra });
   const blockedRun = run({
     id: "agent-1",
-    state: "blocked",
+    state: "idle",
     result: { status: "blocked", summary: "Need a decision from the leader." },
   });
   orchestra.runs.set(blockedRun.id, blockedRun);
@@ -94,7 +94,7 @@ test("subagent status formats blocked results", async () => {
 
   assert.equal(
     output.message,
-    ["Subagent agent-1 is blocked.", "", "Result: blocked", "Need a decision from the leader."].join("\n"),
+    ["Subagent agent-1 is idle.", "", "Result: blocked", "Need a decision from the leader."].join("\n"),
   );
 });
 
@@ -108,7 +108,7 @@ test("subagent message delegates to orchestra", async () => {
 
   assert.deepEqual(orchestra.messaged, { id: existing.id, message: "Continue." });
   assert.ok(output.run);
-  assert.equal(output.run.state, "idle");
+  assert.equal(output.run.state, "running");
   assert.equal(orchestra.getRun(existing.id, { busId: undefined }), output.run);
 });
 
@@ -178,7 +178,7 @@ class FakeOrchestra implements OrchestraApi {
       profile: profile.name,
       task,
       busId,
-      state: "idle",
+      state: "running",
     });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
@@ -197,7 +197,7 @@ class FakeOrchestra implements OrchestraApi {
   async messageAgent(id: string, message: string, _options: { busId: string | undefined }): Promise<AgentRun> {
     this.messaged = { id, message };
     const current = this.runs.get(id) ?? run({ id });
-    const messagedRun = { ...current, state: "idle" as const };
+    const messagedRun = { ...current, state: "running" as const, result: undefined };
     this.runs.set(id, messagedRun);
     return messagedRun;
   }

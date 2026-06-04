@@ -9,7 +9,8 @@ import {
   closeAgentRuns,
   formatError,
   formatNamedEntityLabel,
-  isTerminalAgentState,
+  isAgentRunActive,
+  isAgentRunFinished,
   normalizeEntityName,
   slugify,
   toAgentRunResult,
@@ -283,7 +284,7 @@ class WorkgroupSettlementCollector {
       };
 
       const observeRun = (run: AgentRun) => {
-        if (settled || !this.runIds.has(run.id) || !isTerminalAgentState(run.state)) return;
+        if (settled || !this.runIds.has(run.id) || !isAgentRunFinished(run)) return;
         this.recordTerminalRun(run);
         finishFromCurrentState();
       };
@@ -312,7 +313,7 @@ class WorkgroupSettlementCollector {
   }
 
   private recordTerminalRun(run: AgentRun): void {
-    if (!isTerminalAgentState(run.state) || this.completedRunIds.has(run.id)) return;
+    if (!isAgentRunFinished(run) || this.completedRunIds.has(run.id)) return;
 
     this.completedRunIds.add(run.id);
     this.completedResults.push(toAgentRunResult(run));
@@ -321,12 +322,15 @@ class WorkgroupSettlementCollector {
   private isSettled(): boolean {
     return [...this.runIds].every((runId) => {
       const run = this.store.getRun(runId);
-      return run !== undefined && isTerminalAgentState(run.state);
+      return run !== undefined && isAgentRunFinished(run);
     });
   }
 
   private getPendingRunIds(): string[] {
-    return [...this.runIds].filter((runId) => this.store.getRun(runId)?.state === "idle");
+    return [...this.runIds].filter((runId) => {
+      const run = this.store.getRun(runId);
+      return run !== undefined && isAgentRunActive(run);
+    });
   }
 }
 

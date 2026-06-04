@@ -12,6 +12,7 @@ import {
   formatError,
   findWorkflow,
   formatNamedEntityLabel,
+  isAgentRunFinished,
   isTerminalAgentState,
   normalizeEntityName,
   requireWorkflow,
@@ -200,7 +201,7 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
 
     const stageIndex = workflow.stages.findIndex((stage) => stage.state === "idle" && !stage.phase);
     if (stageIndex < 0) {
-      if (workflow.state === "idle")
+      if (workflow.state === "running")
         deps.store.saveWorkflow({
           ...workflow,
           state: "success",
@@ -222,7 +223,7 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
   const stage = workflow.stages[stageIndex];
   const bus = deps.orchestra.createBus({ name: `${workflow.name}-${stage.name}` });
   updateStage(deps.store, workflow, stageIndex, {
-    state: "idle",
+    state: "running",
     phase: "workers",
     startedAtMs: Date.now(),
     busId: bus.id,
@@ -285,7 +286,7 @@ async function runStageLeader(
   }
 
   updateStage(deps.store, requireWorkflow(deps.store, workflowId), stageIndex, {
-    state: "idle",
+    state: "running",
     phase: "leader",
     leaderRunId: leaderRun.id,
   });
@@ -324,7 +325,7 @@ function createWorkflowRun(
     ...identity,
     goal: input.goal,
     startedAtMs,
-    state: "idle",
+    state: "running",
     currentStageIndex: 0,
     stages: input.stages.map((stage) => {
       const stageRun = {
@@ -619,13 +620,13 @@ function formatStageOutput(output: WorkflowStageOutput): string {
 
 function terminalRunEvent(store: AgentStore, runId: string): Promise<AgentRun> {
   const initialRun = store.getRun(runId);
-  if (initialRun && isTerminalAgentState(initialRun.state)) return Promise.resolve(initialRun);
+  if (initialRun && isAgentRunFinished(initialRun)) return Promise.resolve(initialRun);
 
   return new Promise((resolve) => {
     let unsubscribe: () => void = () => undefined;
     unsubscribe = store.subscribeRuns(
       (run) => {
-        if (!isTerminalAgentState(run.state)) return;
+        if (!isAgentRunFinished(run)) return;
 
         unsubscribe();
         resolve(run);
@@ -645,7 +646,7 @@ function formatWorkflowMessage(
 ): string {
   const parts = [headline, "", `Goal: ${workflow.goal}`, "", "Stages:"];
   for (const [index, stage] of workflow.stages.entries()) {
-    const current = index === workflow.currentStageIndex && workflow.state === "idle" ? " current" : "";
+    const current = index === workflow.currentStageIndex && workflow.state === "running" ? " current" : "";
     parts.push(`- ${stage.name}: ${stage.state}${current}${stage.busId ? ` bus=${stage.busId}` : ""}`);
   }
   if (workflow.result) parts.push("", "Result:", formatStageOutput(workflow.result));

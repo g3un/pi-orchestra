@@ -57,6 +57,7 @@ test("format helpers handle names, indentation, and unknown errors", () => {
 
 test("terminal agent state matches the shared AgentState model", () => {
   assert.equal(isTerminalAgentState("idle"), false);
+  assert.equal(isTerminalAgentState("running"), false);
   assert.equal(isTerminalAgentState("success"), true);
   assert.equal(isTerminalAgentState("blocked"), true);
   assert.equal(isTerminalAgentState("failed"), true);
@@ -78,7 +79,7 @@ test("toAgentRunResult copies result payloads only when present", () => {
   const idleRun = run({ state: "idle" });
   const successRun = run({
     id: "agent-2",
-    state: "success",
+    state: "idle",
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
 
@@ -92,7 +93,7 @@ test("toAgentRunResult copies result payloads only when present", () => {
     runId: successRun.id,
     name: successRun.name,
     profile: successRun.profile,
-    state: "success",
+    state: "idle",
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
 });

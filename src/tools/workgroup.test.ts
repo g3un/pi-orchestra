@@ -73,8 +73,8 @@ test("workgroup launches members on an existing bus", async () => {
       "Launched synthesize workgroup on bus auth-work with 2 run(s).",
       "",
       "Runs:",
-      "- security-review: idle",
-      "- backend-review: idle",
+      "- security-review: running",
+      "- backend-review: running",
       "",
       "Pi-orchestra will deliver workgroup.member_finished events as members finish.",
     ].join("\n"),
@@ -175,7 +175,7 @@ test("workgroup compete settlement closes pending runs after first success", asy
     state: "success",
     result: { status: "success", summary: "Found input." },
   });
-  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "idle" });
+  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
   orchestra.runs.set(winner.id, winner);
   orchestra.runs.set(pending.id, pending);
 
@@ -208,7 +208,7 @@ test("workgroup compete settlement keeps waiting after blocked results until suc
     state: "success",
     result: { status: "success", summary: "Solved." },
   });
-  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "idle" });
+  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
   orchestra.runs.set(blocked.id, blocked);
   orchestra.runs.set(winner.id, winner);
   orchestra.runs.set(pending.id, pending);
@@ -361,7 +361,7 @@ class FakeOrchestra implements OrchestraApi {
       profile: profile.name,
       task,
       busId: bus.id,
-      state: "idle",
+      state: "running",
     };
     this.runs.set(run.id, run);
     return run;

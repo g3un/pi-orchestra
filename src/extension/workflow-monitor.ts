@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
-import { isTerminalAgentState } from "../utils.ts";
+import { isAgentRunFinished, isTerminalAgentState } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
 const MAX_MONITORED_WORKFLOWS = 2;
@@ -159,7 +159,7 @@ function pad2(value: number): string {
 
 function calculateStageProgress(store: AgentStore, stage: WorkflowStageRun): { completed: number; total: number } {
   const runs = collectStageRuns(store, stage);
-  const completed = runs.filter((run) => isTerminalAgentState(run.state)).length;
+  const completed = runs.filter(isAgentRunFinished).length;
   const workerRunCount = runs.filter((run) => run.id !== stage.leaderRunId).length;
   const workerTotal = Math.max(stage.members.length, stage.workerRunIds.length, workerRunCount);
   const leaderTotal = stage.phase === "leader" || stage.leaderRunId !== undefined ? 1 : 0;

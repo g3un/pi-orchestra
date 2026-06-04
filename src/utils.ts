@@ -61,7 +61,15 @@ export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
 }
 
 export function isTerminalAgentState(state: AgentState): boolean {
-  return state !== "idle";
+  return state === "success" || state === "blocked" || state === "failed" || state === "closed";
+}
+
+export function isAgentRunActive(run: AgentRun): boolean {
+  return run.state === "running" && run.result === undefined;
+}
+
+export function isAgentRunFinished(run: AgentRun): boolean {
+  return isTerminalAgentState(run.state) || run.result !== undefined;
 }
 
 export function indent(text: string, prefix = "  "): string {

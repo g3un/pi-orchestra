@@ -8,11 +8,11 @@ import { OrchestraEventController, type OrchestraMainEvent } from "./orchestra-e
 test("orchestra event controller emits standalone subagent finish events", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const idleRun = run({ state: "idle" });
-  store.saveRun(idleRun);
+  const runningRun = run({ state: "running" });
+  store.saveRun(runningRun);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
-  store.saveRun({ ...idleRun, state: "success", result: { status: "success", summary: "Done." } });
+  store.saveRun({ ...runningRun, state: "idle", result: { status: "success", summary: "Done." } });
 
   assert.equal(sent.batches.length, 1);
   assert.deepEqual(sent.batches[0]?.events[0], {
@@ -22,30 +22,30 @@ test("orchestra event controller emits standalone subagent finish events", () =>
       runId: "agent-1",
       name: "agent-1",
       profile: "researcher",
-      state: "success",
+      state: "idle",
       result: { status: "success", summary: "Done." },
     },
   });
   assert.match(sent.batches[0]?.content ?? "", /Subagent finished on bus bus-1/);
 });
 
-test("orchestra event controller emits only non-terminal to finished run transitions", () => {
+test("orchestra event controller emits only active to finished run transitions", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const idleRun = run({ state: "idle" });
-  store.saveRun(idleRun);
+  const runningRun = run({ state: "running" });
+  store.saveRun(runningRun);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
   const firstFinished = {
-    ...idleRun,
-    state: "success" as const,
+    ...runningRun,
+    state: "idle" as const,
     result: { status: "success" as const, summary: "Done." },
   };
   store.saveRun(firstFinished);
   store.saveRun({ ...firstFinished, result: { status: "success", summary: "Saved again." } });
   store.saveRun({ ...firstFinished, state: "closed" });
-  store.saveRun({ ...firstFinished, state: "idle", result: undefined });
-  store.saveRun({ ...firstFinished, result: { status: "success", summary: "Done again." } });
+  store.saveRun({ ...firstFinished, state: "running", result: undefined });
+  store.saveRun({ ...firstFinished, state: "idle", result: { status: "success", summary: "Done again." } });
 
   assert.equal(sent.batches.length, 2);
   assert.equal(sent.batches[0]?.events[0]?.type, "subagent.finished");
@@ -59,14 +59,14 @@ test("orchestra event controller emits only non-terminal to finished run transit
 test("orchestra event controller routes registered workgroup member finish events with pending run ids", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const firstRun = run({ id: "first", name: "first", busId: "bus-1", state: "idle" });
-  const secondRun = run({ id: "second", name: "second", busId: "bus-1", state: "idle" });
+  const firstRun = run({ id: "first", name: "first", busId: "bus-1", state: "running" });
+  const secondRun = run({ id: "second", name: "second", busId: "bus-1", state: "running" });
   store.saveRun(firstRun);
   store.saveRun(secondRun);
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
   controller.registerWorkgroup({ busId: "bus-1", strategy: "synthesize", runIds: [firstRun.id, secondRun.id] });
 
-  store.saveRun({ ...firstRun, state: "blocked", result: { status: "blocked", summary: "Need input." } });
+  store.saveRun({ ...firstRun, state: "idle", result: { status: "blocked", summary: "Need input." } });
 
   assert.equal(sent.batches.length, 1);
   const event = sent.batches[0]?.events[0];
@@ -83,10 +83,10 @@ test("orchestra event controller routes workgroup finishes during launch before 
   const sent = createEventSink();
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
   controller.beginWorkgroup("bus-1", "compete");
-  const memberRun = run({ id: "fast", name: "fast", state: "idle" });
+  const memberRun = run({ id: "fast", name: "fast", state: "running" });
   store.saveRun(memberRun);
 
-  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Won." } });
+  store.saveRun({ ...memberRun, state: "idle", result: { status: "success", summary: "Won." } });
   controller.registerWorkgroup({ busId: "bus-1", strategy: "compete", runIds: [memberRun.id] });
 
   assert.equal(sent.batches.length, 1);
@@ -100,15 +100,15 @@ test("orchestra event controller routes workgroup finishes during launch before 
 test("orchestra event controller suppresses workflow-internal run finishes and emits workflow finish", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const workflow = workflowRun({ state: "idle", stages: [{ ...stageRun(), busId: "workflow-bus" }] });
+  const workflow = workflowRun({ state: "running", stages: [{ ...stageRun(), busId: "workflow-bus" }] });
   store.saveWorkflow(workflow);
-  const workflowRunAgent = run({ id: "stage-worker", name: "stage-worker", busId: "workflow-bus", state: "idle" });
+  const workflowRunAgent = run({ id: "stage-worker", name: "stage-worker", busId: "workflow-bus", state: "running" });
   store.saveRun(workflowRunAgent);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
   store.saveRun({
     ...workflowRunAgent,
-    state: "success",
+    state: "idle",
     result: { status: "success", summary: "Worker done." },
   });
   store.saveWorkflow({

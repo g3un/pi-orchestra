@@ -113,7 +113,7 @@ class FakeOrchestra implements OrchestraApi {
     busId: string,
     _options: { name: string | undefined },
   ): Promise<AgentRun> {
-    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "idle" });
+    const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "running" });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
   }

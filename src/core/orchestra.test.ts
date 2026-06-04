@@ -117,7 +117,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   assert.deepEqual(runtime.closedIds, [run.id]);
   assert.equal(orchestra.getRun(run.id, { busId: undefined }), closedRun);
   assert.equal(store.getRun(run.id), closedRun);
-  assert.equal(messagedRun.state, "idle");
+  assert.equal(messagedRun.state, "running");
   assert.equal(closedRun?.state, "closed");
 });
 
@@ -134,7 +134,7 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.equal(store.getBus(bus.id), output.bus);
 });
 
-test("orchestra messages idle agents", async () => {
+test("orchestra messages reusable idle agents", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
@@ -144,7 +144,8 @@ test("orchestra messages idle agents", async () => {
   const output = await orchestra.messageAgent(idleRun.id, "Continue.", { busId: undefined });
 
   assert.deepEqual(runtime.messaged, { id: idleRun.id, message: "Continue." });
-  assert.equal(output, idleRun);
+  assert.equal(output.state, "running");
+  assert.equal(output.result, undefined);
 });
 
 class FakeRuntime implements AgentRuntime {
@@ -171,7 +172,7 @@ class FakeRuntime implements AgentRuntime {
       profile: profile.name,
       task,
       busId,
-      state: "idle",
+      state: "running",
     };
     this.store.saveRun(run);
     return run;
@@ -181,9 +182,9 @@ class FakeRuntime implements AgentRuntime {
     this.messaged = { id, message };
     const run = this.store.getRun(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
-    if (run.state === "idle") return run;
+    if (run.state === "running") return run;
 
-    const messagedRun: AgentRun = { ...run, state: "idle", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
     this.store.saveRun(messagedRun);
     return messagedRun;
   }

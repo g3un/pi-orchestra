@@ -55,7 +55,7 @@ export class ControllableRuntime implements AgentRuntime {
       profile: profile.name,
       task,
       busId,
-      state: "idle",
+      state: "running",
     };
     const record = { profile, task, busId, options };
     this.spawned.push(record);
@@ -71,9 +71,9 @@ export class ControllableRuntime implements AgentRuntime {
   async message(id: string, message: string): Promise<AgentRun> {
     this.messaged.push({ id, message });
     const run = this.requireRun(id);
-    if (run.state === "idle") return run;
+    if (run.state === "running") return run;
 
-    const messagedRun: AgentRun = { ...run, state: "idle", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
     this.store.saveRun(messagedRun);
     return messagedRun;
   }
@@ -100,7 +100,7 @@ export class ControllableRuntime implements AgentRuntime {
 
   completeRun(id: string, result: AgentResult): AgentRun {
     const run = this.requireRun(id);
-    const completedRun: AgentRun = { ...run, state: result.status, result };
+    const completedRun: AgentRun = { ...run, state: "idle", result };
     this.store.saveRun(completedRun);
     return completedRun;
   }

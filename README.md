@@ -47,5 +47,5 @@ Use workflows for multi-step plans where later stages should depend on the summa
 ## Notes
 
 - Create a `bus` before spawning related subagents or workgroups.
-- Subagents report completion with `success`, `blocked`, or `failed`; completions are surfaced as pi-orchestra events.
+- Subagents report completion results with `success`, `blocked`, or `failed`; after `finish`, reusable runs return to `idle` until messaged or closed.
 - Use `workflow` for linear staged work, not branching/DAG execution.
