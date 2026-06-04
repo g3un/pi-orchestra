@@ -8,7 +8,13 @@
 - `src/tools/` contains tool implementations exposed to agents, plus their Pi tool definitions and colocated tests.
 - `src/extension/` is the Pi extension entry point; it wires stores, runtime adapters, the orchestra, and registered tools together.
 - `src/profiles/` contains reusable agent profile presets used by orchestration flows.
+- `docs/` holds project architecture notes.
+- `agent-docs/` holds agent-facing implementation notes.
 - Root-level configuration files define package metadata, TypeScript, linting, formatting, and test setup.
+
+## Agent Docs
+
+- Start from `agent-docs/README.md` before making agent-facing changes; it maps the detailed guidance to the codebase.
 
 ## Development Tools
 
