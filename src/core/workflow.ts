@@ -6,8 +6,8 @@ export interface WorkflowStageSpec {
   goal: string;
   strategy: WorkgroupStrategy;
   members: WorkgroupMember[];
-  /** If undefined, a restricted default evidence synthesizer is used. */
-  leader: WorkgroupMember | undefined;
+  /** Synthesizes the stage's worker output; must be specified explicitly. */
+  leader: WorkgroupMember;
 }
 
 export interface WorkflowStageOutput {
@@ -26,8 +26,7 @@ export interface WorkflowRunResult {
   result?: AgentResult;
 }
 
-export interface WorkflowStageRun extends Omit<WorkflowStageSpec, "leader"> {
-  leader: WorkgroupMember;
+export interface WorkflowStageRun extends WorkflowStageSpec {
   state: AgentState;
   phase?: "workers" | "leader";
   /** Milliseconds since epoch when this stage started running. */

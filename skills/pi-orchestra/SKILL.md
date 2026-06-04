@@ -73,6 +73,8 @@ Profile defaults:
 
 Use `workflow action=start` when there are explicit stages such as discover → design → implement → review. Keep stages linear; do not model branching/DAG work as a workflow.
 
+Every stage requires an explicit `leader` that condenses its workers' output into the canonical stage result fed to the next stage. Prefer the `evidence-synthesizer` profile for this role unless a stage needs a specialized synthesizer; give the leader an explicit tool allowlist (often the union of its workers' tools) so it can verify evidence or fill concrete gaps without broadening scope.
+
 ## Gotchas
 
 - Always create a bus before spawning related agents.

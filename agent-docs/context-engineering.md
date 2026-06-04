@@ -59,10 +59,9 @@ When a task outruns a single context window, use one or more of:
 In a multi-agent system, what one agent passes to the next _is_ context
 engineering. Make handoffs:
 
-- **Condensed** — synthesized findings, not raw transcripts. Our
-  `evidence-synthesizer` profile is built for exactly this: "produce concise
-  canonical output," "deduplicate and reconcile," "prefer finish results over
-  bus context."
+- **Condensed** — synthesized findings, not raw transcripts: produce concise
+  canonical output, deduplicate and reconcile, and prefer finished results over
+  ambient context.
 - **Decision-bearing** — note conflicts, gaps, and confidence so the next stage
   doesn't re-derive them.
 

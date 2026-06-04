@@ -50,7 +50,8 @@ Profiles in an orchestra mostly succeed or fail by how they treat context.
 
 - Say which context sources are authoritative and which are supplemental.
 - State whether the agent may retrieve new context or must use only supplied
-  context. The `evidence-synthesizer` profile is the restrictive example.
+  context; if tools are allowed, scope them to verification or gap-filling rather
+  than open-ended retrieval.
 - Define handoff behavior: synthesize durable findings, do not pass raw
   transcripts unless the downstream task needs them.
 - Keep large reference material out of the system prompt; load it through tools,

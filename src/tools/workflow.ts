@@ -5,7 +5,6 @@ import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageOutput, WorkflowStageRun, WorkflowStageSpec } from "../core/workflow.ts";
 import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
-import { createEvidenceSynthesizerProfile } from "../profiles/evidence-synthesizer.ts";
 import {
   closeAgentRuns,
   createEntityIdentity,
@@ -79,7 +78,7 @@ const WorkflowStageParams = Type.Object(
       description: "Worker subagents for this stage.",
       minItems: 1,
     }),
-    leader: Type.Optional(WorkgroupMemberParams),
+    leader: WorkgroupMemberParams,
   },
   { additionalProperties: false },
 );
@@ -109,7 +108,8 @@ const WorkflowToolParams = Type.Object(
     ),
     stages: Type.Optional(
       Type.Array(WorkflowStageParams, {
-        description: "Required for action=start. Linear stages executed in order with automatic evidence synthesizers.",
+        description:
+          "Required for action=start. Linear stages executed in order; each stage specifies an explicit leader.",
         minItems: 1,
       }),
     ),
@@ -163,11 +163,12 @@ export function defineWorkflowPiTool(
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description: "Run linear workgroup stages with automatic restricted evidence synthesizers.",
+    description: "Run linear workgroup stages, each with an explicit leader that synthesizes its workers' output.",
     promptSnippet: "Launch a multi-stage workflow; completion is delivered automatically as a pi-orchestra event.",
     promptGuidelines: [
       "Use workflow for ordered multi-stage work; not branching/DAG plans.",
-      "Each stage gets its own bus and automatic leader; previous outputs feed the next stage.",
+      "Each stage gets its own bus and requires an explicit leader that synthesizes its workers' output; previous stage outputs feed the next stage.",
+      "Prefer the evidence-synthesizer profile for stage leaders unless the stage needs a specialized synthesizer; give the leader an explicit tool allowlist (often the union of its workers' tools).",
       "Use compete when one worker success is enough; use synthesize when findings must be combined.",
       "Use workflow status for progress; workflow.finished events deliver terminal success/blocked/failed/closed results.",
     ],
@@ -327,16 +328,13 @@ function createWorkflowRun(
     startedAtMs,
     state: "running",
     currentStageIndex: 0,
-    stages: input.stages.map((stage) => {
-      const stageRun = {
-        ...stage,
-        name: normalizeEntityName(stage.name, "Workflow stage"),
-        state: "idle" as const,
-        startedAtMs,
-        workerRunIds: [],
-      };
-      return { ...stageRun, leader: resolveStageSynthesizer(stage, identity.name) };
-    }),
+    stages: input.stages.map((stage) => ({
+      ...stage,
+      name: normalizeEntityName(stage.name, "Workflow stage"),
+      state: "idle" as const,
+      startedAtMs,
+      workerRunIds: [],
+    })),
   };
 }
 
@@ -350,25 +348,6 @@ function validateStages(stages: WorkflowStageSpec[]): void {
     names.add(name);
     if (stage.members.length === 0) throw new Error(`Workflow stage "${name}" requires at least one member.`);
   }
-}
-
-function resolveStageSynthesizer(stage: WorkflowStageSpec, workflowName: string): WorkgroupMember {
-  const stageName = normalizeEntityName(stage.name, "Workflow stage");
-  const leader = stage.leader ?? {
-    profile: createEvidenceSynthesizerProfile({
-      name: `${workflowName}-${stageName}-synthesizer`,
-      model: undefined,
-    }),
-    name: undefined,
-    assignment: undefined,
-  };
-  return {
-    ...leader,
-    profile: {
-      ...leader.profile,
-      tools: [],
-    },
-  };
 }
 
 function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
@@ -387,13 +366,14 @@ function toWorkflowStageSpec(stage: RawWorkflowStageParams): WorkflowStageSpec {
   if (!stage.goal) throw new Error(`workflow stage ${stage.name} requires goal.`);
   if (!stage.strategy) throw new Error(`workflow stage ${stage.name} requires strategy.`);
   if (!stage.members || stage.members.length === 0) throw new Error(`workflow stage ${stage.name} requires members.`);
+  if (!stage.leader) throw new Error(`workflow stage ${stage.name} requires a leader.`);
 
   return {
     name: stage.name,
     goal: stage.goal,
     strategy: stage.strategy,
     members: stage.members.map((member, index) => toWorkgroupMember(member, `workflow member ${index + 1}`)),
-    leader: stage.leader ? toWorkgroupMember(stage.leader, "workflow leader") : undefined,
+    leader: toWorkgroupMember(stage.leader, "workflow leader"),
   };
 }
 
@@ -404,7 +384,7 @@ function withDefaultModels(input: WorkflowInput, ctx: ExtensionContext): Workflo
     stages: input.stages.map((stage) => ({
       ...stage,
       members: withDefaultModelsForWorkgroupMembers(stage.members, ctx),
-      leader: stage.leader ? withDefaultModelForWorkgroupMember(stage.leader, ctx) : undefined,
+      leader: withDefaultModelForWorkgroupMember(stage.leader, ctx),
     })),
   };
 }
@@ -495,7 +475,7 @@ function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResult
   return [
     "You are the leader for this workflow stage.",
     ...strategyInstructions,
-    "Use supplied context only; prefer finish results over bus context.",
+    "Treat supplied context as primary; prefer finish results over bus context.",
     "",
     "Workflow goal:",
     workflow.goal,

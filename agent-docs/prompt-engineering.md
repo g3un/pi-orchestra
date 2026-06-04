@@ -16,10 +16,9 @@ will be judged**, up front.
 
 - Specify format, length, tone, and required sections — make it testable.
 - State scope, assumptions, exclusions, and what to do when uncertain.
-- Our `evidence-synthesizer` profile does this: it names the exact output shape
-  ("concise canonical output") and the decision rule for
-  status (`success` if useful output exists, `blocked` if context is
-  insufficient, `failed` if synthesis fails). Copy that pattern.
+- Name the exact output shape and the decision rule for status — e.g. `success`
+  when useful output exists, `blocked` when context is insufficient, `failed`
+  when the work cannot be completed.
 
 ## 2. Be explicit and literal
 
@@ -62,9 +61,9 @@ fine when the structure is shallow and readable.
 
 - Tell the model it may say "I don't know" / flag low confidence instead of
   guessing. This measurably reduces hallucination.
-- Our `evidence-synthesizer` prompt operationalizes this with `blocked` status and an
-  instruction to "note conflicts/gaps" — uncertainty becomes a structured
-  output, not a silent guess.
+- Operationalize it with a structured signal — e.g. a `blocked` status plus an
+  instruction to note conflicts and gaps — so uncertainty becomes output, not a
+  silent guess.
 
 ## 6. Write system prompts at the right altitude
 
@@ -73,9 +72,9 @@ leave room for judgment**. Avoid both extremes:
 
 - ❌ Hardcoded, brittle if/else logic for every case.
 - ❌ Vague, high-level platitudes with no concrete signal.
-- ✅ Strong heuristics + clear boundaries (the `evidence-synthesizer` prompt:
-  "Use only supplied context; do not research, inspect files, or run commands"
-  is a sharp, actionable boundary).
+- ✅ Strong heuristics + clear boundaries — e.g. "treat supplied context as
+  primary evidence; use tools only to verify or fill concrete gaps" rather than
+  enumerating every allowed action.
 
 Method: **start minimal on your best model, then add instructions only in
 response to observed failure modes.** Don't pre-emptively pad the prompt.

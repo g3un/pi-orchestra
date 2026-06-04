@@ -51,9 +51,9 @@ Use workflows for multi-step plans where later stages should depend on the summa
 - `createSourceCodeQaProfile`: answer repository questions from local code, tests, and docs.
 - `createExternalResearcherProfile`: gather and synthesize external source material with citations and uncertainty handling.
 - `createCodeReviewerProfile`: review local code or changes with findings-first output.
-- `createEvidenceSynthesizerProfile`: restricted synthesis from supplied evidence and context only.
+- `createEvidenceSynthesizerProfile`: synthesize supplied evidence and context, using tools only for targeted verification or gap-filling.
 
-Except for `createEvidenceSynthesizerProfile`, profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
+Profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
 
 ## Notes
 

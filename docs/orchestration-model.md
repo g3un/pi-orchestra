@@ -58,18 +58,18 @@ Main receives finish events instead of blocking on completion calls:
 ## Workflow
 
 A workflow runs ordered stages. Each stage defines a goal, strategy, workers,
-and optional leader.
+and a leader.
 
 For each stage:
 
 1. Create a fresh bus.
 2. Spawn the worker workgroup.
 3. Collect worker results through store finish-event subscriptions in the background.
-4. Spawn a restricted evidence synthesizer.
+4. Spawn the stage leader to synthesize the worker results.
 5. Store the leader's canonical output as the stage output.
 
 Workflow-internal worker and leader completions are consumed by the workflow runner. Main receives a single `workflow.finished` event when the whole workflow reaches `success`, `blocked`, `failed`, or `closed`.
 
 The next stage receives the previous stage output, not raw worker transcripts.
-If no leader is provided, `createEvidenceSynthesizerProfile` supplies a
-restricted synthesizer with no tools.
+Each stage specifies its leader explicitly — the leader synthesizes the workers'
+results into that canonical stage output.

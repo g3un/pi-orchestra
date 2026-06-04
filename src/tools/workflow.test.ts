@@ -5,6 +5,7 @@ import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { isTerminalAgentState, slugify } from "../utils.ts";
+import { createEvidenceSynthesizerProfile } from "../profiles/evidence-synthesizer.ts";
 import { createWorkflowTool } from "./workflow.ts";
 
 const workerProfile: AgentProfile = {
@@ -91,7 +92,7 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
   assert.equal(output.workflow.stages[0]?.state, "success");
   assert.equal(output.workflow.stages[1]?.state, "success");
   assert.equal(output.workflow.result?.leaderRunId, "analyze-lead");
-  assert.deepEqual(orchestra.spawned.find((spawn) => spawn.name === "collect-lead")?.profile.tools, []);
+  assert.deepEqual(orchestra.spawned.find((spawn) => spawn.name === "collect-lead")?.profile.tools, ["read"]);
   assert.deepEqual(
     [...orchestra.buses.values()].flatMap((bus) => bus.messages),
     [],
@@ -104,7 +105,7 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
   const analyzeLeaderTask = orchestra.spawned.find((spawn) => spawn.name === "analyze-lead")?.task ?? "";
   assert.match(analyzeLeaderTask, /<stage_output name="collect">/);
   assert.match(analyzeLeaderTask, /collect-lead summary/);
-  assert.match(analyzeLeaderTask, /Use supplied context only/);
+  assert.match(analyzeLeaderTask, /Treat supplied context as primary/);
   assert.match(analyzeLeaderTask, /note gaps/);
 });
 
@@ -126,7 +127,7 @@ test("workflow compete stage races to first success then uses a leader", async (
           { name: "option-worker", profile: workerProfile, assignment: undefined },
           { name: "slow-option", profile: hangingWorkerProfile, assignment: undefined },
         ],
-        leader: undefined,
+        leader: { name: "compete-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -135,10 +136,10 @@ test("workflow compete stage races to first success then uses a leader", async (
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
-  assert.equal(output.workflow.result?.leaderRunId, "compete-flow-options-synthesizer");
+  assert.equal(output.workflow.result?.leaderRunId, "compete-lead");
   assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
   assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
-  const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-flow-options-synthesizer")?.task ?? "";
+  const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-lead")?.task ?? "";
   assert.match(leaderTask, /Compete: condense the winning worker result/);
   assert.match(leaderTask, /do not broaden scope/);
   assert.match(leaderTask, /Call finish once/);
@@ -163,14 +164,14 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
           { name: "blocked-option", profile: blockedWorkerProfile, assignment: undefined },
           { name: "failed-option", profile: failedWorkerProfile, assignment: undefined },
         ],
-        leader: undefined,
+        leader: { name: "blocked-compete-lead", profile: leaderProfile, assignment: undefined },
       },
       {
         name: "never",
         goal: "Should not run.",
         strategy: "compete",
         members: [{ name: "never-after-blocked-compete", profile: workerProfile, assignment: undefined }],
-        leader: undefined,
+        leader: { name: "never-blocked-compete-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -203,14 +204,14 @@ test("workflow compete stage fails when every worker fails", async () => {
         goal: "Produce independent options.",
         strategy: "compete",
         members: [{ name: "failed-only-option", profile: failedWorkerProfile, assignment: undefined }],
-        leader: undefined,
+        leader: { name: "failed-compete-lead", profile: leaderProfile, assignment: undefined },
       },
       {
         name: "never",
         goal: "Should not run.",
         strategy: "compete",
         members: [{ name: "never-after-failed-compete", profile: workerProfile, assignment: undefined }],
-        leader: undefined,
+        leader: { name: "never-failed-compete-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -243,7 +244,7 @@ test("workflow status returns the latest workflow by name", async () => {
         goal: "Collect source material.",
         strategy: "synthesize",
         members: [{ name: "status-worker", profile: workerProfile, assignment: undefined }],
-        leader: undefined,
+        leader: { name: "status-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -273,14 +274,14 @@ test("workflow start validates unique stage names and non-empty members", async 
             goal: "Collect source material.",
             strategy: "synthesize",
             members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
-            leader: undefined,
+            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
           },
           {
             name: "collect",
             goal: "Collect more material.",
             strategy: "synthesize",
             members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
-            leader: undefined,
+            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
           },
         ],
       }),
@@ -294,45 +295,52 @@ test("workflow start validates unique stage names and non-empty members", async 
         name: "empty-members-flow",
         goal: "Research the topic.",
         stages: [
-          { name: "collect", goal: "Collect source material.", strategy: "synthesize", members: [], leader: undefined },
+          {
+            name: "collect",
+            goal: "Collect source material.",
+            strategy: "synthesize",
+            members: [],
+            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
+          },
         ],
       }),
     /Workflow stage "collect" requires at least one member\./,
   );
 });
 
-test("workflow uses a default restricted evidence synthesizer when leader is omitted", async () => {
+test("workflow runs an explicitly provided evidence synthesizer leader", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
     action: "start",
-    name: "default-leader-flow",
+    name: "synth-leader-flow",
     goal: "Research the topic.",
     stages: [
       {
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "default-worker", profile: workerProfile, assignment: undefined }],
-        leader: undefined,
+        members: [{ name: "collect-worker", profile: workerProfile, assignment: undefined }],
+        leader: {
+          name: "collect-synth",
+          profile: createEvidenceSynthesizerProfile({ name: undefined, tools: ["read", "bash"], model: undefined }),
+          assignment: undefined,
+        },
       },
     ],
   });
 
-  const output = { workflow: await waitForWorkflow(store, "default-leader-flow") };
-  const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-synthesizer");
+  const output = { workflow: await waitForWorkflow(store, "synth-leader-flow") };
+  const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "collect-synth");
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
+  assert.equal(output.workflow.result?.leaderRunId, "collect-synth");
   assert.ok(leaderSpawn);
-  assert.equal(leaderSpawn.profile.name, "default-leader-flow-collect-synthesizer");
-  assert.deepEqual(leaderSpawn.profile.tools, []);
-  assert.match(leaderSpawn.profile.systemPrompt, /evidence synthesizer/);
-  assert.match(leaderSpawn.profile.systemPrompt, /do not research, inspect files, run commands/);
-  assert.match(leaderSpawn.profile.systemPrompt, /prefer finish results over bus context/);
-  assert.match(leaderSpawn.profile.systemPrompt, /note conflicts\/gaps/);
+  assert.equal(leaderSpawn.profile.name, "evidence-synthesizer");
+  assert.deepEqual(leaderSpawn.profile.tools, ["read", "bash"]);
 });
 
 test("workflow status and cancel report missing workflows", async () => {
@@ -365,7 +373,7 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
         goal: "Collect source material.",
         strategy: "compete",
         members: [{ name: "slow-worker", profile: workerProfile, assignment: undefined }],
-        leader: undefined,
+        leader: { name: "cancel-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
