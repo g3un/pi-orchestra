@@ -6,7 +6,6 @@ import { InMemoryAgentStore } from "./adapters/in-memory-store.ts";
 import {
   closeAgentRuns,
   createEntityIdentity,
-  DEFAULT_WAIT_TIMEOUT_MS,
   findWorkflow,
   formatError,
   formatNamedEntityLabel,
@@ -14,9 +13,8 @@ import {
   isTerminalAgentState,
   normalizeEntityName,
   requireWorkflow,
-  resolveWaitTimeoutMs,
   slugify,
-  toWaitRunResult,
+  toAgentRunResult,
 } from "./utils.ts";
 
 test("slugify and normalizeEntityName validate stable short names", () => {
@@ -57,14 +55,6 @@ test("format helpers handle names, indentation, and unknown errors", () => {
   assert.equal(formatError("plain"), "plain");
 });
 
-test("wait timeout resolution applies defaults and validates positive values", () => {
-  assert.equal(resolveWaitTimeoutMs("wait", undefined), DEFAULT_WAIT_TIMEOUT_MS);
-  assert.equal(resolveWaitTimeoutMs("wait", null), null);
-  assert.equal(resolveWaitTimeoutMs("wait", 250), 250);
-  assert.throws(() => resolveWaitTimeoutMs("wait", 0), /wait timeoutMs must be positive/);
-  assert.throws(() => resolveWaitTimeoutMs("wait", Number.POSITIVE_INFINITY), /wait timeoutMs must be positive/);
-});
-
 test("terminal agent state matches the shared AgentState model", () => {
   assert.equal(isTerminalAgentState("idle"), false);
   assert.equal(isTerminalAgentState("success"), true);
@@ -84,7 +74,7 @@ test("workflow lookup helpers resolve by id or name", () => {
   assert.throws(() => requireWorkflow(store, "missing"), /Workflow missing not found\./);
 });
 
-test("toWaitRunResult copies result payloads only when present", () => {
+test("toAgentRunResult copies result payloads only when present", () => {
   const idleRun = run({ state: "idle" });
   const successRun = run({
     id: "agent-2",
@@ -92,13 +82,13 @@ test("toWaitRunResult copies result payloads only when present", () => {
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
 
-  assert.deepEqual(toWaitRunResult(idleRun), {
+  assert.deepEqual(toAgentRunResult(idleRun), {
     runId: idleRun.id,
     name: idleRun.name,
     profile: idleRun.profile,
     state: "idle",
   });
-  assert.deepEqual(toWaitRunResult(successRun), {
+  assert.deepEqual(toAgentRunResult(successRun), {
     runId: successRun.id,
     name: successRun.name,
     profile: successRun.profile,

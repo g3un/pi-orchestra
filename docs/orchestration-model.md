@@ -46,10 +46,12 @@ Strategies:
 - `compete`: one successful member can be enough.
 - `synthesize`: collect complementary findings and combine them.
 
-Leaders collect results with bus wait actions:
+Main receives finish events instead of blocking on completion calls:
 
-- `wait_next`: handle terminal runs as they finish.
-- `wait_settled`: wait until every attached run is terminal.
+- Standalone subagent completions arrive as `subagent.finished` events.
+- Workgroup member completions arrive as `workgroup.member_finished` events with the strategy and pending run ids.
+- For `compete`, a successful member may be enough; close pending losers when appropriate.
+- For `synthesize`, use each member event to decide whether to steer active members, spawn follow-up work, publish more context, or continue collecting results.
 
 ## Workflow
 
@@ -60,9 +62,11 @@ For each stage:
 
 1. Create a fresh bus.
 2. Spawn the worker workgroup.
-3. Collect worker results.
+3. Collect worker results through store finish-event subscriptions in the background.
 4. Spawn a restricted stage leader.
 5. Store the leader's canonical output as the stage output.
+
+Workflow-internal worker and leader completions are consumed by the workflow runner. Main receives a single `workflow.finished` event when the whole workflow reaches `success`, `blocked`, `failed`, or `closed`.
 
 The next stage receives the previous stage output, not raw worker transcripts.
 If no leader is provided, `createStageLeaderProfile` supplies a restricted

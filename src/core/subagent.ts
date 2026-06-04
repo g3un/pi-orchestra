@@ -25,3 +25,11 @@ export interface AgentRun {
   state: AgentState;
   result?: AgentResult;
 }
+
+export interface AgentRunResult {
+  runId: string;
+  name: string;
+  profile: string;
+  state: AgentRun["state"];
+  result?: AgentRun["result"];
+}

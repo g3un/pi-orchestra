@@ -2,15 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type {
-  OrchestraApi,
-  PublishedBusMessage,
-  WaitBusSettledOptions,
-  WaitBusSettledResult,
-  WaitNextRunOptions,
-  WaitNextRunResult,
-} from "../core/orchestra.ts";
-import { toWaitRunResult } from "../utils.ts";
+import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const profile: AgentProfile = {
@@ -205,17 +197,6 @@ class FakeOrchestra implements OrchestraApi {
     const closedRun = { ...current, state: "closed" as const };
     this.runs.set(id, closedRun);
     return closedRun;
-  }
-
-  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
-    const bus = this.buses.get(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
-    const runs = this.listRuns({ busId });
-    return Promise.resolve({ bus, runs, runResults: runs.map(toWaitRunResult), timedOut: false, pendingRunIds: [] });
-  }
-
-  waitNextRun(_busId: string, _options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
-    throw new Error("Not implemented.");
   }
 }
 

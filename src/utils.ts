@@ -1,9 +1,7 @@
-import type { OrchestraApi, WaitRunResult } from "./core/orchestra.ts";
-import type { AgentRun, AgentState } from "./core/subagent.ts";
+import type { OrchestraApi } from "./core/orchestra.ts";
+import type { AgentRun, AgentRunResult, AgentState } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
 import type { WorkflowRun } from "./core/workflow.ts";
-
-export const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface NamedEntity {
   id: string;
@@ -52,14 +50,6 @@ export function formatNamedEntityLabel(entity: NamedEntity): string {
   return entity.name === entity.id ? entity.id : `${entity.name} (${entity.id})`;
 }
 
-export function resolveWaitTimeoutMs(label: string, timeoutMs: number | null | undefined): number | null {
-  const resolvedTimeoutMs = timeoutMs === undefined ? DEFAULT_WAIT_TIMEOUT_MS : timeoutMs;
-  if (resolvedTimeoutMs !== null && (!Number.isFinite(resolvedTimeoutMs) || resolvedTimeoutMs <= 0)) {
-    throw new Error(`${label} timeoutMs must be positive, or null to wait indefinitely.`);
-  }
-  return resolvedTimeoutMs;
-}
-
 export function findWorkflow(store: AgentStore, id: string): WorkflowRun | undefined {
   return store.getWorkflow(id) ?? store.listWorkflows().find((workflow) => workflow.name === id);
 }
@@ -85,8 +75,8 @@ export function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function toWaitRunResult(run: AgentRun): WaitRunResult {
-  const runResult: WaitRunResult = {
+export function toAgentRunResult(run: AgentRun): AgentRunResult {
+  const runResult: AgentRunResult = {
     runId: run.id,
     name: run.name,
     profile: run.profile,

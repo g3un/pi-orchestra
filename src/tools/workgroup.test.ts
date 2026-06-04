@@ -2,15 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type {
-  OrchestraApi,
-  PublishedBusMessage,
-  WaitBusSettledOptions,
-  WaitBusSettledResult,
-  WaitNextRunOptions,
-  WaitNextRunResult,
-} from "../core/orchestra.ts";
-import { isTerminalAgentState, slugify, toWaitRunResult } from "../utils.ts";
+import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
+import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
+import { slugify } from "../utils.ts";
 import { createWorkgroupTool, settleWorkgroupRuns } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
@@ -67,7 +61,7 @@ test("workgroup launches members on an existing bus", async () => {
       "- security-review: idle",
       "- backend-review: idle",
       "",
-      "Use bus action=wait_next to handle member results as they finish, or bus action=wait_settled for full fan-in.",
+      "Pi-orchestra will deliver workgroup.member_finished events as members finish.",
     ].join("\n"),
   );
 });
@@ -167,7 +161,7 @@ test("workgroup compete settlement closes pending runs after first success", asy
   orchestra.runs.set(winner.id, winner);
   orchestra.runs.set(pending.id, pending);
 
-  const output = await settleWorkgroupRuns(orchestra, bus.id, "compete");
+  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [winner.id, pending.id], "compete");
 
   assert.equal(output.status, "success");
   assert.equal(output.winner?.runId, winner.id);
@@ -201,7 +195,13 @@ test("workgroup compete settlement keeps waiting after blocked results until suc
   orchestra.runs.set(winner.id, winner);
   orchestra.runs.set(pending.id, pending);
 
-  const output = await settleWorkgroupRuns(orchestra, bus.id, "compete");
+  const output = await settleWorkgroupRuns(
+    orchestra,
+    orchestra.store,
+    bus.id,
+    [blocked.id, winner.id, pending.id],
+    "compete",
+  );
 
   assert.equal(output.status, "success");
   assert.equal(output.winner?.runId, winner.id);
@@ -236,7 +236,7 @@ test("workgroup synthesize settlement waits for every run", async () => {
   orchestra.runs.set(first.id, first);
   orchestra.runs.set(second.id, second);
 
-  const output = await settleWorkgroupRuns(orchestra, bus.id, "synthesize");
+  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [first.id, second.id], "synthesize");
 
   assert.equal(output.status, "success");
   assert.deepEqual(
@@ -266,7 +266,7 @@ test("workgroup synthesize settlement reports blocked when no run succeeds", asy
   orchestra.runs.set(blocked.id, blocked);
   orchestra.runs.set(failed.id, failed);
 
-  const output = await settleWorkgroupRuns(orchestra, bus.id, "synthesize");
+  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [blocked.id, failed.id], "synthesize");
 
   assert.equal(output.status, "blocked");
   assert.deepEqual(
@@ -299,8 +299,9 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
 });
 
 class FakeOrchestra implements OrchestraApi {
+  store = new InMemoryAgentStore();
   buses = new Map<string, Bus>();
-  runs = new Map<string, AgentRun>();
+  runs = new SyncedRunMap(this.store);
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; options?: { name?: string } }> = [];
   closedIds: string[] = [];
 
@@ -373,41 +374,16 @@ class FakeOrchestra implements OrchestraApi {
     this.runs.set(id, closedRun);
     return closedRun;
   }
+}
 
-  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
-    const bus = this.getBus(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
-    const runs = this.listRuns({ busId: bus.id });
-    return Promise.resolve({
-      bus,
-      runs,
-      runResults: runs.map(toWaitRunResult),
-      timedOut: false,
-      pendingRunIds: runs.filter((current) => !isTerminalAgentState(current.state)).map((current) => current.id),
-    });
+class SyncedRunMap extends Map<string, AgentRun> {
+  constructor(private readonly store: InMemoryAgentStore) {
+    super();
   }
 
-  waitNextRun(busId: string, options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
-    const bus = this.getBus(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
-
-    const excludedRunIds = new Set(options.excludeRunIds ?? []);
-    const runs = this.listRuns({ busId: bus.id });
-    const run = runs.find(
-      (current) =>
-        !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalAgentState(current.state),
-    );
-    return Promise.resolve({
-      bus,
-      run,
-      runResult: run ? toWaitRunResult(run) : undefined,
-      runs,
-      runResults: runs.map(toWaitRunResult),
-      timedOut: false,
-      pendingRunIds: runs
-        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalAgentState(current.state))
-        .map((current) => current.id),
-    });
+  set(key: string, value: AgentRun): this {
+    this.store.saveRun(value);
+    return super.set(key, value);
   }
 }
 

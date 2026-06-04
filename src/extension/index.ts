@@ -6,6 +6,7 @@ import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
 import { createSubagentTool, defineSubagentPiTool, type SubagentTool } from "../tools/subagent.ts";
 import { createWorkflowTool, defineWorkflowPiTool, type WorkflowTool } from "../tools/workflow.ts";
 import { createWorkgroupTool, defineWorkgroupPiTool, type WorkgroupTool } from "../tools/workgroup.ts";
+import { ORCHESTRA_EVENT_CUSTOM_TYPE, OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
 import { WorkflowMonitorController } from "./workflow-monitor.ts";
 
 interface ToolBundle {
@@ -14,11 +15,12 @@ interface ToolBundle {
   workgroupTool: WorkgroupTool;
   workflowTool: WorkflowTool;
   workflowMonitor: WorkflowMonitorController;
+  orchestraEvents: OrchestraEventController;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
   const bundles = new Map<string, ToolBundle>();
-  const getToolBundle = (ctx: ExtensionContext) => getBundle(bundles, ctx);
+  const getToolBundle = (ctx: ExtensionContext) => getBundle(pi, bundles, ctx);
 
   pi.registerTool(defineBusPiTool((ctx) => getToolBundle(ctx).busTool));
   pi.registerTool(defineSubagentPiTool((ctx) => getToolBundle(ctx).subagentTool));
@@ -44,7 +46,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   });
 }
 
-function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): ToolBundle {
+function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: ExtensionContext): ToolBundle {
   const existing = bundles.get(ctx.cwd);
   if (existing) return existing;
 
@@ -55,15 +57,43 @@ function getBundle(bundles: Map<string, ToolBundle>, ctx: ExtensionContext): Too
     resolveModel: (model) => resolveModel(ctx, model),
   });
   const orchestra = new Orchestra({ runtime, store });
+  const orchestraEvents = new OrchestraEventController({
+    store,
+    sendEvents: (events, content) => sendOrchestraEvents(pi, events, content),
+  });
+  const workgroupTool = createWorkgroupTool({
+    orchestra,
+    onWorkgroupLaunching: ({ input, bus }) => orchestraEvents.beginWorkgroup(bus.id, input.strategy),
+    onWorkgroupLaunched: ({ input, output }) =>
+      orchestraEvents.registerWorkgroup({
+        busId: output.bus.id,
+        strategy: input.strategy,
+        runIds: output.runs.map((run) => run.id),
+      }),
+    onWorkgroupLaunchFailed: ({ bus }) => orchestraEvents.cancelWorkgroupLaunch(bus.id),
+  });
   const bundle = {
     busTool: createBusTool({ orchestra }),
     subagentTool: createSubagentTool({ orchestra }),
-    workgroupTool: createWorkgroupTool({ orchestra }),
+    workgroupTool,
     workflowTool: createWorkflowTool({ orchestra, store }),
     workflowMonitor: new WorkflowMonitorController(store),
+    orchestraEvents,
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;
+}
+
+function sendOrchestraEvents(pi: ExtensionAPI, events: OrchestraMainEvent[], content: string): void {
+  pi.sendMessage(
+    {
+      customType: ORCHESTRA_EVENT_CUSTOM_TYPE,
+      content,
+      display: true,
+      details: { events },
+    },
+    { deliverAs: "steer", triggerTurn: true },
+  );
 }
 
 function resolveModel(ctx: ExtensionContext, model: string): ReturnType<ExtensionContext["modelRegistry"]["find"]> {

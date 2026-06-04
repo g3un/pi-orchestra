@@ -2,16 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
-import type {
-  OrchestraApi,
-  PublishedBusMessage,
-  WaitBusSettledOptions,
-  WaitBusSettledResult,
-  WaitNextRunOptions,
-  WaitNextRunResult,
-} from "../core/orchestra.ts";
+import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
-import { isTerminalAgentState, slugify, toWaitRunResult } from "../utils.ts";
+import { isTerminalAgentState, slugify } from "../utils.ts";
 import { createWorkflowTool } from "./workflow.ts";
 
 const workerProfile: AgentProfile = {
@@ -52,7 +45,7 @@ const failedLeaderProfile: AgentProfile = {
 
 test("workflow runs linear stages and feeds leader output forward", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -77,7 +70,7 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "research-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "research-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
@@ -104,7 +97,7 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
 
 test("workflow compete stage races to first success then uses a leader", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -124,7 +117,7 @@ test("workflow compete stage races to first success then uses a leader", async (
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "compete-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "compete-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
@@ -140,7 +133,7 @@ test("workflow compete stage races to first success then uses a leader", async (
 
 test("workflow compete stage blocks when no worker succeeds and one blocks", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -166,7 +159,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "blocked-compete-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "blocked-compete-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "blocked");
@@ -181,7 +174,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
 
 test("workflow compete stage fails when every worker fails", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -204,7 +197,7 @@ test("workflow compete stage fails when every worker fails", async () => {
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "failed-compete-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "failed-compete-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "failed");
@@ -219,7 +212,7 @@ test("workflow compete stage fails when every worker fails", async () => {
 
 test("workflow status returns the latest workflow by name", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -235,7 +228,7 @@ test("workflow status returns the latest workflow by name", async () => {
       },
     ],
   });
-  await workflowTool.execute({ action: "wait", id: "status-flow", timeoutMs: null });
+  await waitForWorkflow(store, "status-flow");
 
   const output = await workflowTool.execute({ action: "status", id: "status-flow" });
 
@@ -246,7 +239,7 @@ test("workflow status returns the latest workflow by name", async () => {
 
 test("workflow start validates unique stage names and non-empty members", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await assert.rejects(
@@ -287,7 +280,7 @@ test("workflow start validates unique stage names and non-empty members", async 
 
 test("workflow uses a default restricted leader when omitted", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -304,7 +297,7 @@ test("workflow uses a default restricted leader when omitted", async () => {
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "default-leader-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "default-leader-flow") };
   const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-leader");
 
   assert.ok(output.workflow);
@@ -318,7 +311,7 @@ test("workflow uses a default restricted leader when omitted", async () => {
 
 test("workflow status and cancel report missing workflows", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   const statusOutput = await workflowTool.execute({ action: "status", id: "missing-flow" });
@@ -332,7 +325,7 @@ test("workflow status and cancel report missing workflows", async () => {
 
 test("workflow cancel closes workers spawned during cancellation race", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
   const delayedSpawn = orchestra.delaySpawn("slow-worker");
 
@@ -362,7 +355,7 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
 
 test("workflow fails when a stage leader fails", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -387,7 +380,7 @@ test("workflow fails when a stage leader fails", async () => {
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "failed-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "failed-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "failed");
@@ -402,7 +395,7 @@ test("workflow fails when a stage leader fails", async () => {
 
 test("workflow stops when a stage leader blocks", async () => {
   const store = new InMemoryAgentStore();
-  const orchestra = new FakeOrchestra();
+  const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
 
   await workflowTool.execute({
@@ -427,7 +420,7 @@ test("workflow stops when a stage leader blocks", async () => {
     ],
   });
 
-  const output = await workflowTool.execute({ action: "wait", id: "blocked-flow", timeoutMs: null });
+  const output = { workflow: await waitForWorkflow(store, "blocked-flow") };
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "blocked");
@@ -446,6 +439,8 @@ class FakeOrchestra implements OrchestraApi {
   runs = new Map<string, AgentRun>();
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; name: string }> = [];
   private readonly spawnDelays = new Map<string, SpawnDelay>();
+
+  constructor(private readonly store: InMemoryAgentStore) {}
 
   delaySpawn(name: string): { started: Promise<void>; release: () => void } {
     let markStarted!: () => void;
@@ -524,6 +519,7 @@ class FakeOrchestra implements OrchestraApi {
           },
         };
     this.runs.set(run.id, run);
+    this.store.saveRun(run);
     return run;
   }
 
@@ -549,49 +545,27 @@ class FakeOrchestra implements OrchestraApi {
 
     const closedRun = { ...run, state: "closed" as const };
     this.runs.set(id, closedRun);
+    this.store.saveRun(closedRun);
     return closedRun;
-  }
-
-  waitBusSettled(busId: string, _options: WaitBusSettledOptions = {}): Promise<WaitBusSettledResult> {
-    const bus = this.getBus(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
-    const runs = this.listRuns({ busId: bus.id });
-    return Promise.resolve({
-      bus,
-      runs,
-      runResults: runs.map(toWaitRunResult),
-      timedOut: false,
-      pendingRunIds: [],
-    });
-  }
-
-  waitNextRun(busId: string, options: WaitNextRunOptions = {}): Promise<WaitNextRunResult> {
-    const bus = this.getBus(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
-
-    const runs = this.listRuns({ busId: bus.id });
-    const excludedRunIds = new Set(options.excludeRunIds ?? []);
-    const run = runs.find(
-      (current) =>
-        !excludedRunIds.has(current.id) && !excludedRunIds.has(current.name) && isTerminalAgentState(current.state),
-    );
-    return Promise.resolve({
-      bus,
-      run,
-      runResult: run ? toWaitRunResult(run) : undefined,
-      runs,
-      runResults: runs.map(toWaitRunResult),
-      timedOut: false,
-      pendingRunIds: runs
-        .filter((current) => !excludedRunIds.has(current.id) && !isTerminalAgentState(current.state))
-        .map((current) => current.id),
-    });
   }
 }
 
 interface SpawnDelay {
   markStarted(): void;
   released: Promise<void>;
+}
+
+async function waitForWorkflow(
+  store: InMemoryAgentStore,
+  id: string,
+): Promise<NonNullable<ReturnType<InMemoryAgentStore["getWorkflow"]>>> {
+  await eventually(() => {
+    const workflow = store.getWorkflow(id);
+    return workflow !== undefined && isTerminalAgentState(workflow.state);
+  });
+  const workflow = store.getWorkflow(id);
+  assert.ok(workflow);
+  return workflow;
 }
 
 async function eventually(predicate: () => boolean): Promise<void> {

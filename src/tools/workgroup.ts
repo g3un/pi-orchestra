@@ -1,11 +1,19 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentRun } from "../core/subagent.ts";
+import type { AgentProfile, AgentResultStatus, AgentRun, AgentRunResult } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
-import type { AgentResultStatus } from "../core/subagent.ts";
-import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
+import type { AgentStore } from "../core/store.ts";
 import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
-import { closeAgentRuns, formatError, formatNamedEntityLabel, normalizeEntityName, slugify } from "../utils.ts";
+import {
+  closeAgentRuns,
+  formatError,
+  formatNamedEntityLabel,
+  isTerminalAgentState,
+  normalizeEntityName,
+  slugify,
+  toAgentRunResult,
+} from "../utils.ts";
 import {
   AgentProfileParams,
   spawnSubagent,
@@ -33,10 +41,10 @@ export interface WorkgroupSettlement {
   strategy: WorkgroupStrategy;
   status: AgentResultStatus;
   /** Results that should be consumed by downstream orchestration. For compete, this is the winning result when present. */
-  workerResults: WaitRunResult[];
+  workerResults: AgentRunResult[];
   /** Every terminal result observed while settling this workgroup. */
-  completedResults: WaitRunResult[];
-  winner?: WaitRunResult;
+  completedResults: AgentRunResult[];
+  winner?: AgentRunResult;
   pendingRunIds: string[];
 }
 
@@ -45,8 +53,25 @@ export interface WorkgroupTool {
   execute(input: WorkgroupInput): Promise<WorkgroupOutput>;
 }
 
+export interface WorkgroupLaunchEvent {
+  input: WorkgroupInput;
+  bus: Bus;
+}
+
+export interface WorkgroupLaunchedEvent {
+  input: WorkgroupInput;
+  output: WorkgroupOutput;
+}
+
+export interface WorkgroupLaunchFailedEvent extends WorkgroupLaunchEvent {
+  error: unknown;
+}
+
 export interface WorkgroupToolDeps {
   orchestra: OrchestraApi;
+  onWorkgroupLaunching?: (event: WorkgroupLaunchEvent) => void;
+  onWorkgroupLaunched?: (event: WorkgroupLaunchedEvent) => void;
+  onWorkgroupLaunchFailed?: (event: WorkgroupLaunchFailedEvent) => void;
 }
 
 export const WorkgroupMemberParams = Type.Object(
@@ -100,7 +125,12 @@ interface SpawnFailure {
   error: unknown;
 }
 
-export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): WorkgroupTool {
+export function createWorkgroupTool({
+  orchestra,
+  onWorkgroupLaunching,
+  onWorkgroupLaunched,
+  onWorkgroupLaunchFailed,
+}: WorkgroupToolDeps): WorkgroupTool {
   return {
     name: "workgroup",
 
@@ -110,51 +140,52 @@ export function createWorkgroupTool({ orchestra }: WorkgroupToolDeps): Workgroup
       const bus = orchestra.getBus(input.busId);
       if (!bus) throw new Error(`Bus ${input.busId} not found.`);
 
-      const preparedInput: PreparedWorkgroupInput = {
-        ...input,
-        members: prepareMembers(input.members, orchestra.listRuns()),
-      };
-      const spawnResults = await Promise.allSettled(
-        preparedInput.members.map(async (member): Promise<SpawnSuccess> => {
-          const run = await spawnSubagent(orchestra, toSubagentSpawnInput(preparedInput, member, bus.id));
-          return { member, run };
-        }),
-      );
-
-      const successes = collectSpawnSuccesses(spawnResults);
-      const failures = collectSpawnFailures(preparedInput.members, spawnResults);
-      if (failures.length > 0) {
-        const cleanupResults = await Promise.allSettled(
-          successes.map((success) => orchestra.closeAgent(success.run.id)),
+      onWorkgroupLaunching?.({ input, bus });
+      try {
+        const preparedInput: PreparedWorkgroupInput = {
+          ...input,
+          members: prepareMembers(input.members, orchestra.listRuns()),
+        };
+        const spawnResults = await Promise.allSettled(
+          preparedInput.members.map(async (member): Promise<SpawnSuccess> => {
+            const run = await spawnSubagent(orchestra, toSubagentSpawnInput(preparedInput, member, bus.id));
+            return { member, run };
+          }),
         );
-        throw new Error(formatLaunchFailure(failures, successes, cleanupResults));
-      }
 
-      const runs = successes.map((success) => success.run);
-      return {
-        bus,
-        runs,
-        message: formatWorkgroupMessage(bus, preparedInput, runs),
-      };
+        const successes = collectSpawnSuccesses(spawnResults);
+        const failures = collectSpawnFailures(preparedInput.members, spawnResults);
+        if (failures.length > 0) {
+          const cleanupResults = await Promise.allSettled(
+            successes.map((success) => orchestra.closeAgent(success.run.id)),
+          );
+          throw new Error(formatLaunchFailure(failures, successes, cleanupResults));
+        }
+
+        const runs = successes.map((success) => success.run);
+        const output = {
+          bus,
+          runs,
+          message: formatWorkgroupMessage(bus, preparedInput, runs),
+        };
+        onWorkgroupLaunched?.({ input, output });
+        return output;
+      } catch (error) {
+        onWorkgroupLaunchFailed?.({ input, bus, error });
+        throw error;
+      }
     },
   };
 }
 
 export async function settleWorkgroupRuns(
   orchestra: OrchestraApi,
+  store: AgentStore,
   busId: string,
+  runIds: string[],
   strategy: WorkgroupStrategy,
 ): Promise<WorkgroupSettlement> {
-  if (strategy === "compete") return await settleCompeteWorkgroupRuns(orchestra, busId);
-
-  const settled = await orchestra.waitBusSettled(busId, { timeoutMs: null });
-  return {
-    strategy,
-    status: resolveWorkgroupStatus(settled.runResults),
-    workerResults: settled.runResults,
-    completedResults: settled.runResults,
-    pendingRunIds: settled.pendingRunIds,
-  };
+  return await new WorkgroupSettlementCollector(orchestra, store, busId, runIds, strategy).settle();
 }
 
 export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => WorkgroupTool) {
@@ -162,11 +193,11 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
     name: "workgroup",
     label: "Workgroup",
     description: "Spawn multiple subagents onto an existing bus; you lead and collect results.",
-    promptSnippet: "Spawn a main-led workgroup on an existing bus, then collect results with bus wait actions.",
+    promptSnippet: "Spawn a main-led workgroup on an existing bus; member finish events are delivered automatically.",
     promptGuidelines: [
       "Create a bus first; workgroup only spawns members.",
-      "Use compete when one successful member is enough; use wait_next, then close losers and summarize.",
-      "Use synthesize when members provide complementary findings to combine; wait_settled usually fits.",
+      "Use workgroup compete when one successful member is enough; close losers after a success event if appropriate.",
+      "Use workgroup synthesize when members provide complementary findings; react to member finish events as they arrive.",
       "publish_bus is peer-reference context, not a leader-request channel.",
     ],
     parameters: WorkgroupToolParams,
@@ -183,39 +214,123 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
   });
 }
 
-async function settleCompeteWorkgroupRuns(orchestra: OrchestraApi, busId: string): Promise<WorkgroupSettlement> {
-  const completedResults: WaitRunResult[] = [];
-  const excludeRunIds: string[] = [];
+class WorkgroupSettlementCollector {
+  private readonly runIds: Set<string>;
+  private readonly completedRunIds = new Set<string>();
+  private readonly completedResults: AgentRunResult[] = [];
 
-  for (;;) {
-    const nextRun = await orchestra.waitNextRun(busId, { excludeRunIds, timeoutMs: null });
-    if (!nextRun.runResult) {
-      return {
-        strategy: "compete",
-        status: resolveWorkgroupStatus(completedResults),
-        workerResults: completedResults,
-        completedResults,
-        pendingRunIds: nextRun.pendingRunIds,
-      };
-    }
+  constructor(
+    private readonly orchestra: OrchestraApi,
+    private readonly store: AgentStore,
+    private readonly busId: string,
+    runIds: string[],
+    private readonly strategy: WorkgroupStrategy,
+  ) {
+    this.runIds = new Set(runIds);
+  }
 
-    completedResults.push(nextRun.runResult);
-    excludeRunIds.push(nextRun.runResult.runId);
-    if (nextRun.runResult.result?.status === "success") {
-      await closeAgentRuns(orchestra, nextRun.pendingRunIds);
-      return {
-        strategy: "compete",
-        status: "success",
-        workerResults: [nextRun.runResult],
-        completedResults,
-        winner: nextRun.runResult,
-        pendingRunIds: [],
+  settle(): Promise<WorkgroupSettlement> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsubscribe: () => void = () => undefined;
+
+      const finish = (settlement: WorkgroupSettlement) => {
+        if (settled) return;
+
+        settled = true;
+        unsubscribe();
+        resolve(settlement);
       };
+
+      const finishWithWinner = (winner: AgentRunResult) => {
+        if (settled) return;
+
+        settled = true;
+        unsubscribe();
+        void closeAgentRuns(this.orchestra, this.getPendingRunIds()).finally(() => {
+          resolve({
+            strategy: this.strategy,
+            status: "success",
+            workerResults: [winner],
+            completedResults: this.completedResults,
+            winner,
+            pendingRunIds: [],
+          });
+        });
+      };
+
+      const finishFromCurrentState = () => {
+        this.captureTerminalRuns();
+
+        const winner = this.strategy === "compete" ? this.completedResults.find(isSuccessfulRunResult) : undefined;
+        if (winner) {
+          finishWithWinner(winner);
+          return;
+        }
+
+        if (!this.isSettled()) return;
+
+        finish({
+          strategy: this.strategy,
+          status: resolveWorkgroupStatus(this.completedResults),
+          workerResults: this.completedResults,
+          completedResults: this.completedResults,
+          pendingRunIds: this.getPendingRunIds(),
+        });
+      };
+
+      const observeRun = (run: AgentRun) => {
+        if (settled || !this.runIds.has(run.id) || !isTerminalAgentState(run.state)) return;
+        this.recordTerminalRun(run);
+        finishFromCurrentState();
+      };
+
+      unsubscribe = this.store.subscribeRuns(observeRun, (run) => run.busId === this.busId && this.runIds.has(run.id));
+      finishFromCurrentState();
+
+      if (!settled && this.runIds.size === 0) {
+        finish({
+          strategy: this.strategy,
+          status: "failed",
+          workerResults: [],
+          completedResults: [],
+          pendingRunIds: [],
+        });
+      }
+    });
+  }
+
+  private captureTerminalRuns(): void {
+    for (const runId of this.runIds) {
+      const run = this.store.getRun(runId);
+      if (run) this.recordTerminalRun(run);
     }
+  }
+
+  private recordTerminalRun(run: AgentRun): void {
+    if (!isTerminalAgentState(run.state) || this.completedRunIds.has(run.id)) return;
+
+    this.completedRunIds.add(run.id);
+    this.completedResults.push(toAgentRunResult(run));
+  }
+
+  private isSettled(): boolean {
+    return [...this.runIds].every((runId) => {
+      const run = this.store.getRun(runId);
+      return run !== undefined && isTerminalAgentState(run.state);
+    });
+  }
+
+  private getPendingRunIds(): string[] {
+    return [...this.runIds].filter((runId) => this.store.getRun(runId)?.state === "idle");
   }
 }
 
-function resolveWorkgroupStatus(results: WaitRunResult[]): AgentResultStatus {
+function isSuccessfulRunResult(result: AgentRunResult): boolean {
+  return result.result?.status === "success";
+}
+
+function resolveWorkgroupStatus(results: AgentRunResult[]): AgentResultStatus {
   const statuses = results.map((result) => result.result?.status);
   if (statuses.includes("success")) return "success";
   if (statuses.includes("blocked")) return "blocked";
@@ -404,7 +519,7 @@ function formatWorkgroupMessage(bus: Bus, input: PreparedWorkgroupInput, runs: A
     "Runs:",
     ...runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`),
     "",
-    "Use bus action=wait_next to handle member results as they finish, or bus action=wait_settled for full fan-in.",
+    "Pi-orchestra will deliver workgroup.member_finished events as members finish.",
   ].join("\n");
 }
 

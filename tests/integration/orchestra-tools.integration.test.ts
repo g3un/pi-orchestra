@@ -5,7 +5,9 @@ import { InMemoryAgentStore } from "../../src/adapters/in-memory-store.ts";
 import { Orchestra } from "../../src/core/orchestra.ts";
 import { createBusTool } from "../../src/tools/bus.ts";
 import { createSubagentTool } from "../../src/tools/subagent.ts";
+import { OrchestraEventController, type OrchestraMainEvent } from "../../src/extension/orchestra-events.ts";
 import { createWorkflowTool } from "../../src/tools/workflow.ts";
+import { isTerminalAgentState } from "../../src/utils.ts";
 import { ControllableRuntime } from "../helpers/controllable-runtime.ts";
 
 const researcherProfile: AgentProfile = {
@@ -18,12 +20,18 @@ const reviewerProfile: AgentProfile = {
   systemPrompt: "Review the assigned area.",
 };
 
-test("tools coordinate buses, subagents, messages, and waits through the shared store", async () => {
+test("tools coordinate buses, subagents, messages, and completion events through the shared store", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new ControllableRuntime({ store });
   const orchestra = new Orchestra({ runtime, store });
   const busTool = createBusTool({ orchestra });
   const subagentTool = createSubagentTool({ orchestra });
+  const eventBatches: OrchestraMainEvent[][] = [];
+  new OrchestraEventController({
+    store,
+    flushDelayMs: 0,
+    sendEvents: (events) => eventBatches.push(events),
+  });
   const createdBus = await busTool.execute({ action: "create", name: "Review Work" });
   const firstSpawn = await subagentTool.execute({
     action: "spawn",
@@ -51,14 +59,13 @@ test("tools coordinate buses, subagents, messages, and waits through the shared 
     ],
   );
 
-  const waitNextRun = busTool.execute({ action: "wait_next", id: "Review Work", timeoutMs: null });
   runtime.completeRun("reviewer-b", successResult("Reviewer finished first."));
-  const nextRun = await waitNextRun;
 
-  assert.equal(nextRun.run?.id, "reviewer-b");
-  assert.deepEqual(nextRun.pendingRunIds, ["researcher-a"]);
-  assert.equal(nextRun.timedOut, false);
-  assert.match(nextRun.message, /Next terminal run on bus Review Work \(review-work\): reviewer-b is success/);
+  assert.equal(eventBatches[0]?.[0]?.type, "subagent.finished");
+  assert.equal(
+    eventBatches[0]?.[0]?.type === "subagent.finished" ? eventBatches[0][0].run.runId : undefined,
+    "reviewer-b",
+  );
 
   const published = await busTool.execute({
     action: "publish",
@@ -85,22 +92,15 @@ test("tools coordinate buses, subagents, messages, and waits through the shared 
   assert.equal(messaged.run?.result, undefined);
   assert.deepEqual(runtime.messaged, [{ id: "reviewer-b", message: "Re-check with the new strict-mode constraint." }]);
 
-  const waitSettled = busTool.execute({ action: "wait_settled", id: "Review Work", timeoutMs: null });
   runtime.completeRun("researcher-a", { status: "blocked", summary: "Need a product decision." });
   runtime.completeRun("reviewer-b", successResult("Strict mode looks safe."));
-  const settled = await waitSettled;
 
-  assert.equal(settled.timedOut, false);
-  assert.ok(settled.runResults);
   assert.deepEqual(
-    settled.runResults.map((result) => ({ runId: result.runId, status: result.result?.status })),
-    [
-      { runId: "researcher-a", status: "blocked" },
-      { runId: "reviewer-b", status: "success" },
-    ],
+    eventBatches
+      .slice(1)
+      .flatMap((events) => events.map((event) => (event.type === "subagent.finished" ? event.run.runId : event.type))),
+    ["researcher-a", "reviewer-b"],
   );
-  assert.deepEqual(settled.pendingRunIds, []);
-  assert.match(settled.message, /All 2 run\(s\) attached to bus Review Work \(review-work\) reached terminal state/);
 });
 
 test("workflow runs end-to-end through real tools, orchestra, store, and runtime", async () => {
@@ -134,7 +134,8 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
     ],
   });
 
-  const completed = await workflowTool.execute({ action: "wait", id: "release-flow", timeoutMs: null });
+  await waitForWorkflow(store, "release-flow");
+  const completed = await workflowTool.execute({ action: "status", id: "release-flow" });
 
   assert.equal(started.workflow?.id, "release-flow");
   assert.equal(completed.workflow?.state, "success");
@@ -163,8 +164,19 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   const summaryLeaderTask = runtime.spawned.find((spawn) => spawn.options.name === "summary-leader")?.task ?? "";
   assert.match(summaryLeaderTask, /<worker_results>/);
   assert.match(summaryLeaderTask, /summary-worker completed\./);
-  assert.match(completed.message, /Workflow reached terminal state: release-flow; state=success result=success\./);
+  assert.match(completed.message, /Workflow release-flow is success\./);
 });
+
+async function waitForWorkflow(store: InMemoryAgentStore, id: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const workflow = store.getWorkflow(id);
+    if (workflow && isTerminalAgentState(workflow.state)) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const workflow = store.getWorkflow(id);
+  assert.ok(workflow && isTerminalAgentState(workflow.state));
+}
 
 function successResult(summary: string): AgentResult {
   return { status: "success", summary };

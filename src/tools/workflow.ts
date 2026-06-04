@@ -1,7 +1,7 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentResultStatus, AgentRun } from "../core/subagent.ts";
-import type { OrchestraApi, WaitRunResult } from "../core/orchestra.ts";
+import type { AgentResultStatus, AgentRun, AgentRunResult } from "../core/subagent.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageOutput, WorkflowStageRun, WorkflowStageSpec } from "../core/workflow.ts";
 import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
@@ -15,7 +15,6 @@ import {
   isTerminalAgentState,
   normalizeEntityName,
   requireWorkflow,
-  resolveWaitTimeoutMs,
 } from "../utils.ts";
 import {
   createWorkgroupTool,
@@ -41,17 +40,10 @@ export type WorkflowInput =
   | {
       action: "cancel";
       id: string;
-    }
-  | {
-      action: "wait";
-      id: string;
-      /** Defaults to 10 minutes. Use null to wait indefinitely. */
-      timeoutMs?: number | null;
     };
 
 export interface WorkflowOutput {
   workflow?: WorkflowRun;
-  timedOut?: boolean;
   message: string;
 }
 
@@ -92,8 +84,8 @@ const WorkflowStageParams = Type.Object(
 );
 
 const WorkflowActionParams = Type.String({
-  enum: ["start", "status", "cancel", "wait"],
-  description: "start launches; status inspects; cancel closes active runs; wait awaits terminal workflow state.",
+  enum: ["start", "status", "cancel"],
+  description: "start launches; status inspects progress or results; cancel closes active runs.",
 });
 
 const WorkflowToolParams = Type.Object(
@@ -106,7 +98,7 @@ const WorkflowToolParams = Type.Object(
     ),
     id: Type.Optional(
       Type.String({
-        description: "Required for status/cancel/wait. Workflow id/name.",
+        description: "Required for status/cancel. Workflow id/name.",
       }),
     ),
     goal: Type.Optional(
@@ -119,19 +111,6 @@ const WorkflowToolParams = Type.Object(
         description: "Required for action=start. Linear stages executed in order with automatic stage leaders.",
         minItems: 1,
       }),
-    ),
-    timeoutMs: Type.Optional(
-      Type.Union(
-        [
-          Type.Number({
-            exclusiveMinimum: 0,
-          }),
-          Type.Null(),
-        ],
-        {
-          description: "Optional for action=wait. Positive ms; default 10 min; null waits indefinitely.",
-        },
-      ),
     ),
   },
   { additionalProperties: false },
@@ -161,24 +140,9 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
       }
 
       const workflow = findWorkflow(store, input.id);
-      if (!workflow) {
-        return input.action === "wait"
-          ? { timedOut: false, message: formatWorkflowNotFound(input.id) }
-          : { message: formatWorkflowNotFound(input.id) };
-      }
+      if (!workflow) return { message: formatWorkflowNotFound(input.id) };
 
-      if (input.action === "status") {
-        return { workflow, message: formatWorkflowMessage(workflow) };
-      }
-
-      if (input.action === "wait") {
-        const result = await waitWorkflow(store, workflow.id, input.timeoutMs);
-        return {
-          workflow: result.workflow,
-          timedOut: result.timedOut,
-          message: formatWaitWorkflowMessage(result.workflow, result.timedOut, input.id),
-        };
-      }
+      if (input.action === "status") return { workflow, message: formatWorkflowMessage(workflow) };
 
       const closedWorkflow = await closeWorkflow(orchestra, store, workflow);
       return { workflow: closedWorkflow, message: formatWorkflowMessage(closedWorkflow, "Workflow cancelled.") };
@@ -194,12 +158,12 @@ export function defineWorkflowPiTool(
     name: "workflow",
     label: "Workflow",
     description: "Run linear workgroup stages with automatic restricted stage leaders.",
-    promptSnippet: "Launch a multi-stage workflow, then use workflow wait/status for progress and final output.",
+    promptSnippet: "Launch a multi-stage workflow; completion is delivered automatically as a pi-orchestra event.",
     promptGuidelines: [
       "Use workflow for ordered multi-stage work; not branching/DAG plans.",
       "Each stage gets its own bus and automatic leader; previous outputs feed the next stage.",
       "Use compete when one worker success is enough; use synthesize when findings must be combined.",
-      "Use status for progress, wait for terminal success/blocked/failed/closed.",
+      "Use workflow status for progress; workflow.finished events deliver terminal success/blocked/failed/closed results.",
     ],
     parameters: WorkflowToolParams,
     executionMode: "sequential",
@@ -272,7 +236,13 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
     workerRunIds: workgroupOutput.runs.map((run) => run.id),
   });
 
-  const settledWorkgroup = await settleWorkgroupRuns(deps.orchestra, bus.id, stage.strategy);
+  const settledWorkgroup = await settleWorkgroupRuns(
+    deps.orchestra,
+    deps.store,
+    bus.id,
+    workgroupOutput.runs.map((run) => run.id),
+    stage.strategy,
+  );
   if (isWorkflowClosed(deps.store, workflowId)) return;
 
   if (stage.strategy === "compete" && !settledWorkgroup.winner) {
@@ -288,7 +258,7 @@ async function runStageLeader(
   workflowId: string,
   stageIndex: number,
   busId: string,
-  workerResults: WaitRunResult[],
+  workerResults: AgentRunResult[],
   deps: WorkflowRunnerDeps,
 ): Promise<void> {
   const workflow = requireWorkflow(deps.store, workflowId);
@@ -310,10 +280,9 @@ async function runStageLeader(
     leaderRunId: leaderRun.id,
   });
 
-  const leaderSettled = await deps.orchestra.waitBusSettled(busId, { timeoutMs: null });
+  const latestLeaderRun = await terminalRunEvent(deps.store, leaderRun.id);
   if (isWorkflowClosed(deps.store, workflowId)) return;
 
-  const latestLeaderRun = leaderSettled.runs.find((run) => run.id === leaderRun.id) ?? leaderRun;
   const output = buildStageOutput(latestLeaderRun, leaderRun.id, workerResults);
   finishStage(deps.store, requireWorkflow(deps.store, workflowId), stageIndex, output);
 }
@@ -391,7 +360,6 @@ function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
   }
 
   if (!params.id) throw new Error(`workflow action=${params.action} requires id.`);
-  if (params.action === "wait") return { action: "wait", id: params.id, timeoutMs: params.timeoutMs };
   return { action: params.action, id: params.id };
 }
 
@@ -499,7 +467,7 @@ function buildStageWorkerGoal(workflow: WorkflowRun, stageIndex: number): string
   return parts.join("\n");
 }
 
-function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResults: WaitRunResult[]): string {
+function buildLeaderTask(workflow: WorkflowRun, stageIndex: number, workerResults: AgentRunResult[]): string {
   const stage = workflow.stages[stageIndex];
   const strategyInstructions =
     stage.strategy === "compete"
@@ -546,12 +514,12 @@ function formatPreviousStageOutput(stageName: string, output: WorkflowStageOutpu
   return [`<stage_output name="${stageName}">`, formatStageOutputForPrompt(output), "</stage_output>"].join("\n");
 }
 
-function formatWorkerResults(workerResults: WaitRunResult[]): string {
+function formatWorkerResults(workerResults: AgentRunResult[]): string {
   if (workerResults.length === 0) return "None.";
   return workerResults.map(formatWorkerResult).join("\n\n");
 }
 
-function formatWorkerResult(result: WaitRunResult): string {
+function formatWorkerResult(result: AgentRunResult): string {
   const lines = [
     `<worker_result run_id="${result.runId}" name="${result.name}" profile="${result.profile}" state="${result.state}">`,
   ];
@@ -575,7 +543,7 @@ function formatJsonData(data: unknown): string {
   return JSON.stringify(data, null, 2) ?? String(data);
 }
 
-function buildCompeteNoWinnerOutput(workerResults: WaitRunResult[]): WorkflowStageOutput {
+function buildCompeteNoWinnerOutput(workerResults: AgentRunResult[]): WorkflowStageOutput {
   const status = workerResults.some((worker) => worker.result?.status === "blocked") ? "blocked" : "failed";
   const counts = countWorkerResultStatuses(workerResults);
   const workflowRunResults = workerResults.map(toWorkflowRunResult);
@@ -587,7 +555,7 @@ function buildCompeteNoWinnerOutput(workerResults: WaitRunResult[]): WorkflowSta
   };
 }
 
-function countWorkerResultStatuses(workerResults: WaitRunResult[]): Record<AgentResultStatus, number> {
+function countWorkerResultStatuses(workerResults: AgentRunResult[]): Record<AgentResultStatus, number> {
   const counts: Record<AgentResultStatus, number> = { success: 0, blocked: 0, failed: 0 };
   for (const worker of workerResults) {
     if (worker.result) counts[worker.result.status]++;
@@ -598,7 +566,7 @@ function countWorkerResultStatuses(workerResults: WaitRunResult[]): Record<Agent
 function buildStageOutput(
   leaderRun: AgentRun,
   leaderRunId: string,
-  workerResults: WaitRunResult[],
+  workerResults: AgentRunResult[],
 ): WorkflowStageOutput {
   if (!leaderRun.result) {
     return {
@@ -619,7 +587,7 @@ function buildStageOutput(
   return output;
 }
 
-function toWorkflowRunResult(result: WaitRunResult) {
+function toWorkflowRunResult(result: AgentRunResult) {
   const output = {
     runId: result.runId,
     name: result.name,
@@ -635,62 +603,26 @@ function formatStageOutput(output: WorkflowStageOutput): string {
   return parts.join("\n");
 }
 
-function waitWorkflow(
-  store: AgentStore,
-  workflowId: string,
-  timeoutMs: number | null | undefined,
-): Promise<{ workflow: WorkflowRun; timedOut: boolean }> {
-  const resolvedTimeoutMs = resolveWaitTimeoutMs("workflow wait", timeoutMs);
-  const initialWorkflow = requireWorkflow(store, workflowId);
-  if (isTerminalAgentState(initialWorkflow.state)) {
-    return Promise.resolve({ workflow: initialWorkflow, timedOut: false });
-  }
+function terminalRunEvent(store: AgentStore, runId: string): Promise<AgentRun> {
+  const initialRun = store.getRun(runId);
+  if (initialRun && isTerminalAgentState(initialRun.state)) return Promise.resolve(initialRun);
 
   return new Promise((resolve) => {
-    let settled = false;
-    let latestWorkflow = initialWorkflow;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: () => void = () => undefined;
+    unsubscribe = store.subscribeRuns(
+      (run) => {
+        if (!isTerminalAgentState(run.state)) return;
 
-    const cleanup = () => {
-      if (timeout) clearTimeout(timeout);
-      unsubscribe();
-    };
-
-    const unsubscribe = store.subscribeWorkflows(
-      (workflow) => {
-        if (settled) return;
-        latestWorkflow = workflow;
-        if (!isTerminalAgentState(workflow.state)) return;
-
-        settled = true;
-        cleanup();
-        resolve({ workflow, timedOut: false });
+        unsubscribe();
+        resolve(run);
       },
-      (workflow) => workflow.id === workflowId,
+      (run) => run.id === runId,
     );
-
-    if (resolvedTimeoutMs !== null) {
-      timeout = setTimeout(() => {
-        if (settled) return;
-
-        settled = true;
-        cleanup();
-        resolve({ workflow: latestWorkflow, timedOut: true });
-      }, resolvedTimeoutMs);
-    }
   });
 }
 
 function formatWorkflowNotFound(id: string): string {
   return `Workflow ${id} not found.`;
-}
-
-function formatWaitWorkflowMessage(workflow: WorkflowRun | undefined, timedOut: boolean, requestedId?: string): string {
-  if (!workflow) return formatWorkflowNotFound(requestedId ?? "");
-  const label = requestedId === workflow.id ? workflow.id : formatNamedEntityLabel(workflow);
-  const prefix = timedOut ? "Timed out waiting for" : "Workflow reached terminal state:";
-  const result = workflow.result ? ` result=${workflow.result.status}` : "";
-  return `${prefix} ${label}; state=${workflow.state}${result}.`;
 }
 
 function formatWorkflowMessage(
@@ -708,12 +640,11 @@ function formatWorkflowMessage(
 }
 
 type RawWorkflowParams = {
-  action: "start" | "status" | "cancel" | "wait";
+  action: "start" | "status" | "cancel";
   name?: string;
   id?: string;
   goal?: string;
   stages?: RawWorkflowStageParams[];
-  timeoutMs?: number | null;
 };
 
 type RawWorkflowStageParams = {

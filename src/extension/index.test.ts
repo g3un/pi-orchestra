@@ -21,7 +21,7 @@ test("extension registers a workflow monitor command", () => {
   );
 });
 
-test("bus parameters use an OpenAI-compatible root object schema with wait actions", () => {
+test("bus parameters use an OpenAI-compatible root object schema without wait actions", () => {
   const { registeredTools } = registerExtension();
 
   const bus = registeredTools.find((tool) => tool.name === "bus");
@@ -31,14 +31,13 @@ test("bus parameters use an OpenAI-compatible root object schema with wait actio
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish", "wait_settled", "wait_next"]);
-  assert.match(parameters.properties.action?.description ?? "", /wait_settled waits/);
-  assert.match(parameters.properties.action?.description ?? "", /wait_next waits/);
+  assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish"]);
+  assert.match(parameters.properties.action?.description ?? "", /completion is delivered/);
   assert.match(parameters.properties.name?.description ?? "", /short bus name/);
   assert.match(parameters.properties.id?.description ?? "", /Bus id\/name/);
   assert.match(parameters.properties.message?.description ?? "", /Shared context/);
-  assert.match(parameters.properties.excludeRunIds?.description ?? "", /action=wait_next/);
-  assert.match(parameters.properties.timeoutMs?.description ?? "", /null waits indefinitely/);
+  assert.equal(parameters.properties.excludeRunIds, undefined);
+  assert.equal(parameters.properties.timeoutMs, undefined);
 });
 
 test("subagent parameters use an OpenAI-compatible root object schema", () => {
@@ -76,7 +75,7 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   assert.match(parameters.properties.members?.description ?? "", /Subagents/);
 });
 
-test("workflow parameters use an OpenAI-compatible root object schema with wait action", () => {
+test("workflow parameters use an OpenAI-compatible root object schema without wait action", () => {
   const { registeredTools } = registerExtension();
 
   const workflow = registeredTools.find((tool) => tool.name === "workflow");
@@ -86,13 +85,12 @@ test("workflow parameters use an OpenAI-compatible root object schema with wait 
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["start", "status", "cancel", "wait"]);
-  assert.match(parameters.properties.action?.description ?? "", /wait awaits terminal workflow state/);
-  assert.match(parameters.properties.id?.description ?? "", /status\/cancel\/wait/);
+  assert.deepEqual(parameters.properties.action?.enum, ["start", "status", "cancel"]);
+  assert.match(parameters.properties.action?.description ?? "", /status inspects/);
+  assert.match(parameters.properties.id?.description ?? "", /status\/cancel/);
   assert.match(parameters.properties.goal?.description ?? "", /Overall workflow goal/);
   assert.match(parameters.properties.stages?.description ?? "", /Linear stages/);
-  assert.match(parameters.properties.timeoutMs?.description ?? "", /Optional for action=wait/);
-  assert.match(parameters.properties.timeoutMs?.description ?? "", /default 10 min/);
+  assert.equal(parameters.properties.timeoutMs, undefined);
 });
 
 function registerExtension(): { registeredTools: ToolDefinition[]; registeredCommands: RegisteredCommand[] } {
