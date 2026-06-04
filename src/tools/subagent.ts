@@ -53,7 +53,10 @@ export const AgentProfileParams = Type.Object(
   {
     name: Type.String({ description: "Short role/name for the subagent." }),
     systemPrompt: Type.String({ description: "System prompt for the subagent." }),
-    tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool allowlist for the subagent." })),
+    tools: Type.Array(Type.String(), {
+      description:
+        "Explicit tool allowlist for the subagent. Use [] for no work tools; finish and publish_bus are added automatically.",
+    }),
     model: Type.Optional(
       Type.String({
         description: "Optional provider/model id.",
@@ -199,6 +202,7 @@ function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): Subagent
 }
 
 export function toAgentProfile(profile: RawAgentProfileParams): AgentProfile {
+  if (!Array.isArray(profile.tools)) throw new Error(`Profile "${profile.name}" requires tools.`);
   return {
     name: profile.name,
     systemPrompt: profile.systemPrompt,
@@ -255,7 +259,6 @@ type RawSubagentParams = {
   message?: string;
 };
 
-export type RawAgentProfileParams = Omit<AgentProfile, "tools" | "model"> &
-  Partial<Pick<AgentProfile, "tools" | "model">>;
+export type RawAgentProfileParams = Omit<AgentProfile, "model"> & Partial<Pick<AgentProfile, "model">>;
 
 type AgentProfileModel = NonNullable<ExtensionContext["model"]>;

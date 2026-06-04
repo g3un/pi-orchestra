@@ -10,21 +10,21 @@ import { createWorkgroupTool, settleWorkgroupRuns, type WorkgroupToolDeps } from
 const securityProfile: AgentProfile = {
   name: "security",
   systemPrompt: "Review security risks.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const backendProfile: AgentProfile = {
   name: "backend",
   systemPrompt: "Review backend design.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const brokenProfile: AgentProfile = {
   name: "broken",
   systemPrompt: "Fail during spawn.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 

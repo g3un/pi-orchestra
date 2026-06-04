@@ -10,7 +10,7 @@ import { createWorkflowTool } from "./workflow.ts";
 const workerProfile: AgentProfile = {
   name: "worker",
   systemPrompt: "Do worker tasks.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
@@ -24,35 +24,35 @@ const leaderProfile: AgentProfile = {
 const blockedWorkerProfile: AgentProfile = {
   name: "blocked-worker-profile",
   systemPrompt: "Block the worker task.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const failedWorkerProfile: AgentProfile = {
   name: "failed-worker-profile",
   systemPrompt: "Fail the worker task.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const hangingWorkerProfile: AgentProfile = {
   name: "hanging-worker-profile",
   systemPrompt: "Keep working until cancelled.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const blockedLeaderProfile: AgentProfile = {
   name: "blocked-leader",
   systemPrompt: "Block the workflow.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const failedLeaderProfile: AgentProfile = {
   name: "failed-leader",
   systemPrompt: "Fail the workflow.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 

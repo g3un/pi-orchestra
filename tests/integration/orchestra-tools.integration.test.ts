@@ -13,14 +13,14 @@ import { ControllableRuntime } from "../helpers/controllable-runtime.ts";
 const researcherProfile: AgentProfile = {
   name: "researcher",
   systemPrompt: "Research the assigned area.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 
 const reviewerProfile: AgentProfile = {
   name: "reviewer",
   systemPrompt: "Review the assigned area.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 

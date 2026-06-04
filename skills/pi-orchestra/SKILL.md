@@ -46,7 +46,7 @@ Profile defaults:
 
 - `name`: short role name, e.g. `reviewer`, `planner`, `doc-researcher`.
 - `systemPrompt`: one paragraph describing expertise, constraints, and output discipline.
-- `tools`: omit to allow defaults; restrict for risky or synthesis-only roles.
+- `tools`: always specify an explicit allowlist. Use `[]` for supplied-context-only roles; include any installed extension tool names the child needs.
 - `model`: omit unless the task needs a specific provider/model.
 
 ## Patterns

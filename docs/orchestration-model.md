@@ -24,7 +24,7 @@ Bus messages are peer reference context only:
 A subagent is an `AgentRun`: a child agent with a profile, task, bus id, state,
 and optional result.
 
-Profiles define the child agent's `systemPrompt`, optional tool allowlist, and
+Profiles define the child agent's `systemPrompt`, explicit tool allowlist, and
 optional model. The runtime attaches each subagent to exactly one bus.
 
 Every subagent must call the `finish` tool with:

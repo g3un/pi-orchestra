@@ -25,7 +25,7 @@ widget with the current stage and agent completion counts. Use
 
 ### Subagent
 
-A subagent is an isolated child agent with its own role, task, optional tool allowlist, and optional model. Subagents attach to a bus so they can receive shared reference context while working independently.
+A subagent is an isolated child agent with its own role, task, explicit tool allowlist, and optional model. Subagents attach to a bus so they can receive shared reference context while working independently.
 
 Use subagents when you want to delegate a focused task, such as review, research, implementation planning, or an alternative solution attempt.
 

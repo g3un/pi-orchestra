@@ -2,7 +2,7 @@
 
 Guidance for authoring reusable agent profiles in `src/profiles/`.
 
-In this repo, an `AgentProfile` has `name`, `systemPrompt`, optional `tools`,
+In this repo, an `AgentProfile` has `name`, `systemPrompt`, explicit `tools`,
 and optional `model`. For prompt wording details, also read
 [prompt-engineering.md](./prompt-engineering.md). For context policy, read
 [context-engineering.md](./context-engineering.md).
@@ -34,7 +34,8 @@ Every profile needs a clear answer to "what counts as done?"
 
 Tools are part of the profile's behavior, not a convenience bucket.
 
-- Give the profile the smallest tool set that can do its job.
+- Give each spawned profile an explicit smallest tool set that can do its job.
+- Do not rely on default tools; `tools` must be specified by the caller.
 - Separate data tools, action tools, and orchestration tools in your reasoning.
 - If a profile should not inspect files, run commands, or research, set
   `tools: []` and say that boundary explicitly in the prompt.
@@ -69,7 +70,7 @@ Start from behavior, then select runtime options.
 ## 6. Evaluate profiles as code
 
 - Add or update tests for the factory: default name, optional model override,
-  tool allowlist, and critical prompt clauses.
+  explicit tool policy, and critical prompt clauses.
 - Test representative tasks and near misses, including insufficient context.
 - Inspect traces for tool misuse, context drift, verbosity, and premature
   success.
@@ -81,7 +82,7 @@ Start from behavior, then select runtime options.
 - [ ] The profile has one stable responsibility.
 - [ ] The system prompt states scope, boundaries, output contract, and
       uncertainty handling.
-- [ ] The tool list is minimal and matches the prompt.
+- [ ] The explicit tool list is minimal and matches the prompt.
 - [ ] Context source priority and retrieval rules are explicit.
 - [ ] `model` is omitted unless an override is justified.
 - [ ] Tests cover defaults, overrides, tool policy, and critical prompt clauses.

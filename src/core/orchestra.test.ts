@@ -10,7 +10,7 @@ import type { AgentStore } from "./store.ts";
 const profile: AgentProfile = {
   name: "researcher",
   systemPrompt: "Research the assigned task.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
 

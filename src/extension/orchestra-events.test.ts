@@ -176,7 +176,7 @@ function stageRun() {
     strategy: "synthesize" as const,
     members: [],
     leader: {
-      profile: { name: "leader", systemPrompt: "Lead.", tools: undefined, model: undefined },
+      profile: { name: "leader", systemPrompt: "Lead.", tools: [], model: undefined },
       name: undefined,
       assignment: undefined,
     },

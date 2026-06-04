@@ -41,8 +41,6 @@ const PublishBusParams = Type.Object({
   message: Type.String(),
 });
 
-const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"];
-
 export class PiAgentRuntime implements AgentRuntime {
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly store: AgentStore;
@@ -74,7 +72,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const childTools = this.createChildTools(run.id);
     const model = await this.resolveProfileModel(profile);
-    const baseTools = profile.tools ?? DEFAULT_AGENT_TOOLS;
+    const baseTools = requireProfileTools(profile);
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
     const { session } = await createAgentSession({
       cwd: this.cwd,
@@ -329,6 +327,11 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
     "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
   ].join("\n");
+}
+
+function requireProfileTools(profile: AgentProfile): string[] {
+  if (!Array.isArray(profile.tools)) throw new Error(`Profile "${profile.name}" must specify tools.`);
+  return profile.tools;
 }
 
 function buildFinishRequiredPrompt(): string {

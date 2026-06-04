@@ -3,14 +3,25 @@ import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
-import { createSubagentTool } from "./subagent.ts";
+import { createSubagentTool, toAgentProfile, type RawAgentProfileParams } from "./subagent.ts";
 
 const profile: AgentProfile = {
   name: "researcher",
   systemPrompt: "Research the assigned task.",
-  tools: undefined,
+  tools: ["read", "bash"],
   model: undefined,
 };
+
+test("agent profile params require explicit tools", () => {
+  assert.throws(
+    () =>
+      toAgentProfile({
+        name: "researcher",
+        systemPrompt: "Research the assigned task.",
+      } as unknown as RawAgentProfileParams),
+    /Profile "researcher" requires tools\./,
+  );
+});
 
 test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();

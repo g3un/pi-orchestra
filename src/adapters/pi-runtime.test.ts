@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
 import { beforeEach, test, vi } from "vitest";
-import type { AgentRun } from "../core/subagent.ts";
+import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { PiAgentRuntime } from "./pi-runtime.ts";
 
@@ -65,6 +65,24 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   assert.deepEqual(session.promptCalls[0]?.options, { expandPromptTemplates: false });
 });
 
+test("pi runtime rejects profiles without explicit tools", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+
+  await assert.rejects(
+    () =>
+      runtime.spawn(
+        { name: "researcher", systemPrompt: "Research the task.", model: undefined } as AgentProfile,
+        "Inspect the code.",
+        "bus-1",
+        { id: "agent-1", name: "Agent 1" },
+      ),
+    /Profile "researcher" must specify tools\./,
+  );
+  assert.equal(codingAgentMocks.createAgentSession.mock.calls.length, 0);
+});
+
 test("pi runtime injects unread bus messages once and skips messages from the same run", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({
@@ -79,7 +97,7 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
 
   await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
     {
@@ -105,7 +123,7 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   const secondSession = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const firstRun = await runtime.spawn(
-    { name: "first", systemPrompt: "Do first task.", tools: undefined, model: undefined },
+    { name: "first", systemPrompt: "Do first task.", tools: ["read", "bash"], model: undefined },
     "First task.",
     "bus-1",
     {
@@ -114,7 +132,7 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
     },
   );
   const secondRun = await runtime.spawn(
-    { name: "second", systemPrompt: "Do second task.", tools: undefined, model: undefined },
+    { name: "second", systemPrompt: "Do second task.", tools: ["read", "bash"], model: undefined },
     "Second task.",
     "bus-1",
     {
@@ -145,7 +163,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   const session = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
     { id: "agent-1", name: "Agent 1" },
@@ -186,7 +204,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
   const session = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
     { id: "agent-1", name: "Agent 1" },
@@ -227,7 +245,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
 
   await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
     {
@@ -255,7 +273,7 @@ test("pi runtime rejects unresolved profile models before creating a session", a
   await assert.rejects(
     () =>
       runtime.spawn(
-        { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: "missing/model" },
+        { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: "missing/model" },
         "Inspect the code.",
         "bus-1",
         { id: "agent-1", name: "Agent 1" },
