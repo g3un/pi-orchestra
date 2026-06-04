@@ -2,7 +2,6 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Type } from "typebox";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
-import { formatNamedEntityLabel } from "../utils.ts";
 
 export type BusInput =
   | {
@@ -11,11 +10,11 @@ export type BusInput =
     }
   | {
       action: "status";
-      id: string;
+      name: string;
     }
   | {
       action: "publish";
-      id: string;
+      name: string;
       message: string;
       from?: string;
     };
@@ -45,12 +44,8 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     name: Type.Optional(
       Type.String({
-        description: "Optional short bus name for action=create.",
-      }),
-    ),
-    id: Type.Optional(
-      Type.String({
-        description: "Required except create. Bus id/name returned by action=create.",
+        description:
+          "Optional for action=create; required for action=status/publish. Use the short bus name, not a bus id.",
       }),
     ),
     message: Type.Optional(
@@ -69,21 +64,21 @@ export function createBusTool({ orchestra }: BusToolDeps): BusTool {
     async execute(input) {
       if (input.action === "create") {
         const bus = orchestra.createBus({ name: input.name });
-        return { bus, message: formatBusStatus(bus, `Created bus ${formatNamedEntityLabel(bus)}.`) };
+        return { bus, message: formatBusStatus(bus, `Created bus ${formatBusLabel(bus)}.`) };
       }
 
-      const bus = orchestra.getBus(input.id);
-      if (!bus) return { message: formatBusNotFound(input.id) };
+      const bus = orchestra.getBus(input.name);
+      if (!bus) return { message: formatBusNotFound(input.name) };
 
       if (input.action === "status") {
         return { bus, message: formatBusStatus(bus) };
       }
 
-      const published = await orchestra.publishBus(input.id, input.message, input.from ?? "main");
+      const published = await orchestra.publishBus(input.name, input.message, input.from ?? "main");
       return {
         bus: published.bus,
         busMessage: published.busMessage,
-        message: formatBusStatus(published.bus, `Published message to bus ${formatNamedEntityLabel(published.bus)}.`),
+        message: formatBusStatus(published.bus, `Published message to bus ${formatBusLabel(published.bus)}.`),
       };
     },
   };
@@ -97,7 +92,7 @@ export function defineBusPiTool(resolveTool: (ctx: ExtensionContext) => BusTool)
     promptSnippet: "Use one bus per delegated work item; spawn related subagents or workgroups on it.",
     promptGuidelines: [
       "Use bus create before spawning related subagents or workgroups; reuse it for that work item.",
-      "Use bus publish to send shared context to attached agents; bus status shows published messages.",
+      "Use bus publish with the bus name, not a bus id, to send shared context to attached agents; bus status shows published messages.",
       "Do not wait on buses; pi-orchestra delivers subagent and workgroup finish events automatically.",
     ],
     parameters: BusToolParams,
@@ -117,22 +112,22 @@ function toBusInput(params: RawBusParams): BusInput {
   if (params.action === "create") return { action: "create", name: params.name };
 
   if (params.action === "status") {
-    if (!params.id) throw new Error("bus action=status requires id.");
-    return { action: "status", id: params.id };
+    if (!params.name) throw new Error("bus action=status requires name.");
+    return { action: "status", name: params.name };
   }
 
-  if (!params.id) throw new Error("bus action=publish requires id.");
+  if (!params.name) throw new Error("bus action=publish requires name.");
   if (!params.message) throw new Error("bus action=publish requires message.");
-  return { action: "publish", id: params.id, message: params.message };
+  return { action: "publish", name: params.name, message: params.message };
 }
 
-function formatBusNotFound(id: string): string {
-  return `Bus ${id} not found.`;
+function formatBusNotFound(name: string): string {
+  return `Bus ${name} not found.`;
 }
 
 function formatBusStatus(
   bus: Bus,
-  headline = `Bus ${formatNamedEntityLabel(bus)} has ${bus.messages.length} message(s).`,
+  headline = `Bus ${formatBusLabel(bus)} has ${bus.messages.length} message(s).`,
 ): string {
   if (bus.messages.length === 0) return headline;
 
@@ -143,9 +138,12 @@ function formatBusMessage(message: BusMessage): string {
   return [`- ${message.id} from ${message.from}:`, message.message].join("\n");
 }
 
+function formatBusLabel(bus: Bus): string {
+  return bus.name;
+}
+
 type RawBusParams = {
   action: "create" | "status" | "publish";
   name?: string;
-  id?: string;
   message?: string;
 };

@@ -28,8 +28,8 @@ test("bus status returns stored bus messages", async () => {
   };
   orchestra.buses.set(bus.id, bus);
 
-  const output = await tool.execute({ action: "status", id: bus.id });
-  const missingOutput = await tool.execute({ action: "status", id: "missing" });
+  const output = await tool.execute({ action: "status", name: bus.name });
+  const missingOutput = await tool.execute({ action: "status", name: "missing" });
 
   assert.equal(output.bus, bus);
   assert.equal(
@@ -40,22 +40,25 @@ test("bus status returns stored bus messages", async () => {
   assert.equal(missingOutput.message, "Bus missing not found.");
 });
 
-test("bus publish delegates to orchestra", async () => {
+test("bus publish delegates with the bus name", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createBusTool({ orchestra });
-  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
+  const bus: Bus = { id: "shared-context", name: "Shared Context", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
-  const output = await tool.execute({ action: "publish", id: bus.id, message: "New constraint." });
+  const output = await tool.execute({ action: "publish", name: bus.name, message: "New constraint." });
 
   assert.deepEqual(orchestra.published, {
-    id: bus.id,
+    id: bus.name,
     message: "New constraint.",
     from: "main",
   });
   assert.deepEqual(output.busMessage, { id: "message-1", message: "New constraint.", from: "main" });
   assert.deepEqual(orchestra.getBus(bus.id)?.messages, [{ id: "message-1", message: "New constraint.", from: "main" }]);
-  assert.equal(output.message, "Published message to bus bus-1.\n\nMessages:\n- message-1 from main:\nNew constraint.");
+  assert.equal(
+    output.message,
+    "Published message to bus Shared Context.\n\nMessages:\n- message-1 from main:\nNew constraint.",
+  );
 });
 
 test("bus publish preserves an explicit sender", async () => {
@@ -64,7 +67,7 @@ test("bus publish preserves an explicit sender", async () => {
   const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
-  const output = await tool.execute({ action: "publish", id: bus.id, message: "Peer context.", from: "agent-1" });
+  const output = await tool.execute({ action: "publish", name: bus.name, message: "Peer context.", from: "agent-1" });
 
   assert.deepEqual(orchestra.published, {
     id: bus.id,
@@ -87,17 +90,21 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   getBus(id: string): Bus | undefined {
-    return this.buses.get(id);
+    return this.findBus(id);
   }
 
   async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
     this.published = { id, message, from };
-    const bus = this.buses.get(id);
+    const bus = this.findBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
 
     const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, message, from };
     bus.messages.push(busMessage);
     return { bus, busMessage };
+  }
+
+  private findBus(id: string): Bus | undefined {
+    return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
   }
 
   async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {

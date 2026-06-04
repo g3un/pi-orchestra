@@ -69,7 +69,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
 
   const published = await busTool.execute({
     action: "publish",
-    id: "Review Work",
+    name: "Review Work",
     message: "Also check strict-mode behavior.",
   });
 

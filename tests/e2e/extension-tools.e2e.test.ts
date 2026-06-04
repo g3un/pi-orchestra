@@ -13,11 +13,11 @@ test("registered Pi tools execute a bus workflow through the extension boundary"
   const createdDetails = created.details as BusOutput;
 
   assert.equal(createdDetails.bus?.id, "release-plan");
-  assert.match(firstText(created), /Created bus Release Plan \(release-plan\)\./);
+  assert.match(firstText(created), /Created bus Release Plan\./);
 
   const published = await executeTool(
     busTool,
-    { action: "publish", id: "Release Plan", message: "Coordinate feature flags before rollout." },
+    { action: "publish", name: "Release Plan", message: "Coordinate feature flags before rollout." },
     ctx,
   );
   const publishedDetails = published.details as BusOutput;
@@ -27,9 +27,9 @@ test("registered Pi tools execute a bus workflow through the extension boundary"
   assert.equal(publishedDetails.bus?.messages.length, 1);
   assert.equal(publishedDetails.bus?.messages[0]?.message, "Coordinate feature flags before rollout.");
 
-  const status = await executeTool(busTool, { action: "status", id: "release-plan" }, ctx);
+  const status = await executeTool(busTool, { action: "status", name: "Release Plan" }, ctx);
 
-  assert.match(firstText(status), /Bus Release Plan \(release-plan\) has 1 message\(s\)\./);
+  assert.match(firstText(status), /Bus Release Plan has 1 message\(s\)\./);
   assert.match(firstText(status), /Coordinate feature flags before rollout\./);
 });
 
@@ -41,10 +41,10 @@ test("extension keeps orchestration state isolated per cwd", async () => {
 
   await executeTool(busTool, { action: "create", name: "Shared Name" }, firstCwd);
 
-  const sameCwdStatus = await executeTool(busTool, { action: "status", id: "Shared Name" }, firstCwd);
-  const otherCwdStatus = await executeTool(busTool, { action: "status", id: "Shared Name" }, secondCwd);
+  const sameCwdStatus = await executeTool(busTool, { action: "status", name: "Shared Name" }, firstCwd);
+  const otherCwdStatus = await executeTool(busTool, { action: "status", name: "Shared Name" }, secondCwd);
 
-  assert.match(firstText(sameCwdStatus), /Bus Shared Name \(shared-name\) has 0 message\(s\)\./);
+  assert.match(firstText(sameCwdStatus), /Bus Shared Name has 0 message\(s\)\./);
   assert.equal(firstText(otherCwdStatus), "Bus Shared Name not found.");
 });
 

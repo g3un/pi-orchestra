@@ -33,8 +33,8 @@ test("bus parameters use an OpenAI-compatible root object schema without wait ac
   assert.ok(parameters.properties);
   assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish"]);
   assert.match(parameters.properties.action?.description ?? "", /completion is delivered/);
-  assert.match(parameters.properties.name?.description ?? "", /short bus name/);
-  assert.match(parameters.properties.id?.description ?? "", /Bus id\/name/);
+  assert.match(parameters.properties.name?.description ?? "", /status\/publish/);
+  assert.equal(parameters.properties.id, undefined);
   assert.match(parameters.properties.message?.description ?? "", /Shared context/);
   assert.equal(parameters.properties.excludeRunIds, undefined);
   assert.equal(parameters.properties.timeoutMs, undefined);
