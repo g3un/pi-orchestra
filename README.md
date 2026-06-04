@@ -44,6 +44,17 @@ A workflow runs ordered workgroup stages. Each stage gets a fresh bus, starts it
 
 Use workflows for multi-step plans where later stages should depend on the summarized output of earlier stages instead of raw worker transcripts.
 
+## Reusable profiles
+
+`src/profiles/` exports reusable `AgentProfile` factories:
+
+- `createSourceCodeQaProfile`: answer repository questions from local code, tests, and docs.
+- `createExternalResearcherProfile`: gather and synthesize external source material with citations and uncertainty handling.
+- `createCodeReviewerProfile`: review local code or changes with findings-first output.
+- `createStageLeaderProfile`: restricted workflow-stage synthesis from supplied context only.
+
+Except for `createStageLeaderProfile`, profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
+
 ## Notes
 
 - Create a `bus` before spawning related subagents or workgroups.

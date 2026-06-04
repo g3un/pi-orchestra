@@ -21,7 +21,7 @@ Use Pi-Orchestra to parallelize or structure work without losing the main thread
 1. Decide the smallest useful delegation unit and expected final output.
 2. Create one named bus per delegated work item before `subagent` or `workgroup`.
 3. Put stable shared context in the initial task/goal. Use `bus action=publish` only for new facts, constraints, artifacts, blockers, or course corrections useful to attached agents.
-4. Give every child agent a specific profile, assignment, success criteria, and handoff shape.
+4. Give every child agent a specific profile, assignment, success criteria, handoff shape, and explicit tool allowlist.
 5. Continue main-thread work while waiting. Pi-Orchestra completion events arrive automatically.
 6. On completion:
    - For standalone subagents, consume the `subagent.finished` summary/data.
@@ -46,7 +46,7 @@ Profile defaults:
 
 - `name`: short role name, e.g. `reviewer`, `planner`, `doc-researcher`.
 - `systemPrompt`: one paragraph describing expertise, constraints, and output discipline.
-- `tools`: always specify an explicit allowlist. Use `[]` for supplied-context-only roles; include any installed extension tool names the child needs.
+- `tools`: always inject an explicit allowlist from the tools available to the main agent. Include only tools the child needs, including installed extension tool names for research/browser work. Use `[]` for supplied-context-only roles.
 - `model`: omit unless the task needs a specific provider/model.
 
 ## Patterns

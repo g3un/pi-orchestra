@@ -36,6 +36,8 @@ Tools are part of the profile's behavior, not a convenience bucket.
 
 - Give each spawned profile an explicit smallest tool set that can do its job.
 - Do not rely on default tools; `tools` must be specified by the caller.
+- When using a reusable profile, the main agent must inject the concrete
+  installed or active tool names needed for that child task.
 - Separate data tools, action tools, and orchestration tools in your reasoning.
 - If a profile should not inspect files, run commands, or research, set
   `tools: []` and say that boundary explicitly in the prompt.
