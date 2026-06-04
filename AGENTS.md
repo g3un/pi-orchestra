@@ -1,5 +1,14 @@
 # Pi-Orchestra: Agent Guide
 
+## Coding guidelines
+
+- Do not introduce unnecessary code duplication; reuse existing data, helpers, types, and patterns where they already fit.
+- Do not keep compatibility aliases, wrappers, or deprecated exports unless the user explicitly asks for backward compatibility.
+- Do not implement features, behaviors, or abstractions that were not requested by the user.
+- Do not add, change, or rely on environment variables unless the user explicitly asks for them.
+- Do not mark data as optional just to provide defaults. Use required fields when the caller must make an explicit choice.
+- Prefer explicit inputs over implicit defaults when behavior affects runtime capabilities, tools, permissions, or public API contracts.
+
 ## Project Structure
 
 - `src/` contains all TypeScript source for the package and Pi extension.
