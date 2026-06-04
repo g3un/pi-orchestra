@@ -372,10 +372,13 @@ function waitForRunState(store: InMemoryAgentStore, id: string, state: AgentRun[
   if (currentRun?.state === state) return Promise.resolve(currentRun);
 
   return new Promise((resolve) => {
-    const unsubscribe = store.subscribeRun(id, (run) => {
-      if (run.state !== state) return;
-      unsubscribe();
-      resolve(run);
-    });
+    const unsubscribe = store.subscribeRuns(
+      (run) => {
+        if (run.state !== state) return;
+        unsubscribe();
+        resolve(run);
+      },
+      (run) => run.id === id,
+    );
   });
 }

@@ -11,7 +11,10 @@ test("store saves runs in insertion order and notifies matching subscribers", ()
   const second = run({ id: "agent-2" });
   const observed: AgentRun[] = [];
 
-  const unsubscribe = store.subscribeRun(first.id, (updatedRun) => observed.push(updatedRun));
+  const unsubscribe = store.subscribeRuns(
+    (updatedRun) => observed.push(updatedRun),
+    (updatedRun) => updatedRun.id === first.id,
+  );
   store.saveRun(first);
   store.saveRun(second);
 
@@ -31,8 +34,9 @@ test("store supports multiple run subscribers and removes them independently", (
   const store = new InMemoryAgentStore();
   const firstObserved: string[] = [];
   const secondObserved: string[] = [];
-  const unsubscribeFirst = store.subscribeRun("agent-1", (updatedRun) => firstObserved.push(updatedRun.state));
-  const unsubscribeSecond = store.subscribeRun("agent-1", (updatedRun) => secondObserved.push(updatedRun.state));
+  const agentFilter = (updatedRun: AgentRun) => updatedRun.id === "agent-1";
+  const unsubscribeFirst = store.subscribeRuns((updatedRun) => firstObserved.push(updatedRun.state), agentFilter);
+  const unsubscribeSecond = store.subscribeRuns((updatedRun) => secondObserved.push(updatedRun.state), agentFilter);
 
   store.saveRun(run({ id: "agent-1", state: "success" }));
   unsubscribeFirst();
@@ -42,6 +46,19 @@ test("store supports multiple run subscribers and removes them independently", (
 
   assert.deepEqual(firstObserved, ["success"]);
   assert.deepEqual(secondObserved, ["success", "blocked"]);
+});
+
+test("store notifies global run subscribers until unsubscribed", () => {
+  const store = new InMemoryAgentStore();
+  const observed: string[] = [];
+  const unsubscribe = store.subscribeRuns((updatedRun) => observed.push(updatedRun.id));
+
+  store.saveRun(run({ id: "agent-1" }));
+  store.saveRun(run({ id: "agent-2" }));
+  unsubscribe();
+  store.saveRun(run({ id: "agent-3" }));
+
+  assert.deepEqual(observed, ["agent-1", "agent-2"]);
 });
 
 test("store appends and replaces bus messages by id", () => {
@@ -73,7 +90,10 @@ test("store saves workflows and notifies workflow subscribers until unsubscribed
   const store = new InMemoryAgentStore();
   const workflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
   const observed: WorkflowRun[] = [];
-  const unsubscribe = store.subscribeWorkflow(workflow.id, (updatedWorkflow) => observed.push(updatedWorkflow));
+  const unsubscribe = store.subscribeWorkflows(
+    (updatedWorkflow) => observed.push(updatedWorkflow),
+    (updatedWorkflow) => updatedWorkflow.id === workflow.id,
+  );
 
   store.saveWorkflow(workflow);
   const succeeded = { ...workflow, state: "success" as const };
@@ -85,6 +105,19 @@ test("store saves workflows and notifies workflow subscribers until unsubscribed
   assert.equal(store.getWorkflow(workflow.id), closed);
   assert.deepEqual(store.listWorkflows(), [closed]);
   assert.deepEqual(observed, [workflow, succeeded]);
+});
+
+test("store notifies global workflow subscribers until unsubscribed", () => {
+  const store = new InMemoryAgentStore();
+  const observed: string[] = [];
+  const unsubscribe = store.subscribeWorkflows((workflow) => observed.push(workflow.id));
+
+  store.saveWorkflow(workflowRun({ id: "workflow-1" }));
+  store.saveWorkflow(workflowRun({ id: "workflow-2" }));
+  unsubscribe();
+  store.saveWorkflow(workflowRun({ id: "workflow-3" }));
+
+  assert.deepEqual(observed, ["workflow-1", "workflow-2"]);
 });
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {

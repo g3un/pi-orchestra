@@ -4,7 +4,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import piOrchestraExtension from "./index.ts";
 
 test("extension registers the four target-oriented Pi tools", () => {
-  const registeredTools = registerExtensionTools();
+  const { registeredTools } = registerExtension();
 
   assert.deepEqual(
     registeredTools.map((tool) => tool.name),
@@ -12,8 +12,17 @@ test("extension registers the four target-oriented Pi tools", () => {
   );
 });
 
+test("extension registers a workflow monitor command", () => {
+  const { registeredCommands } = registerExtension();
+
+  assert.deepEqual(
+    registeredCommands.map((command) => command.name),
+    ["orchestra-workflows"],
+  );
+});
+
 test("bus parameters use an OpenAI-compatible root object schema with wait actions", () => {
-  const registeredTools = registerExtensionTools();
+  const { registeredTools } = registerExtension();
 
   const bus = registeredTools.find((tool) => tool.name === "bus");
   assert.ok(bus);
@@ -33,7 +42,7 @@ test("bus parameters use an OpenAI-compatible root object schema with wait actio
 });
 
 test("subagent parameters use an OpenAI-compatible root object schema", () => {
-  const registeredTools = registerExtensionTools();
+  const { registeredTools } = registerExtension();
 
   const subagent = registeredTools.find((tool) => tool.name === "subagent");
   assert.ok(subagent);
@@ -52,7 +61,7 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
 });
 
 test("workgroup parameters use an OpenAI-compatible root object schema", () => {
-  const registeredTools = registerExtensionTools();
+  const { registeredTools } = registerExtension();
 
   const workgroup = registeredTools.find((tool) => tool.name === "workgroup");
   assert.ok(workgroup);
@@ -68,7 +77,7 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
 });
 
 test("workflow parameters use an OpenAI-compatible root object schema with wait action", () => {
-  const registeredTools = registerExtensionTools();
+  const { registeredTools } = registerExtension();
 
   const workflow = registeredTools.find((tool) => tool.name === "workflow");
   assert.ok(workflow);
@@ -86,16 +95,32 @@ test("workflow parameters use an OpenAI-compatible root object schema with wait 
   assert.match(parameters.properties.timeoutMs?.description ?? "", /default 10 min/);
 });
 
-function registerExtensionTools(): ToolDefinition[] {
+function registerExtension(): { registeredTools: ToolDefinition[]; registeredCommands: RegisteredCommand[] } {
   const registeredTools: ToolDefinition[] = [];
+  const registeredCommands: RegisteredCommand[] = [];
 
   piOrchestraExtension({
     registerTool(tool: ToolDefinition) {
       registeredTools.push(tool);
     },
+    registerCommand(name: string, command: RegisteredCommandOptions) {
+      registeredCommands.push({ name, ...command });
+    },
+    on() {
+      return undefined;
+    },
   } as unknown as ExtensionAPI);
 
-  return registeredTools;
+  return { registeredTools, registeredCommands };
+}
+
+interface RegisteredCommand extends RegisteredCommandOptions {
+  name: string;
+}
+
+interface RegisteredCommandOptions {
+  description?: string;
+  handler: (...args: unknown[]) => unknown;
 }
 
 interface JsonSchemaObject {

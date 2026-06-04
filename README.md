@@ -15,6 +15,9 @@ pi -e npm:@g3un/pi-orchestra
 ```
 
 Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and `workflow`.
+Active workflows are also shown in a TUI progress widget with the current stage
+and agent completion counts. Use `/orchestra-workflows` to reopen the widget if
+needed.
 
 ## Core concepts
 

@@ -6,7 +6,7 @@ export interface AgentStore {
   saveRun(run: AgentRun): void;
   getRun(id: string): AgentRun | undefined;
   listRuns(): AgentRun[];
-  subscribeRun(id: string, listener: (run: AgentRun) => void): () => void;
+  subscribeRuns(listener: (run: AgentRun) => void, filter?: (run: AgentRun) => boolean): () => void;
 
   saveBus(bus: Bus): void;
   getBus(id: string): Bus | undefined;
@@ -17,5 +17,8 @@ export interface AgentStore {
   saveWorkflow(workflow: WorkflowRun): void;
   getWorkflow(id: string): WorkflowRun | undefined;
   listWorkflows(): WorkflowRun[];
-  subscribeWorkflow(id: string, listener: (workflow: WorkflowRun) => void): () => void;
+  subscribeWorkflows(
+    listener: (workflow: WorkflowRun) => void,
+    filter?: (workflow: WorkflowRun) => boolean,
+  ): () => void;
 }

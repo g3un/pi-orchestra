@@ -54,6 +54,12 @@ function registerExtensionTools(): ToolDefinition[] {
     registerTool(tool: ToolDefinition) {
       tools.push(tool);
     },
+    registerCommand() {
+      return undefined;
+    },
+    on() {
+      return undefined;
+    },
   } as unknown as ExtensionAPI);
   return tools;
 }

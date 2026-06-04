@@ -3,16 +3,21 @@ import type { Bus, BusMessage } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 
+interface StoreSubscription<T> {
+  listener(value: T): void;
+  filter?: (value: T) => boolean;
+}
+
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
   private readonly workflows = new Map<string, WorkflowRun>();
-  private readonly runListeners = new Map<string, Set<(run: AgentRun) => void>>();
-  private readonly workflowListeners = new Map<string, Set<(workflow: WorkflowRun) => void>>();
+  private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
+  private readonly workflowSubscriptions = new Set<StoreSubscription<WorkflowRun>>();
 
   saveRun(run: AgentRun): void {
     this.runs.set(run.id, run);
-    for (const listener of this.runListeners.get(run.id) ?? []) listener(run);
+    notifySubscribers(this.runSubscriptions, run);
   }
 
   getRun(id: string): AgentRun | undefined {
@@ -23,15 +28,10 @@ export class InMemoryAgentStore implements AgentStore {
     return [...this.runs.values()];
   }
 
-  subscribeRun(id: string, listener: (run: AgentRun) => void): () => void {
-    const listeners = this.runListeners.get(id) ?? new Set<(run: AgentRun) => void>();
-    listeners.add(listener);
-    this.runListeners.set(id, listeners);
-
-    return () => {
-      listeners.delete(listener);
-      if (listeners.size === 0) this.runListeners.delete(id);
-    };
+  subscribeRuns(listener: (run: AgentRun) => void, filter?: (run: AgentRun) => boolean): () => void {
+    const subscription = { listener, filter };
+    this.runSubscriptions.add(subscription);
+    return () => this.runSubscriptions.delete(subscription);
   }
 
   saveBus(bus: Bus): void {
@@ -61,7 +61,7 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveWorkflow(workflow: WorkflowRun): void {
     this.workflows.set(workflow.id, workflow);
-    for (const listener of this.workflowListeners.get(workflow.id) ?? []) listener(workflow);
+    notifySubscribers(this.workflowSubscriptions, workflow);
   }
 
   getWorkflow(id: string): WorkflowRun | undefined {
@@ -72,14 +72,18 @@ export class InMemoryAgentStore implements AgentStore {
     return [...this.workflows.values()];
   }
 
-  subscribeWorkflow(id: string, listener: (workflow: WorkflowRun) => void): () => void {
-    const listeners = this.workflowListeners.get(id) ?? new Set<(workflow: WorkflowRun) => void>();
-    listeners.add(listener);
-    this.workflowListeners.set(id, listeners);
+  subscribeWorkflows(
+    listener: (workflow: WorkflowRun) => void,
+    filter?: (workflow: WorkflowRun) => boolean,
+  ): () => void {
+    const subscription = { listener, filter };
+    this.workflowSubscriptions.add(subscription);
+    return () => this.workflowSubscriptions.delete(subscription);
+  }
+}
 
-    return () => {
-      listeners.delete(listener);
-      if (listeners.size === 0) this.workflowListeners.delete(id);
-    };
+function notifySubscribers<T>(subscriptions: Set<StoreSubscription<T>>, value: T): void {
+  for (const subscription of subscriptions) {
+    if (!subscription.filter || subscription.filter(value)) subscription.listener(value);
   }
 }

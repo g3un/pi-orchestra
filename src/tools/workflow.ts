@@ -65,6 +65,11 @@ export interface WorkflowToolDeps {
   store: AgentStore;
 }
 
+export interface WorkflowPiToolOptions {
+  onWorkflowInput?: (ctx: ExtensionContext, input: WorkflowInput) => void;
+  onWorkflowOutput?: (ctx: ExtensionContext, output: WorkflowOutput) => void;
+}
+
 const WorkflowStageParams = Type.Object(
   {
     name: Type.String({
@@ -181,7 +186,10 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
   };
 }
 
-export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => WorkflowTool) {
+export function defineWorkflowPiTool(
+  resolveTool: (ctx: ExtensionContext) => WorkflowTool,
+  options: WorkflowPiToolOptions = {},
+) {
   return defineTool({
     name: "workflow",
     label: "Workflow",
@@ -196,9 +204,11 @@ export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => Wor
     parameters: WorkflowToolParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const output = await resolveTool(ctx).execute(
-        withDefaultModels(toWorkflowInput(params as RawWorkflowParams), ctx),
-      );
+      const input = withDefaultModels(toWorkflowInput(params as RawWorkflowParams), ctx);
+      options.onWorkflowInput?.(ctx, input);
+
+      const output = await resolveTool(ctx).execute(input);
+      if (output.workflow) options.onWorkflowOutput?.(ctx, output);
 
       return {
         content: [{ type: "text", text: output.message }],
@@ -646,15 +656,18 @@ function waitWorkflow(
       unsubscribe();
     };
 
-    const unsubscribe = store.subscribeWorkflow(workflowId, (workflow) => {
-      if (settled) return;
-      latestWorkflow = workflow;
-      if (!isTerminalAgentState(workflow.state)) return;
+    const unsubscribe = store.subscribeWorkflows(
+      (workflow) => {
+        if (settled) return;
+        latestWorkflow = workflow;
+        if (!isTerminalAgentState(workflow.state)) return;
 
-      settled = true;
-      cleanup();
-      resolve({ workflow, timedOut: false });
-    });
+        settled = true;
+        cleanup();
+        resolve({ workflow, timedOut: false });
+      },
+      (workflow) => workflow.id === workflowId,
+    );
 
     if (resolvedTimeoutMs !== null) {
       timeout = setTimeout(() => {

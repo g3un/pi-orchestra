@@ -183,11 +183,14 @@ export class Orchestra implements OrchestraApi {
       for (const run of initialRuns) {
         if (isTerminalAgentState(run.state)) continue;
         unsubscribeAll.push(
-          this.store.subscribeRun(run.id, (updatedRun) => {
-            if (settled) return;
-            latestRuns.set(updatedRun.id, updatedRun);
-            resolveIfDone();
-          }),
+          this.store.subscribeRuns(
+            (updatedRun) => {
+              if (settled) return;
+              latestRuns.set(updatedRun.id, updatedRun);
+              resolveIfDone();
+            },
+            (updatedRun) => updatedRun.id === run.id,
+          ),
         );
       }
 
@@ -238,12 +241,15 @@ export class Orchestra implements OrchestraApi {
       for (const run of initialRuns) {
         if (isTerminalAgentState(run.state)) continue;
         unsubscribeAll.push(
-          this.store.subscribeRun(run.id, (updatedRun) => {
-            if (settled) return;
-            latestRuns.set(updatedRun.id, updatedRun);
-            if (!excludedRunIds.has(updatedRun.id) && isTerminalAgentState(updatedRun.state))
-              resolveWithRun(updatedRun);
-          }),
+          this.store.subscribeRuns(
+            (updatedRun) => {
+              if (settled) return;
+              latestRuns.set(updatedRun.id, updatedRun);
+              if (!excludedRunIds.has(updatedRun.id) && isTerminalAgentState(updatedRun.state))
+                resolveWithRun(updatedRun);
+            },
+            (updatedRun) => updatedRun.id === run.id,
+          ),
         );
       }
     });
