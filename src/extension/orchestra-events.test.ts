@@ -161,6 +161,7 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: "workflow",
     name: "workflow",
     goal: "Complete workflow.",
+    startedAtMs: 1_700_000_000_000,
     state: "idle",
     currentStageIndex: 0,
     stages: [],

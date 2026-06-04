@@ -2,17 +2,33 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
-import { formatNamedEntityLabel, isTerminalAgentState } from "../utils.ts";
+import { isTerminalAgentState } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
 const MAX_MONITORED_WORKFLOWS = 2;
 const MAX_WIDGET_LINES = 10;
+const DEFAULT_TICK_MS = 1_000;
+
+export interface WorkflowMonitorControllerOptions {
+  now?: () => number;
+  /** Defaults to 1000 ms. Use 0 to disable uptime ticks in tests. */
+  tickMs?: number;
+}
 
 export class WorkflowMonitorController {
+  private readonly now: () => number;
+  private readonly tickMs: number;
   private unsubscribe?: () => void;
+  private tickTimer?: ReturnType<typeof setInterval>;
   private ctx?: ExtensionContext;
 
-  constructor(private readonly store: AgentStore) {}
+  constructor(
+    private readonly store: AgentStore,
+    options: WorkflowMonitorControllerOptions = {},
+  ) {
+    this.now = options.now ?? Date.now;
+    this.tickMs = options.tickMs ?? DEFAULT_TICK_MS;
+  }
 
   hasActiveWorkflows(): boolean {
     return listActiveWorkflows(this.store).length > 0;
@@ -30,6 +46,7 @@ export class WorkflowMonitorController {
         unsubscribeWorkflows();
       };
     }
+    this.startTicking();
 
     return this.render();
   }
@@ -37,6 +54,7 @@ export class WorkflowMonitorController {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.stopTicking();
 
     if (this.ctx?.hasUI) {
       this.ctx.ui.setWidget(WIDGET_KEY, undefined);
@@ -48,7 +66,7 @@ export class WorkflowMonitorController {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return false;
 
-    const lines = buildWorkflowMonitorLines(this.store);
+    const lines = buildWorkflowMonitorLines(this.store, this.now());
     if (lines.length === 0) {
       this.dispose();
       return false;
@@ -57,15 +75,28 @@ export class WorkflowMonitorController {
     ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
     return true;
   }
+
+  private startTicking(): void {
+    if (this.tickMs <= 0 || this.tickTimer) return;
+    const timer = setInterval(() => this.render(), this.tickMs);
+    (timer as typeof timer & { unref?: () => void }).unref?.();
+    this.tickTimer = timer;
+  }
+
+  private stopTicking(): void {
+    if (!this.tickTimer) return;
+    clearInterval(this.tickTimer);
+    this.tickTimer = undefined;
+  }
 }
 
-export function buildWorkflowMonitorLines(store: AgentStore): string[] {
+export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now()): string[] {
   const workflows = listActiveWorkflows(store);
   if (workflows.length === 0) return [];
 
   const lines: string[] = [];
   for (const workflow of workflows.slice(0, MAX_MONITORED_WORKFLOWS)) {
-    appendWorkflowLines(lines, store, workflow);
+    appendWorkflowLines(lines, store, workflow, nowMs);
     if (lines.length >= MAX_WIDGET_LINES) break;
   }
 
@@ -77,12 +108,14 @@ export function buildWorkflowMonitorLines(store: AgentStore): string[] {
   return lines.slice(0, MAX_WIDGET_LINES);
 }
 
-function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun): void {
+function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun, nowMs: number): void {
   if (lines.length >= MAX_WIDGET_LINES) return;
 
   const stage = getCurrentStage(workflow);
-  const stageLabel = stage ? formatStageLabel(store, workflow, stage) : "none · agents 0/0";
-  lines.push(`${formatNamedEntityLabel(workflow)} | ${stageLabel}`);
+  const stageLabel = stage
+    ? formatStageLabel(store, workflow, stage)
+    : `none (0/${workflow.stages.length}) | agents (0/0)`;
+  lines.push(`${workflow.name} | ${stageLabel} | ${formatWorkflowUptime(workflow, nowMs)}`);
 }
 
 function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
@@ -98,12 +131,28 @@ function getCurrentStage(workflow: WorkflowRun): WorkflowStageRun | undefined {
 function formatStageLabel(store: AgentStore, workflow: WorkflowRun, stage: WorkflowStageRun): string {
   const stageIndex = workflow.stages.indexOf(stage);
   const stagePosition = stageIndex >= 0 ? `${stageIndex + 1}/${workflow.stages.length}` : `?/${workflow.stages.length}`;
-  return `${stage.name} · step ${stagePosition} · agents ${formatStageProgress(store, stage)}`;
+  return `${stage.name} (${stagePosition}) | agents (${formatStageProgress(store, stage)})`;
 }
 
 function formatStageProgress(store: AgentStore, stage: WorkflowStageRun): string {
   const progress = calculateStageProgress(store, stage);
   return `${progress.completed}/${progress.total}`;
+}
+
+function formatWorkflowUptime(workflow: WorkflowRun, nowMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - workflow.startedAtMs) / 1_000));
+  const seconds = elapsedSeconds % 60;
+  const totalMinutes = Math.floor(elapsedSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
+  if (totalMinutes > 0) return `${totalMinutes}m ${pad2(seconds)}s`;
+  return `${seconds}s`;
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, "0");
 }
 
 function calculateStageProgress(store: AgentStore, stage: WorkflowStageRun): { completed: number; total: number } {

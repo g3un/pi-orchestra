@@ -41,6 +41,7 @@ export interface WorkflowRun {
   id: string;
   name: string;
   goal: string;
+  startedAtMs: number;
   state: AgentState;
   currentStageIndex: number;
   stages: WorkflowStageRun[];

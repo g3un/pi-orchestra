@@ -6,6 +6,9 @@ import type { AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
 import { buildWorkflowMonitorLines, WorkflowMonitorController } from "./workflow-monitor.ts";
 
+const WORKFLOW_STARTED_AT_MS = 1_700_000_000_000;
+const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
+
 test("workflow monitor renders the current stage progress", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(run({ id: "collector", name: "collector", state: "idle" }));
@@ -26,8 +29,8 @@ test("workflow monitor renders the current stage progress", () => {
     }),
   );
 
-  assert.deepEqual(buildWorkflowMonitorLines(store), [
-    "Research Flow (research-flow) | collect · step 1/2 · agents 1/2",
+  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
+    "Research Flow | collect (1/2) | agents (1/2) | 10s",
   ]);
 });
 
@@ -47,7 +50,7 @@ test("workflow monitor counts the stage leader while synthesizing", () => {
     }),
   );
 
-  assert.deepEqual(buildWorkflowMonitorLines(store), ["workflow | collect · step 1/1 · agents 1/2"]);
+  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), ["workflow | collect (1/1) | agents (1/2) | 10s"]);
 });
 
 test("workflow monitor controller updates the widget and clears it when workflows finish", () => {
@@ -57,14 +60,14 @@ test("workflow monitor controller updates the widget and clears it when workflow
   const widgets: Array<string[] | undefined> = [];
   const statuses: Array<string | undefined> = [];
   const ctx = workflowMonitorContext(widgets, statuses);
-  const monitor = new WorkflowMonitorController(store);
+  const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
 
   assert.equal(monitor.show(ctx), true);
-  assert.equal(widgets[0]?.[0], "workflow | collect · step 1/1 · agents 0/1");
+  assert.equal(widgets[0]?.[0], "workflow | collect (1/1) | agents (0/1) | 10s");
   assert.deepEqual(statuses, []);
 
   store.saveRun(run({ id: "collector", name: "collector" }));
-  assert.equal(widgets.at(-1)?.at(-1), "workflow | collect · step 1/1 · agents 0/1");
+  assert.equal(widgets.at(-1)?.at(-1), "workflow | collect (1/1) | agents (0/1) | 10s");
 
   store.saveWorkflow({ ...workflow, state: "success" });
 
@@ -115,6 +118,7 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: "workflow",
     name: "workflow",
     goal: "Complete the workflow.",
+    startedAtMs: WORKFLOW_STARTED_AT_MS,
     state: "idle",
     currentStageIndex: 0,
     stages: [],

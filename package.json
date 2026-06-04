@@ -1,12 +1,11 @@
 {
   "name": "@g3un/pi-orchestra",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Subagent orchestration tools for Pi.",
   "keywords": [
     "orchestration",
     "pi",
     "pi-extension",
-    "pi-package",
     "subagent"
   ],
   "homepage": "https://codeberg.org/g3un/pi-orchestra",

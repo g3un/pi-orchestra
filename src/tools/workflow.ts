@@ -312,6 +312,7 @@ function createWorkflowRun(
   return {
     ...identity,
     goal: input.goal,
+    startedAtMs: Date.now(),
     state: "idle",
     currentStageIndex: 0,
     stages: input.stages.map((stage) => {
