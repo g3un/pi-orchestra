@@ -2,12 +2,12 @@ import type { AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
+import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
-interface StoreSubscription<T> {
-  listener(value: T): void;
-  filter: ((value: T) => boolean) | undefined;
-}
-
+/**
+ * In-memory {@link AgentStore} used as a lightweight fixture in tests.
+ * Production code persists state through {@link SqliteAgentStore} instead.
+ */
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
@@ -29,9 +29,7 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   subscribeRuns(listener: (run: AgentRun) => void, filter: ((run: AgentRun) => boolean) | undefined): () => void {
-    const subscription = { listener, filter };
-    this.runSubscriptions.add(subscription);
-    return () => this.runSubscriptions.delete(subscription);
+    return subscribeStore(this.runSubscriptions, listener, filter);
   }
 
   saveBus(bus: Bus): void {
@@ -76,14 +74,6 @@ export class InMemoryAgentStore implements AgentStore {
     listener: (workflow: WorkflowRun) => void,
     filter: ((workflow: WorkflowRun) => boolean) | undefined,
   ): () => void {
-    const subscription = { listener, filter };
-    this.workflowSubscriptions.add(subscription);
-    return () => this.workflowSubscriptions.delete(subscription);
-  }
-}
-
-function notifySubscribers<T>(subscriptions: Set<StoreSubscription<T>>, value: T): void {
-  for (const subscription of subscriptions) {
-    if (!subscription.filter || subscription.filter(value)) subscription.listener(value);
+    return subscribeStore(this.workflowSubscriptions, listener, filter);
   }
 }

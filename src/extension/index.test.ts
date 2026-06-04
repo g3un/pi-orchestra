@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "vitest";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createProjectSqliteAgentStore, getProjectSqliteStorePath } from "../adapters/sqlite-store.ts";
 import piOrchestraExtension from "./index.ts";
 
 test("extension registers the four target-oriented Pi tools", () => {
@@ -93,9 +97,44 @@ test("workflow parameters use an OpenAI-compatible root object schema without wa
   assert.equal(parameters.properties.timeoutMs, undefined);
 });
 
-function registerExtension(): { registeredTools: ToolDefinition[]; registeredCommands: RegisteredCommand[] } {
+test("extension backs tools with a project-local SQLite store", async () => {
+  const { registeredTools, registeredHandlers } = registerExtension();
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-extension-"));
+  const ctx = createExtensionContext(cwd);
+
+  try {
+    const bus = registeredTools.find((tool) => tool.name === "bus");
+    assert.ok(bus);
+
+    await bus.execute(
+      "tool-call-1",
+      { action: "create", name: "Persistent Bus" },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+
+    assert.equal(existsSync(getProjectSqliteStorePath(cwd)), true);
+    const store = createProjectSqliteAgentStore(cwd);
+    try {
+      assert.deepEqual(store.getBus("persistent-bus"), { id: "persistent-bus", name: "Persistent Bus", messages: [] });
+    } finally {
+      store.dispose();
+    }
+  } finally {
+    for (const handler of registeredHandlers.session_shutdown ?? []) handler({}, ctx);
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+function registerExtension(): {
+  registeredTools: ToolDefinition[];
+  registeredCommands: RegisteredCommand[];
+  registeredHandlers: Record<string, RegisteredEventHandler[]>;
+} {
   const registeredTools: ToolDefinition[] = [];
   const registeredCommands: RegisteredCommand[] = [];
+  const registeredHandlers: Record<string, RegisteredEventHandler[]> = {};
 
   piOrchestraExtension({
     registerTool(tool: ToolDefinition) {
@@ -104,12 +143,23 @@ function registerExtension(): { registeredTools: ToolDefinition[]; registeredCom
     registerCommand(name: string, command: RegisteredCommandOptions) {
       registeredCommands.push({ name, ...command });
     },
-    on() {
+    on(eventName: string, handler: RegisteredEventHandler) {
+      registeredHandlers[eventName] ??= [];
+      registeredHandlers[eventName].push(handler);
+      return undefined;
+    },
+    sendMessage() {
       return undefined;
     },
   } as unknown as ExtensionAPI);
 
-  return { registeredTools, registeredCommands };
+  return { registeredTools, registeredCommands, registeredHandlers };
+}
+
+type RegisteredEventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+function createExtensionContext(cwd: string): ExtensionContext {
+  return { cwd } as unknown as ExtensionContext;
 }
 
 interface RegisteredCommand extends RegisteredCommandOptions {

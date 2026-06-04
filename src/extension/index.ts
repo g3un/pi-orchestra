@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
+import { createProjectSqliteAgentStore } from "../adapters/sqlite-store.ts";
 import { Orchestra } from "../core/orchestra.ts";
 import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
 import { createSubagentTool, defineSubagentPiTool, type SubagentTool } from "../tools/subagent.ts";
@@ -16,6 +16,7 @@ interface ToolBundle {
   workflowTool: WorkflowTool;
   workflowMonitor: WorkflowMonitorController;
   orchestraEvents: OrchestraEventController;
+  dispose(): void;
 }
 
 export default function piOrchestraExtension(pi: ExtensionAPI): void {
@@ -42,7 +43,8 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    bundles.get(ctx.cwd)?.workflowMonitor.dispose();
+    bundles.get(ctx.cwd)?.dispose();
+    bundles.delete(ctx.cwd);
   });
 }
 
@@ -50,7 +52,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   const existing = bundles.get(ctx.cwd);
   if (existing) return existing;
 
-  const store = new InMemoryAgentStore();
+  const store = createProjectSqliteAgentStore(ctx.cwd);
   const runtime = new PiAgentRuntime({
     store,
     cwd: ctx.cwd,
@@ -80,6 +82,11 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     workflowTool: createWorkflowTool({ orchestra, store }),
     workflowMonitor: new WorkflowMonitorController(store, { now: undefined, tickMs: undefined }),
     orchestraEvents,
+    dispose() {
+      this.workflowMonitor.dispose();
+      this.orchestraEvents.dispose();
+      store.dispose();
+    },
   };
   bundles.set(ctx.cwd, bundle);
   return bundle;
