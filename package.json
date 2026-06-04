@@ -1,9 +1,23 @@
 {
-  "name": "pi-orchestra",
+  "name": "@g3un/pi-orchestra",
   "version": "0.1.0",
-  "private": true,
+  "description": "Subagent orchestration tools for Pi.",
+  "keywords": [
+    "orchestration",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "subagent"
+  ],
   "license": "MIT",
   "author": "Changeun Park <g3un@protonmail.ch>",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "docs/**/*.md",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "scripts": {
     "dev": "pi -e .",
@@ -17,16 +31,21 @@
     "test:e2e": "vitest run tests/e2e"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
-    "@earendil-works/pi-coding-agent": "^0.78.0",
-    "typebox": "^1.1.39",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
     "oxfmt": "^0.53.0",
     "oxlint": "^1.68.0",
     "oxlint-tsgolint": "^0.23.0",
+    "typebox": "^1.1.39",
     "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "packageManager": "pnpm@11.5.1+sha512.93f7b57422ea7068257235b4c16eb60762eb68e1dc23723199cc739043ea9be2c4143274a399d8c6defa2b1176226d9ca1c4b63482d6200c1a8fbaa78c1d1485",
   "pi": {
