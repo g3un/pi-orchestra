@@ -16,8 +16,8 @@ will be judged**, up front.
 
 - Specify format, length, tone, and required sections — make it testable.
 - State scope, assumptions, exclusions, and what to do when uncertain.
-- Our `stage-leader` profile does this: it names the exact output shape
-  ("concise canonical output for the next stage") and the decision rule for
+- Our `evidence-synthesizer` profile does this: it names the exact output shape
+  ("concise canonical output") and the decision rule for
   status (`success` if useful output exists, `blocked` if context is
   insufficient, `failed` if synthesis fails). Copy that pattern.
 
@@ -62,7 +62,7 @@ fine when the structure is shallow and readable.
 
 - Tell the model it may say "I don't know" / flag low confidence instead of
   guessing. This measurably reduces hallucination.
-- Our `stage-leader` prompt operationalizes this with `blocked` status and an
+- Our `evidence-synthesizer` prompt operationalizes this with `blocked` status and an
   instruction to "note conflicts/gaps" — uncertainty becomes a structured
   output, not a silent guess.
 
@@ -73,9 +73,9 @@ leave room for judgment**. Avoid both extremes:
 
 - ❌ Hardcoded, brittle if/else logic for every case.
 - ❌ Vague, high-level platitudes with no concrete signal.
-- ✅ Strong heuristics + clear boundaries (the `stage-leader` prompt: "Use only
-  supplied context; do not research, inspect files, or run commands" is a sharp,
-  actionable boundary).
+- ✅ Strong heuristics + clear boundaries (the `evidence-synthesizer` prompt:
+  "Use only supplied context; do not research, inspect files, or run commands"
+  is a sharp, actionable boundary).
 
 Method: **start minimal on your best model, then add instructions only in
 response to observed failure modes.** Don't pre-emptively pad the prompt.

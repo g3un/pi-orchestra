@@ -35,7 +35,7 @@ test("workflow monitor renders the current stage progress", () => {
   ]);
 });
 
-test("workflow monitor counts the stage leader while synthesizing", () => {
+test("workflow monitor counts the stage synthesizer while synthesizing", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(
     run({ id: "collector", name: "collector", state: "idle", result: { status: "success", summary: "Done." } }),

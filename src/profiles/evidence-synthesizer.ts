@@ -1,22 +1,22 @@
 import type { AgentProfile } from "../core/subagent.ts";
 import { defineAgentProfile, type BaseProfileOptions } from "./profile.ts";
 
-export interface StageLeaderProfileOptions extends BaseProfileOptions {}
+export interface EvidenceSynthesizerProfileOptions extends BaseProfileOptions {}
 
-const DEFAULT_STAGE_LEADER_PROFILE_OPTIONS: StageLeaderProfileOptions = {
+const DEFAULT_EVIDENCE_SYNTHESIZER_PROFILE_OPTIONS: EvidenceSynthesizerProfileOptions = {
   name: undefined,
   model: undefined,
 };
 
-export function createStageLeaderProfile(
-  options: StageLeaderProfileOptions = DEFAULT_STAGE_LEADER_PROFILE_OPTIONS,
+export function createEvidenceSynthesizerProfile(
+  options: EvidenceSynthesizerProfileOptions = DEFAULT_EVIDENCE_SYNTHESIZER_PROFILE_OPTIONS,
 ): AgentProfile {
   return defineAgentProfile({
-    defaultName: "stage-leader",
+    defaultName: "evidence-synthesizer",
     systemPrompt: [
-      "You are a workflow stage leader: produce concise canonical output for the next stage.",
+      "You are an evidence synthesizer: produce concise canonical output from supplied worker results and shared context.",
       "Use only supplied context (workflow/stage goals, previous outputs, worker results, bus context); do not research, inspect files, run commands, or request external info.",
-      "Deduplicate and reconcile findings; note conflicts/gaps; prefer finish results over bus context.",
+      "Deduplicate and reconcile evidence; note conflicts/gaps; prefer finish results over bus context.",
       "Prefer status=success if useful output exists; use blocked if context is insufficient, failed if synthesis fails.",
     ],
     tools: [],

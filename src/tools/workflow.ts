@@ -5,7 +5,7 @@ import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageOutput, WorkflowStageRun, WorkflowStageSpec } from "../core/workflow.ts";
 import { WORKGROUP_STRATEGY_VALUES, type WorkgroupMember, type WorkgroupStrategy } from "../core/workgroup.ts";
-import { createStageLeaderProfile } from "../profiles/stage-leader.ts";
+import { createEvidenceSynthesizerProfile } from "../profiles/evidence-synthesizer.ts";
 import {
   closeAgentRuns,
   createEntityIdentity,
@@ -109,7 +109,7 @@ const WorkflowToolParams = Type.Object(
     ),
     stages: Type.Optional(
       Type.Array(WorkflowStageParams, {
-        description: "Required for action=start. Linear stages executed in order with automatic stage leaders.",
+        description: "Required for action=start. Linear stages executed in order with automatic evidence synthesizers.",
         minItems: 1,
       }),
     ),
@@ -163,7 +163,7 @@ export function defineWorkflowPiTool(
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description: "Run linear workgroup stages with automatic restricted stage leaders.",
+    description: "Run linear workgroup stages with automatic restricted evidence synthesizers.",
     promptSnippet: "Launch a multi-stage workflow; completion is delivered automatically as a pi-orchestra event.",
     promptGuidelines: [
       "Use workflow for ordered multi-stage work; not branching/DAG plans.",
@@ -262,10 +262,10 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
     return;
   }
 
-  await runStageLeader(workflowId, stageIndex, bus.id, settledWorkgroup.workerResults, deps);
+  await runEvidenceSynthesizer(workflowId, stageIndex, bus.id, settledWorkgroup.workerResults, deps);
 }
 
-async function runStageLeader(
+async function runEvidenceSynthesizer(
   workflowId: string,
   stageIndex: number,
   busId: string,
@@ -335,7 +335,7 @@ function createWorkflowRun(
         startedAtMs,
         workerRunIds: [],
       };
-      return { ...stageRun, leader: resolveStageLeader(stage, identity.name) };
+      return { ...stageRun, leader: resolveStageSynthesizer(stage, identity.name) };
     }),
   };
 }
@@ -352,10 +352,13 @@ function validateStages(stages: WorkflowStageSpec[]): void {
   }
 }
 
-function resolveStageLeader(stage: WorkflowStageSpec, workflowName: string): WorkgroupMember {
+function resolveStageSynthesizer(stage: WorkflowStageSpec, workflowName: string): WorkgroupMember {
   const stageName = normalizeEntityName(stage.name, "Workflow stage");
   const leader = stage.leader ?? {
-    profile: createStageLeaderProfile({ name: `${workflowName}-${stageName}-leader`, model: undefined }),
+    profile: createEvidenceSynthesizerProfile({
+      name: `${workflowName}-${stageName}-synthesizer`,
+      model: undefined,
+    }),
     name: undefined,
     assignment: undefined,
   };
@@ -586,7 +589,7 @@ function buildStageOutput(
   if (!leaderRun.result) {
     return {
       status: "failed",
-      summary: `Stage leader ${leaderRunId} reached ${leaderRun.state} without a result payload.`,
+      summary: `Evidence synthesizer ${leaderRunId} reached ${leaderRun.state} without a result payload.`,
       leaderRunId,
       workerResults: workerResults.map(toWorkflowRunResult),
     };

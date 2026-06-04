@@ -135,10 +135,10 @@ test("workflow compete stage races to first success then uses a leader", async (
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
-  assert.equal(output.workflow.result?.leaderRunId, "compete-flow-options-leader");
+  assert.equal(output.workflow.result?.leaderRunId, "compete-flow-options-synthesizer");
   assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
   assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
-  const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-flow-options-leader")?.task ?? "";
+  const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-flow-options-synthesizer")?.task ?? "";
   assert.match(leaderTask, /Compete: condense the winning worker result/);
   assert.match(leaderTask, /do not broaden scope/);
   assert.match(leaderTask, /Call finish once/);
@@ -301,7 +301,7 @@ test("workflow start validates unique stage names and non-empty members", async 
   );
 });
 
-test("workflow uses a default restricted leader when omitted", async () => {
+test("workflow uses a default restricted evidence synthesizer when leader is omitted", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -322,12 +322,14 @@ test("workflow uses a default restricted leader when omitted", async () => {
   });
 
   const output = { workflow: await waitForWorkflow(store, "default-leader-flow") };
-  const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-leader");
+  const leaderSpawn = orchestra.spawned.find((spawn) => spawn.name === "default-leader-flow-collect-synthesizer");
 
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
   assert.ok(leaderSpawn);
+  assert.equal(leaderSpawn.profile.name, "default-leader-flow-collect-synthesizer");
   assert.deepEqual(leaderSpawn.profile.tools, []);
+  assert.match(leaderSpawn.profile.systemPrompt, /evidence synthesizer/);
   assert.match(leaderSpawn.profile.systemPrompt, /do not research, inspect files, run commands/);
   assert.match(leaderSpawn.profile.systemPrompt, /prefer finish results over bus context/);
   assert.match(leaderSpawn.profile.systemPrompt, /note conflicts\/gaps/);
@@ -378,7 +380,7 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
   assert.equal(orchestra.runs.get("slow-worker")?.state, "closed");
 });
 
-test("workflow fails when a stage leader fails", async () => {
+test("workflow fails when a stage synthesizer fails", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -418,7 +420,7 @@ test("workflow fails when a stage leader fails", async () => {
   );
 });
 
-test("workflow stops when a stage leader blocks", async () => {
+test("workflow stops when a stage synthesizer blocks", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });

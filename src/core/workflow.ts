@@ -6,7 +6,7 @@ export interface WorkflowStageSpec {
   goal: string;
   strategy: WorkgroupStrategy;
   members: WorkgroupMember[];
-  /** If undefined, a restricted default stage leader is used. */
+  /** If undefined, a restricted default evidence synthesizer is used. */
   leader: WorkgroupMember | undefined;
 }
 

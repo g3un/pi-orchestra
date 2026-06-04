@@ -65,11 +65,11 @@ For each stage:
 1. Create a fresh bus.
 2. Spawn the worker workgroup.
 3. Collect worker results through store finish-event subscriptions in the background.
-4. Spawn a restricted stage leader.
+4. Spawn a restricted evidence synthesizer.
 5. Store the leader's canonical output as the stage output.
 
 Workflow-internal worker and leader completions are consumed by the workflow runner. Main receives a single `workflow.finished` event when the whole workflow reaches `success`, `blocked`, `failed`, or `closed`.
 
 The next stage receives the previous stage output, not raw worker transcripts.
-If no leader is provided, `createStageLeaderProfile` supplies a restricted
-leader with no tools.
+If no leader is provided, `createEvidenceSynthesizerProfile` supplies a
+restricted synthesizer with no tools.

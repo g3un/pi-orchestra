@@ -40,7 +40,7 @@ Workgroups support two strategies:
 
 ### Workflow
 
-A workflow runs ordered workgroup stages. Each stage gets a fresh bus, starts its workers, collects results through internal finish-event subscriptions, and uses a stage leader to produce a canonical stage output. The main agent receives a single `workflow.finished` event for the whole workflow.
+A workflow runs ordered workgroup stages. Each stage gets a fresh bus, starts its workers, collects results through internal finish-event subscriptions, and uses an evidence synthesizer to produce a canonical stage output. The main agent receives a single `workflow.finished` event for the whole workflow.
 
 Use workflows for multi-step plans where later stages should depend on the summarized output of earlier stages instead of raw worker transcripts.
 
@@ -51,9 +51,9 @@ Use workflows for multi-step plans where later stages should depend on the summa
 - `createSourceCodeQaProfile`: answer repository questions from local code, tests, and docs.
 - `createExternalResearcherProfile`: gather and synthesize external source material with citations and uncertainty handling.
 - `createCodeReviewerProfile`: review local code or changes with findings-first output.
-- `createStageLeaderProfile`: restricted workflow-stage synthesis from supplied context only.
+- `createEvidenceSynthesizerProfile`: restricted synthesis from supplied evidence and context only.
 
-Except for `createStageLeaderProfile`, profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
+Except for `createEvidenceSynthesizerProfile`, profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
 
 ## Notes
 
