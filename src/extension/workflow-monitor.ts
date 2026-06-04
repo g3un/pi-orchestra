@@ -112,10 +112,11 @@ function appendWorkflowLines(lines: string[], store: AgentStore, workflow: Workf
   if (lines.length >= MAX_WIDGET_LINES) return;
 
   const stage = getCurrentStage(workflow);
+  const workflowLabel = `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}]`;
   const stageLabel = stage
-    ? formatStageLabel(store, workflow, stage)
+    ? formatStageLabel(store, workflow, stage, nowMs)
     : `none (0/${workflow.stages.length}) | agents (0/0)`;
-  lines.push(`${workflow.name} | ${stageLabel} | ${formatWorkflowUptime(workflow, nowMs)}`);
+  lines.push(`${workflowLabel} | ${stageLabel}`);
 }
 
 function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
@@ -128,10 +129,11 @@ function getCurrentStage(workflow: WorkflowRun): WorkflowStageRun | undefined {
   );
 }
 
-function formatStageLabel(store: AgentStore, workflow: WorkflowRun, stage: WorkflowStageRun): string {
+function formatStageLabel(store: AgentStore, workflow: WorkflowRun, stage: WorkflowStageRun, nowMs: number): string {
   const stageIndex = workflow.stages.indexOf(stage);
   const stagePosition = stageIndex >= 0 ? `${stageIndex + 1}/${workflow.stages.length}` : `?/${workflow.stages.length}`;
-  return `${stage.name} (${stagePosition}) | agents (${formatStageProgress(store, stage)})`;
+  const stageUptime = formatUptimeSince(stage.startedAtMs, nowMs);
+  return `${stage.name} [${stageUptime}] (${stagePosition}) | agents (${formatStageProgress(store, stage)})`;
 }
 
 function formatStageProgress(store: AgentStore, stage: WorkflowStageRun): string {
@@ -139,8 +141,8 @@ function formatStageProgress(store: AgentStore, stage: WorkflowStageRun): string
   return `${progress.completed}/${progress.total}`;
 }
 
-function formatWorkflowUptime(workflow: WorkflowRun, nowMs: number): string {
-  const elapsedSeconds = Math.max(0, Math.floor((nowMs - workflow.startedAtMs) / 1_000));
+function formatUptimeSince(startedAtMs: number, nowMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1_000));
   const seconds = elapsedSeconds % 60;
   const totalMinutes = Math.floor(elapsedSeconds / 60);
   const minutes = totalMinutes % 60;

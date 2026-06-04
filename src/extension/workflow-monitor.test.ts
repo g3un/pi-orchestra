@@ -7,6 +7,7 @@ import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
 import { buildWorkflowMonitorLines, WorkflowMonitorController } from "./workflow-monitor.ts";
 
 const WORKFLOW_STARTED_AT_MS = 1_700_000_000_000;
+const STAGE_STARTED_AT_MS = WORKFLOW_STARTED_AT_MS + 6_000;
 const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
 
 test("workflow monitor renders the current stage progress", () => {
@@ -30,7 +31,7 @@ test("workflow monitor renders the current stage progress", () => {
   );
 
   assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
-    "Research Flow | collect (1/2) | agents (1/2) | 10s",
+    "Research Flow [10s] | collect [4s] (1/2) | agents (1/2)",
   ]);
 });
 
@@ -50,7 +51,9 @@ test("workflow monitor counts the stage leader while synthesizing", () => {
     }),
   );
 
-  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), ["workflow | collect (1/1) | agents (1/2) | 10s"]);
+  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
+    "workflow [10s] | collect [4s] (1/1) | agents (1/2)",
+  ]);
 });
 
 test("workflow monitor controller updates the widget and clears it when workflows finish", () => {
@@ -63,11 +66,11 @@ test("workflow monitor controller updates the widget and clears it when workflow
   const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
 
   assert.equal(monitor.show(ctx), true);
-  assert.equal(widgets[0]?.[0], "workflow | collect (1/1) | agents (0/1) | 10s");
+  assert.equal(widgets[0]?.[0], "workflow [10s] | collect [4s] (1/1) | agents (0/1)");
   assert.deepEqual(statuses, []);
 
   store.saveRun(run({ id: "collector", name: "collector" }));
-  assert.equal(widgets.at(-1)?.at(-1), "workflow | collect (1/1) | agents (0/1) | 10s");
+  assert.equal(widgets.at(-1)?.at(-1), "workflow [10s] | collect [4s] (1/1) | agents (0/1)");
 
   store.saveWorkflow({ ...workflow, state: "success" });
 
@@ -148,6 +151,7 @@ function stageRun(overrides: Partial<WorkflowStageRun> = {}): WorkflowStageRun {
       },
     },
     state: "idle",
+    startedAtMs: STAGE_STARTED_AT_MS,
     workerRunIds: [],
     ...overrides,
   };

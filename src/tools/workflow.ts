@@ -216,7 +216,12 @@ async function runStage(workflowId: string, stageIndex: number, deps: WorkflowRu
   const workflow = requireWorkflow(deps.store, workflowId);
   const stage = workflow.stages[stageIndex];
   const bus = deps.orchestra.createBus({ name: `${workflow.name}-${stage.name}` });
-  updateStage(deps.store, workflow, stageIndex, { state: "idle", phase: "workers", busId: bus.id });
+  updateStage(deps.store, workflow, stageIndex, {
+    state: "idle",
+    phase: "workers",
+    startedAtMs: Date.now(),
+    busId: bus.id,
+  });
 
   const workgroupOutput = await deps.workgroupTool.execute({
     busId: bus.id,
@@ -309,10 +314,11 @@ function createWorkflowRun(
 ): WorkflowRun {
   validateStages(input.stages);
   const identity = createEntityIdentity(input.name, "workflow", existingWorkflows, "Workflow");
+  const startedAtMs = Date.now();
   return {
     ...identity,
     goal: input.goal,
-    startedAtMs: Date.now(),
+    startedAtMs,
     state: "idle",
     currentStageIndex: 0,
     stages: input.stages.map((stage) => {
@@ -320,6 +326,7 @@ function createWorkflowRun(
         ...stage,
         name: normalizeEntityName(stage.name, "Workflow stage"),
         state: "idle" as const,
+        startedAtMs,
         workerRunIds: [],
       };
       return { ...stageRun, leader: resolveStageLeader(stage, identity.name) };

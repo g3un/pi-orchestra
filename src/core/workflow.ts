@@ -30,6 +30,8 @@ export interface WorkflowStageRun extends Omit<WorkflowStageSpec, "leader"> {
   leader: WorkgroupMember;
   state: AgentState;
   phase?: "workers" | "leader";
+  /** Milliseconds since epoch when this stage started running. */
+  startedAtMs: number;
   busId?: string;
   workerRunIds: string[];
   leaderRunId?: string;

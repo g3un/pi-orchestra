@@ -177,6 +177,7 @@ function stageRun() {
     members: [],
     leader: { profile: { name: "leader", systemPrompt: "Lead." } },
     state: "idle" as const,
+    startedAtMs: 1_700_000_000_000,
     workerRunIds: [],
   };
 }
