@@ -13,11 +13,15 @@ import { ControllableRuntime } from "../helpers/controllable-runtime.ts";
 const researcherProfile: AgentProfile = {
   name: "researcher",
   systemPrompt: "Research the assigned area.",
+  tools: undefined,
+  model: undefined,
 };
 
 const reviewerProfile: AgentProfile = {
   name: "reviewer",
   systemPrompt: "Review the assigned area.",
+  tools: undefined,
+  model: undefined,
 };
 
 test("tools coordinate buses, subagents, messages, and completion events through the shared store", async () => {
@@ -71,6 +75,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
     action: "publish",
     name: "Review Work",
     message: "Also check strict-mode behavior.",
+    from: "main",
   });
 
   assert.equal(published.busMessage?.id, "message-1");
@@ -121,15 +126,15 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
         name: "collect",
         goal: "Collect readiness signals.",
         strategy: "synthesize",
-        members: [{ name: "collect-worker", profile: researcherProfile }],
-        leader: { name: "collect-leader", profile: reviewerProfile },
+        members: [{ name: "collect-worker", profile: researcherProfile, assignment: undefined }],
+        leader: { name: "collect-leader", profile: reviewerProfile, assignment: undefined },
       },
       {
         name: "summarize",
         goal: "Summarize release readiness.",
         strategy: "synthesize",
-        members: [{ name: "summary-worker", profile: reviewerProfile }],
-        leader: { name: "summary-leader", profile: reviewerProfile },
+        members: [{ name: "summary-worker", profile: reviewerProfile, assignment: undefined }],
+        leader: { name: "summary-leader", profile: reviewerProfile, assignment: undefined },
       },
     ],
   });

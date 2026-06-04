@@ -175,7 +175,11 @@ function stageRun() {
     goal: "Collect data.",
     strategy: "synthesize" as const,
     members: [],
-    leader: { profile: { name: "leader", systemPrompt: "Lead." } },
+    leader: {
+      profile: { name: "leader", systemPrompt: "Lead.", tools: undefined, model: undefined },
+      name: undefined,
+      assignment: undefined,
+    },
     state: "idle" as const,
     startedAtMs: 1_700_000_000_000,
     workerRunIds: [],

@@ -9,7 +9,7 @@ test("bus create allocates a standalone bus through orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createBusTool({ orchestra });
 
-  const output = await tool.execute({ action: "create" });
+  const output = await tool.execute({ action: "create", name: undefined });
 
   assert.ok(output.bus);
   assert.equal(output.bus.id, "bus-1");
@@ -46,7 +46,7 @@ test("bus publish delegates with the bus name", async () => {
   const bus: Bus = { id: "shared-context", name: "Shared Context", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
-  const output = await tool.execute({ action: "publish", name: bus.name, message: "New constraint." });
+  const output = await tool.execute({ action: "publish", name: bus.name, message: "New constraint.", from: "main" });
 
   assert.deepEqual(orchestra.published, {
     id: bus.name,
@@ -82,7 +82,7 @@ class FakeOrchestra implements OrchestraApi {
   runs = new Map<string, AgentRun>();
   published?: { id: string; message: string; from: string };
 
-  createBus(): Bus {
+  createBus(_options: { name: string | undefined }): Bus {
     const id = `bus-${this.buses.size + 1}`;
     const bus: Bus = { id, name: id, messages: [] };
     this.buses.set(bus.id, bus);
@@ -93,7 +93,7 @@ class FakeOrchestra implements OrchestraApi {
     return this.findBus(id);
   }
 
-  async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
+  async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     this.published = { id, message, from };
     const bus = this.findBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
@@ -107,29 +107,34 @@ class FakeOrchestra implements OrchestraApi {
     return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
   }
 
-  async spawnAgent(profile: AgentProfile, task: string, busId: string): Promise<AgentRun> {
+  async spawnAgent(
+    profile: AgentProfile,
+    task: string,
+    busId: string,
+    _options: { name: string | undefined },
+  ): Promise<AgentRun> {
     const spawnedRun = run({ id: "agent-1", name: "agent-1", profile: profile.name, task, busId, state: "idle" });
     this.runs.set(spawnedRun.id, spawnedRun);
     return spawnedRun;
   }
 
-  getRun(id: string): AgentRun | undefined {
+  getRun(id: string, _options: { busId: string | undefined }): AgentRun | undefined {
     return this.runs.get(id);
   }
 
-  listRuns(options: { busId?: string } = {}): AgentRun[] {
+  listRuns(options: { busId: string | undefined }): AgentRun[] {
     const runs = [...this.runs.values()];
     if (!options.busId) return runs;
     return runs.filter((current) => current.busId === options.busId);
   }
 
-  async messageAgent(id: string, _message: string): Promise<AgentRun> {
+  async messageAgent(id: string, _message: string, _options: { busId: string | undefined }): Promise<AgentRun> {
     const current = this.runs.get(id);
     if (!current) throw new Error(`Agent ${id} not found.`);
     return current;
   }
 
-  async closeAgent(id: string): Promise<AgentRun | undefined> {
+  async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
     return this.runs.get(id);
   }
 }

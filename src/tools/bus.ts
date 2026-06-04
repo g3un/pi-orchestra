@@ -6,7 +6,7 @@ import type { OrchestraApi } from "../core/orchestra.ts";
 export type BusInput =
   | {
       action: "create";
-      name?: string;
+      name: string | undefined;
     }
   | {
       action: "status";
@@ -16,7 +16,7 @@ export type BusInput =
       action: "publish";
       name: string;
       message: string;
-      from?: string;
+      from: string;
     };
 
 export interface BusOutput {
@@ -118,7 +118,7 @@ function toBusInput(params: RawBusParams): BusInput {
 
   if (!params.name) throw new Error("bus action=publish requires name.");
   if (!params.message) throw new Error("bus action=publish requires message.");
-  return { action: "publish", name: params.name, message: params.message };
+  return { action: "publish", name: params.name, message: params.message, from: "main" };
 }
 
 function formatBusNotFound(name: string): string {

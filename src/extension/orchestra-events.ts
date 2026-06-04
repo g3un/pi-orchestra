@@ -33,8 +33,8 @@ export interface WorkgroupRegistration {
 export interface OrchestraEventControllerOptions {
   store: AgentStore;
   sendEvents: (events: OrchestraMainEvent[], content: string) => void;
-  /** Defaults to 50 ms. Use 0 in tests for immediate delivery. */
-  flushDelayMs?: number;
+  /** Defaults to 50 ms when undefined. Use 0 in tests for immediate delivery. */
+  flushDelayMs: number | undefined;
 }
 
 interface RegisteredWorkgroup {
@@ -68,8 +68,11 @@ export class OrchestraEventController {
     for (const run of this.store.listRuns()) this.runStates.set(run.id, run.state);
     for (const workflow of this.store.listWorkflows()) this.workflowStates.set(workflow.id, workflow.state);
 
-    this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run));
-    this.unsubscribeWorkflows = this.store.subscribeWorkflows((workflow) => this.handleWorkflowSaved(workflow));
+    this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run), undefined);
+    this.unsubscribeWorkflows = this.store.subscribeWorkflows(
+      (workflow) => this.handleWorkflowSaved(workflow),
+      undefined,
+    );
   }
 
   beginWorkgroup(busId: string, strategy: WorkgroupStrategy): void {

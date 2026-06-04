@@ -76,12 +76,17 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
     ],
   });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
 
-  await runtime.spawn({ name: "researcher", systemPrompt: "Research the task." }, "Inspect the code.", "bus-1", {
-    id: "agent-1",
-    name: "Agent 1",
-  });
+  await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    {
+      id: "agent-1",
+      name: "Agent 1",
+    },
+  );
 
   assert.match(session.promptCalls[0]?.message ?? "", /<bus_reference_context>/);
   assert.match(session.promptCalls[0]?.message ?? "", /Existing shared context\./);
@@ -98,15 +103,25 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
   const firstSession = queueSession();
   const secondSession = queueSession();
-  const runtime = new PiAgentRuntime({ store });
-  const firstRun = await runtime.spawn({ name: "first", systemPrompt: "Do first task." }, "First task.", "bus-1", {
-    id: "agent-1",
-    name: "Agent 1",
-  });
-  const secondRun = await runtime.spawn({ name: "second", systemPrompt: "Do second task." }, "Second task.", "bus-1", {
-    id: "agent-2",
-    name: "Agent 2",
-  });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const firstRun = await runtime.spawn(
+    { name: "first", systemPrompt: "Do first task.", tools: undefined, model: undefined },
+    "First task.",
+    "bus-1",
+    {
+      id: "agent-1",
+      name: "Agent 1",
+    },
+  );
+  const secondRun = await runtime.spawn(
+    { name: "second", systemPrompt: "Do second task.", tools: undefined, model: undefined },
+    "Second task.",
+    "bus-1",
+    {
+      id: "agent-2",
+      name: "Agent 2",
+    },
+  );
 
   const busMessage = await runtime.publishBus("bus-1", "New shared fact.", firstRun.id);
 
@@ -128,9 +143,9 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task." },
+    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
     "Inspect the code.",
     "bus-1",
     { id: "agent-1", name: "Agent 1" },
@@ -169,9 +184,9 @@ test("pi runtime steers streaming idle runs and restarts terminal runs on messag
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
-    { name: "researcher", systemPrompt: "Research the task." },
+    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
     "Inspect the code.",
     "bus-1",
     { id: "agent-1", name: "Agent 1" },
@@ -209,12 +224,17 @@ test("pi runtime marks a run failed when the session ends without finish", async
       });
     }),
   );
-  const runtime = new PiAgentRuntime({ store });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
 
-  await runtime.spawn({ name: "researcher", systemPrompt: "Research the task." }, "Inspect the code.", "bus-1", {
-    id: "agent-1",
-    name: "Agent 1",
-  });
+  await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    {
+      id: "agent-1",
+      name: "Agent 1",
+    },
+  );
   const failedRun = await waitForRunState(store, "agent-1", "failed");
   const session = queuedSessions[0];
 
@@ -230,12 +250,12 @@ test("pi runtime marks a run failed when the session ends without finish", async
 test("pi runtime rejects unresolved profile models before creating a session", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
-  const runtime = new PiAgentRuntime({ store, resolveModel: async () => undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: async () => undefined });
 
   await assert.rejects(
     () =>
       runtime.spawn(
-        { name: "researcher", systemPrompt: "Research the task.", model: "missing/model" },
+        { name: "researcher", systemPrompt: "Research the task.", tools: undefined, model: "missing/model" },
         "Inspect the code.",
         "bus-1",
         { id: "agent-1", name: "Agent 1" },

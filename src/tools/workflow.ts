@@ -29,7 +29,7 @@ import {
 export type WorkflowInput =
   | {
       action: "start";
-      name?: string;
+      name: string | undefined;
       goal: string;
       stages: WorkflowStageSpec[];
     }
@@ -58,8 +58,8 @@ export interface WorkflowToolDeps {
 }
 
 export interface WorkflowPiToolOptions {
-  onWorkflowInput?: (ctx: ExtensionContext, input: WorkflowInput) => void;
-  onWorkflowOutput?: (ctx: ExtensionContext, output: WorkflowOutput) => void;
+  onWorkflowInput: ((ctx: ExtensionContext, input: WorkflowInput) => void) | undefined;
+  onWorkflowOutput: ((ctx: ExtensionContext, output: WorkflowOutput) => void) | undefined;
 }
 
 const WorkflowStageParams = Type.Object(
@@ -117,7 +117,12 @@ const WorkflowToolParams = Type.Object(
 );
 
 export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): WorkflowTool {
-  const workgroupTool = createWorkgroupTool({ orchestra });
+  const workgroupTool = createWorkgroupTool({
+    orchestra,
+    onWorkgroupLaunching: undefined,
+    onWorkgroupLaunched: undefined,
+    onWorkgroupLaunchFailed: undefined,
+  });
   const runnerTasks = new Map<string, Promise<void>>();
 
   const startRunner = (workflowId: string) => {
@@ -152,7 +157,7 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
 
 export function defineWorkflowPiTool(
   resolveTool: (ctx: ExtensionContext) => WorkflowTool,
-  options: WorkflowPiToolOptions = {},
+  options: WorkflowPiToolOptions = { onWorkflowInput: undefined, onWorkflowOutput: undefined },
 ) {
   return defineTool({
     name: "workflow",
@@ -275,7 +280,7 @@ async function runStageLeader(
     { name: stage.leader.name },
   );
   if (isWorkflowClosed(deps.store, workflowId)) {
-    await deps.orchestra.closeAgent(leaderRun.id);
+    await deps.orchestra.closeAgent(leaderRun.id, { busId: undefined });
     return;
   }
 
@@ -349,7 +354,9 @@ function validateStages(stages: WorkflowStageSpec[]): void {
 function resolveStageLeader(stage: WorkflowStageSpec, workflowName: string): WorkgroupMember {
   const stageName = normalizeEntityName(stage.name, "Workflow stage");
   const leader = stage.leader ?? {
-    profile: createStageLeaderProfile({ name: `${workflowName}-${stageName}-leader` }),
+    profile: createStageLeaderProfile({ name: `${workflowName}-${stageName}-leader`, model: undefined }),
+    name: undefined,
+    assignment: undefined,
   };
   return {
     ...leader,
@@ -377,14 +384,13 @@ function toWorkflowStageSpec(stage: RawWorkflowStageParams): WorkflowStageSpec {
   if (!stage.strategy) throw new Error(`workflow stage ${stage.name} requires strategy.`);
   if (!stage.members || stage.members.length === 0) throw new Error(`workflow stage ${stage.name} requires members.`);
 
-  const spec: WorkflowStageSpec = {
+  return {
     name: stage.name,
     goal: stage.goal,
     strategy: stage.strategy,
     members: stage.members.map((member, index) => toWorkgroupMember(member, `workflow member ${index + 1}`)),
+    leader: stage.leader ? toWorkgroupMember(stage.leader, "workflow leader") : undefined,
   };
-  if (stage.leader) spec.leader = toWorkgroupMember(stage.leader, "workflow leader");
-  return spec;
 }
 
 function withDefaultModels(input: WorkflowInput, ctx: ExtensionContext): WorkflowInput {

@@ -6,8 +6,8 @@ export interface WorkflowStageSpec {
   goal: string;
   strategy: WorkgroupStrategy;
   members: WorkgroupMember[];
-  /** If omitted, a restricted default stage leader is used. */
-  leader?: WorkgroupMember;
+  /** If undefined, a restricted default stage leader is used. */
+  leader: WorkgroupMember | undefined;
 }
 
 export interface WorkflowStageOutput {

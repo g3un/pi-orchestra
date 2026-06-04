@@ -101,12 +101,12 @@ test("closeAgentRuns closes unique run ids and tolerates close failures", async 
   const closedIds: string[] = [];
   await closeAgentRuns(
     {
-      closeAgent(id: string) {
+      closeAgent(id: string, _options: { busId: string | undefined }) {
         closedIds.push(id);
         if (id === "broken") throw new Error("Close failed.");
         return Promise.resolve(undefined);
       },
-    } as Parameters<typeof closeAgentRuns>[0],
+    } as unknown as Parameters<typeof closeAgentRuns>[0],
     ["agent-1", "agent-1", "broken", "agent-2"],
   );
 

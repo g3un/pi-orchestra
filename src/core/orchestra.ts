@@ -5,23 +5,23 @@ import { createEntityIdentity } from "../utils.ts";
 import type { AgentStore } from "./store.ts";
 
 export interface OrchestraApi {
-  createBus(options?: CreateBusOptions): Bus;
+  createBus(options: CreateBusOptions): Bus;
   getBus(id: string): Bus | undefined;
-  publishBus(id: string, message: string, from?: string): Promise<PublishedBusMessage>;
+  publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage>;
 
-  spawnAgent(profile: AgentProfile, task: string, busId: string, options?: SpawnAgentOptions): Promise<AgentRun>;
-  getRun(id: string, options?: RunLookupOptions): AgentRun | undefined;
-  listRuns(options?: ListRunsOptions): AgentRun[];
-  messageAgent(id: string, message: string, options?: RunLookupOptions): Promise<AgentRun>;
-  closeAgent(id: string, options?: RunLookupOptions): Promise<AgentRun | undefined>;
+  spawnAgent(profile: AgentProfile, task: string, busId: string, options: SpawnAgentOptions): Promise<AgentRun>;
+  getRun(id: string, options: RunLookupOptions): AgentRun | undefined;
+  listRuns(options: ListRunsOptions): AgentRun[];
+  messageAgent(id: string, message: string, options: RunLookupOptions): Promise<AgentRun>;
+  closeAgent(id: string, options: RunLookupOptions): Promise<AgentRun | undefined>;
 }
 
 export interface CreateBusOptions {
-  name?: string;
+  name: string | undefined;
 }
 
 export interface SpawnAgentOptions {
-  name?: string;
+  name: string | undefined;
 }
 
 export interface PublishedBusMessage {
@@ -30,12 +30,12 @@ export interface PublishedBusMessage {
 }
 
 export interface ListRunsOptions {
-  busId?: string;
+  busId: string | undefined;
 }
 
 export interface RunLookupOptions {
-  /** Optional bus id or name for narrowing run lookup. */
-  busId?: string;
+  /** Bus id or name for narrowing run lookup. If undefined, search all runs. */
+  busId: string | undefined;
 }
 
 export interface OrchestraDeps {
@@ -52,7 +52,7 @@ export class Orchestra implements OrchestraApi {
     this.store = store;
   }
 
-  createBus(options: CreateBusOptions = {}): Bus {
+  createBus(options: CreateBusOptions): Bus {
     const identity = this.createBusIdentity(options.name);
     const bus: Bus = { ...identity, messages: [] };
     this.store.saveBus(bus);
@@ -63,39 +63,34 @@ export class Orchestra implements OrchestraApi {
     return this.findBus(id);
   }
 
-  async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
+  async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     const bus = this.requireBus(id);
     const busMessage = await this.runtime.publishBus(bus.id, message, from);
     return { bus: this.requireBus(bus.id), busMessage };
   }
 
-  async spawnAgent(
-    profile: AgentProfile,
-    task: string,
-    busId: string,
-    options: SpawnAgentOptions = {},
-  ): Promise<AgentRun> {
+  async spawnAgent(profile: AgentProfile, task: string, busId: string, options: SpawnAgentOptions): Promise<AgentRun> {
     const bus = this.requireBus(busId);
     return await this.runtime.spawn(profile, task, bus.id, this.createRunIdentity(profile, options.name));
   }
 
-  getRun(id: string, options: RunLookupOptions = {}): AgentRun | undefined {
+  getRun(id: string, options: RunLookupOptions): AgentRun | undefined {
     return this.findRun(id, options);
   }
 
-  listRuns(options: ListRunsOptions = {}): AgentRun[] {
+  listRuns(options: ListRunsOptions): AgentRun[] {
     const runs = this.store.listRuns();
     if (!options.busId) return runs;
     const bus = this.requireBus(options.busId);
     return runs.filter((run) => run.busId === bus.id);
   }
 
-  async messageAgent(id: string, message: string, options: RunLookupOptions = {}): Promise<AgentRun> {
+  async messageAgent(id: string, message: string, options: RunLookupOptions): Promise<AgentRun> {
     const run = this.requireRun(id, options);
     return await this.runtime.message(run.id, message);
   }
 
-  async closeAgent(id: string, options: RunLookupOptions = {}): Promise<AgentRun | undefined> {
+  async closeAgent(id: string, options: RunLookupOptions): Promise<AgentRun | undefined> {
     const run = this.getRun(id, options);
     return await this.runtime.close(run?.id ?? id);
   }
@@ -110,13 +105,13 @@ export class Orchestra implements OrchestraApi {
     return this.store.getBus(id) ?? this.store.listBuses().find((bus) => bus.name === id);
   }
 
-  private requireRun(id: string, options: RunLookupOptions = {}): AgentRun {
+  private requireRun(id: string, options: RunLookupOptions): AgentRun {
     const run = this.findRun(id, options);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
 
-  private findRun(id: string, options: RunLookupOptions = {}): AgentRun | undefined {
+  private findRun(id: string, options: RunLookupOptions): AgentRun | undefined {
     const bus = options.busId ? this.requireBus(options.busId) : undefined;
     const runById = this.store.getRun(id);
     if (runById && (!bus || runById.busId === bus.id)) return runById;

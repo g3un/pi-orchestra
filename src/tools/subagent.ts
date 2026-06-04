@@ -9,7 +9,7 @@ export interface SubagentSpawnInput {
   profile: AgentProfile;
   task: string;
   busId: string;
-  name?: string;
+  name: string | undefined;
 }
 
 export type SubagentInput =
@@ -17,18 +17,18 @@ export type SubagentInput =
   | {
       action: "status";
       id: string;
-      busId?: string;
+      busId: string | undefined;
     }
   | {
       action: "message";
       id: string;
       message: string;
-      busId?: string;
+      busId: string | undefined;
     }
   | {
       action: "close";
       id: string;
-      busId?: string;
+      busId: string | undefined;
     };
 
 export interface SubagentOutput {
@@ -166,7 +166,13 @@ function toSubagentInput(params: RawSubagentParams): SubagentInput {
     if (!params.profile) throw new Error("subagent action=spawn requires profile.");
     if (!params.task) throw new Error("subagent action=spawn requires task.");
     if (!params.busId) throw new Error("subagent action=spawn requires busId.");
-    return { action: "spawn", profile: params.profile, task: params.task, busId: params.busId, name: params.name };
+    return {
+      action: "spawn",
+      profile: toAgentProfile(params.profile),
+      task: params.task,
+      busId: params.busId,
+      name: params.name,
+    };
   }
 
   if (params.action === "status") {
@@ -189,6 +195,15 @@ function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): Subagent
   return {
     ...input,
     profile: withDefaultProfileModel(input.profile, ctx),
+  };
+}
+
+export function toAgentProfile(profile: RawAgentProfileParams): AgentProfile {
+  return {
+    name: profile.name,
+    systemPrompt: profile.systemPrompt,
+    tools: profile.tools,
+    model: profile.model,
   };
 }
 
@@ -232,12 +247,15 @@ function formatModelId(model: AgentProfileModel): string {
 
 type RawSubagentParams = {
   action: "spawn" | "status" | "message" | "close";
-  profile?: AgentProfile;
+  profile?: RawAgentProfileParams;
   task?: string;
   busId?: string;
   name?: string;
   id?: string;
   message?: string;
 };
+
+export type RawAgentProfileParams = Omit<AgentProfile, "tools" | "model"> &
+  Partial<Pick<AgentProfile, "tools" | "model">>;
 
 type AgentProfileModel = NonNullable<ExtensionContext["model"]>;

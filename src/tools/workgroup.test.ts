@@ -5,26 +5,41 @@ import type { Bus, BusMessage } from "../core/bus.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { slugify } from "../utils.ts";
-import { createWorkgroupTool, settleWorkgroupRuns } from "./workgroup.ts";
+import { createWorkgroupTool, settleWorkgroupRuns, type WorkgroupToolDeps } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
   name: "security",
   systemPrompt: "Review security risks.",
+  tools: undefined,
+  model: undefined,
 };
 
 const backendProfile: AgentProfile = {
   name: "backend",
   systemPrompt: "Review backend design.",
+  tools: undefined,
+  model: undefined,
 };
 
 const brokenProfile: AgentProfile = {
   name: "broken",
   systemPrompt: "Fail during spawn.",
+  tools: undefined,
+  model: undefined,
 };
+
+function workgroupDeps(orchestra: OrchestraApi): WorkgroupToolDeps {
+  return {
+    orchestra,
+    onWorkgroupLaunching: undefined,
+    onWorkgroupLaunched: undefined,
+    onWorkgroupLaunchFailed: undefined,
+  };
+}
 
 test("workgroup launches members on an existing bus", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const bus = orchestra.createBus({ name: "auth-work" });
 
   const output = await tool.execute({
@@ -68,14 +83,14 @@ test("workgroup launches members on an existing bus", async () => {
 
 test("workgroup compete strategy guides members to share facts without herding", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const bus = orchestra.createBus({ name: "design-compete" });
 
   await tool.execute({
     busId: bus.id,
     goal: "Compare implementation options.",
     strategy: "compete",
-    members: [{ name: "option-a", profile: backendProfile }],
+    members: [{ name: "option-a", profile: backendProfile, assignment: undefined }],
   });
 
   const task = orchestra.spawned[0]?.task ?? "";
@@ -85,14 +100,17 @@ test("workgroup compete strategy guides members to share facts without herding",
 
 test("workgroup generates unique member names from duplicate profile names", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const bus = orchestra.createBus({ name: "backend-work" });
 
   const output = await tool.execute({
     busId: bus.id,
     goal: "Review backend changes.",
     strategy: "synthesize",
-    members: [{ profile: backendProfile }, { profile: backendProfile }],
+    members: [
+      { profile: backendProfile, name: undefined, assignment: undefined },
+      { profile: backendProfile, name: undefined, assignment: undefined },
+    ],
   });
 
   assert.deepEqual(
@@ -107,7 +125,7 @@ test("workgroup generates unique member names from duplicate profile names", asy
 
 test("workgroup rejects missing buses", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
 
   await assert.rejects(
     () =>
@@ -115,7 +133,7 @@ test("workgroup rejects missing buses", async () => {
         busId: "missing",
         goal: "Plan the auth refactor.",
         strategy: "compete",
-        members: [{ profile: securityProfile }],
+        members: [{ profile: securityProfile, name: undefined, assignment: undefined }],
       }),
     /Bus missing not found\./,
   );
@@ -123,7 +141,7 @@ test("workgroup rejects missing buses", async () => {
 
 test("workgroup member name checks are global", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const targetBus = orchestra.createBus({ name: "target-work" });
   const otherBus = orchestra.createBus({ name: "other-work" });
   orchestra.runs.set("security-review", {
@@ -141,7 +159,7 @@ test("workgroup member name checks are global", async () => {
         busId: targetBus.id,
         goal: "Plan the auth refactor.",
         strategy: "compete",
-        members: [{ name: "security-review", profile: securityProfile }],
+        members: [{ name: "security-review", profile: securityProfile, assignment: undefined }],
       }),
     /Workgroup member name "security-review" is already in use\./,
   );
@@ -277,7 +295,7 @@ test("workgroup synthesize settlement reports blocked when no run succeeds", asy
 
 test("workgroup closes successfully spawned members when launch is incomplete", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool({ orchestra });
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const bus = orchestra.createBus({ name: "auth-work" });
 
   await assert.rejects(
@@ -287,8 +305,8 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
         goal: "Plan the auth refactor.",
         strategy: "synthesize",
         members: [
-          { name: "security-review", profile: securityProfile },
-          { name: "broken-review", profile: brokenProfile },
+          { name: "security-review", profile: securityProfile, assignment: undefined },
+          { name: "broken-review", profile: brokenProfile, assignment: undefined },
         ],
       }),
     /Failed to launch every workgroup member\./,
@@ -302,10 +320,10 @@ class FakeOrchestra implements OrchestraApi {
   store = new InMemoryAgentStore();
   buses = new Map<string, Bus>();
   runs = new SyncedRunMap(this.store);
-  spawned: Array<{ profile: AgentProfile; task: string; busId: string; options?: { name?: string } }> = [];
+  spawned: Array<{ profile: AgentProfile; task: string; busId: string; options: { name: string | undefined } }> = [];
   closedIds: string[] = [];
 
-  createBus(options: { name?: string } = {}): Bus {
+  createBus(options: { name: string | undefined }): Bus {
     const id = options.name ?? `bus-${this.buses.size + 1}`;
     const bus: Bus = { id, name: options.name ?? id, messages: [] };
     this.buses.set(bus.id, bus);
@@ -316,7 +334,7 @@ class FakeOrchestra implements OrchestraApi {
     return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
   }
 
-  async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
+  async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     const bus = this.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
     const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, message, from };
@@ -328,7 +346,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    options: { name?: string } = {},
+    options: { name: string | undefined },
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
@@ -349,23 +367,23 @@ class FakeOrchestra implements OrchestraApi {
     return run;
   }
 
-  getRun(id: string): AgentRun | undefined {
+  getRun(id: string, _options: { busId: string | undefined }): AgentRun | undefined {
     return this.runs.get(id);
   }
 
-  listRuns(options: { busId?: string } = {}): AgentRun[] {
+  listRuns(options: { busId: string | undefined }): AgentRun[] {
     const runs = [...this.runs.values()];
     if (!options.busId) return runs;
     return runs.filter((run) => run.busId === options.busId);
   }
 
-  async messageAgent(id: string, _message: string): Promise<AgentRun> {
+  async messageAgent(id: string, _message: string, _options: { busId: string | undefined }): Promise<AgentRun> {
     const run = this.runs.get(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
 
-  async closeAgent(id: string): Promise<AgentRun | undefined> {
+  async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
     this.closedIds.push(id);
     const run = this.runs.get(id);
     if (!run) return undefined;

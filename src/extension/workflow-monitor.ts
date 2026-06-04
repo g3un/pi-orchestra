@@ -10,9 +10,9 @@ const MAX_WIDGET_LINES = 10;
 const DEFAULT_TICK_MS = 1_000;
 
 export interface WorkflowMonitorControllerOptions {
-  now?: () => number;
-  /** Defaults to 1000 ms. Use 0 to disable uptime ticks in tests. */
-  tickMs?: number;
+  now: (() => number) | undefined;
+  /** Defaults to 1000 ms when undefined. Use 0 to disable uptime ticks in tests. */
+  tickMs: number | undefined;
 }
 
 export class WorkflowMonitorController {
@@ -24,7 +24,7 @@ export class WorkflowMonitorController {
 
   constructor(
     private readonly store: AgentStore,
-    options: WorkflowMonitorControllerOptions = {},
+    options: WorkflowMonitorControllerOptions = { now: undefined, tickMs: undefined },
   ) {
     this.now = options.now ?? Date.now;
     this.tickMs = options.tickMs ?? DEFAULT_TICK_MS;
@@ -39,8 +39,8 @@ export class WorkflowMonitorController {
 
     this.ctx = ctx;
     if (!this.unsubscribe) {
-      const unsubscribeRuns = this.store.subscribeRuns(() => this.render());
-      const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.render());
+      const unsubscribeRuns = this.store.subscribeRuns(() => this.render(), undefined);
+      const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.render(), undefined);
       this.unsubscribe = () => {
         unsubscribeRuns();
         unsubscribeWorkflows();

@@ -5,7 +5,7 @@ import type { WorkflowRun } from "../core/workflow.ts";
 
 interface StoreSubscription<T> {
   listener(value: T): void;
-  filter?: (value: T) => boolean;
+  filter: ((value: T) => boolean) | undefined;
 }
 
 export class InMemoryAgentStore implements AgentStore {
@@ -28,7 +28,7 @@ export class InMemoryAgentStore implements AgentStore {
     return [...this.runs.values()];
   }
 
-  subscribeRuns(listener: (run: AgentRun) => void, filter?: (run: AgentRun) => boolean): () => void {
+  subscribeRuns(listener: (run: AgentRun) => void, filter: ((run: AgentRun) => boolean) | undefined): () => void {
     const subscription = { listener, filter };
     this.runSubscriptions.add(subscription);
     return () => this.runSubscriptions.delete(subscription);
@@ -74,7 +74,7 @@ export class InMemoryAgentStore implements AgentStore {
 
   subscribeWorkflows(
     listener: (workflow: WorkflowRun) => void,
-    filter?: (workflow: WorkflowRun) => boolean,
+    filter: ((workflow: WorkflowRun) => boolean) | undefined,
   ): () => void {
     const subscription = { listener, filter };
     this.workflowSubscriptions.add(subscription);

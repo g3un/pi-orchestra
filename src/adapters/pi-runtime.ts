@@ -21,8 +21,8 @@ import type { AgentStore } from "../core/store.ts";
 
 export interface PiAgentRuntimeOptions {
   store: AgentStore;
-  cwd?: string;
-  resolveModel?: (model: string) => Model<any> | Promise<Model<any> | undefined> | undefined;
+  cwd: string | undefined;
+  resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
 }
 
 interface RuntimeEntry {
@@ -47,7 +47,7 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly store: AgentStore;
   private readonly cwd: string;
-  private readonly resolveModel?: PiAgentRuntimeOptions["resolveModel"];
+  private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
 
   constructor(options: PiAgentRuntimeOptions) {
     this.store = options.store;

@@ -5,8 +5,8 @@ export type WorkgroupStrategy = (typeof WORKGROUP_STRATEGY_VALUES)[number];
 
 export interface WorkgroupMember {
   profile: AgentProfile;
-  /** Optional globally unique short run name. If omitted, one is generated from the profile name. */
-  name?: string;
+  /** Globally unique short run name. If undefined, one is generated from the profile name. */
+  name: string | undefined;
   /** Member-specific assignment or focus within the workgroup goal. */
-  assignment?: string;
+  assignment: string | undefined;
 }

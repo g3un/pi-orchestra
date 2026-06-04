@@ -87,5 +87,7 @@ export function toAgentRunResult(run: AgentRun): AgentRunResult {
 }
 
 export async function closeAgentRuns(orchestra: OrchestraApi, runIds: string[]): Promise<void> {
-  await Promise.allSettled([...new Set(runIds)].map(async (runId) => await orchestra.closeAgent(runId)));
+  await Promise.allSettled(
+    [...new Set(runIds)].map(async (runId) => await orchestra.closeAgent(runId, { busId: undefined })),
+  );
 }

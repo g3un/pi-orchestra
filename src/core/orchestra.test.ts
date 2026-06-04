@@ -10,6 +10,8 @@ import type { AgentStore } from "./store.ts";
 const profile: AgentProfile = {
   name: "researcher",
   systemPrompt: "Research the assigned task.",
+  tools: undefined,
+  model: undefined,
 };
 
 test("orchestra creates buses in the store", () => {
@@ -17,7 +19,7 @@ test("orchestra creates buses in the store", () => {
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
 
-  const bus = orchestra.createBus();
+  const bus = orchestra.createBus({ name: undefined });
 
   assert.equal(store.getBus(bus.id), bus);
   assert.equal(bus.id, "bus");
@@ -38,7 +40,7 @@ test("orchestra accepts short names for buses and agent runs", async () => {
   assert.equal(orchestra.getBus(bus.name), bus);
   assert.equal(run.id, "reviewer-a");
   assert.equal(run.name, "Reviewer A");
-  assert.equal(orchestra.getRun(run.name), run);
+  assert.equal(orchestra.getRun(run.name, { busId: undefined }), run);
 });
 
 test("orchestra keeps agent run names globally unique", async () => {
@@ -49,8 +51,10 @@ test("orchestra keeps agent run names globally unique", async () => {
   const firstBus = orchestra.createBus({ name: "Frontend Audit" });
   const secondBus = orchestra.createBus({ name: "Backend Audit" });
   const namedRun = await orchestra.spawnAgent(profile, "Inspect frontend code.", firstBus.id, { name: "Reviewer" });
-  const firstAutoRun = await orchestra.spawnAgent(profile, "Research frontend code.", firstBus.id);
-  const secondAutoRun = await orchestra.spawnAgent(profile, "Research backend code.", secondBus.id);
+  const firstAutoRun = await orchestra.spawnAgent(profile, "Research frontend code.", firstBus.id, { name: undefined });
+  const secondAutoRun = await orchestra.spawnAgent(profile, "Research backend code.", secondBus.id, {
+    name: undefined,
+  });
 
   assert.equal(namedRun.id, "reviewer");
   assert.equal(namedRun.name, "Reviewer");
@@ -58,7 +62,7 @@ test("orchestra keeps agent run names globally unique", async () => {
   assert.equal(firstAutoRun.name, "researcher");
   assert.equal(secondAutoRun.id, "researcher-2");
   assert.equal(secondAutoRun.name, "researcher-2");
-  assert.equal(orchestra.getRun("Reviewer"), namedRun);
+  assert.equal(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
   await assert.rejects(
     () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer" }),
     /Agent name "Reviewer" is already in use\./,
@@ -76,7 +80,7 @@ test("orchestra lists runs and filters by bus", () => {
   store.saveRun(firstRun);
   store.saveRun(secondRun);
 
-  assert.deepEqual(orchestra.listRuns(), [firstRun, secondRun]);
+  assert.deepEqual(orchestra.listRuns({ busId: undefined }), [firstRun, secondRun]);
   assert.deepEqual(orchestra.listRuns({ busId: "bus-1" }), [firstRun]);
 });
 
@@ -88,8 +92,8 @@ test("orchestra resolves global run names for lifecycle actions", async () => {
   const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, { name: "Reviewer" });
   store.saveRun({ ...run, state: "success" });
 
-  const messagedRun = await orchestra.messageAgent("Reviewer", "Continue.");
-  const closedRun = await orchestra.closeAgent("Reviewer");
+  const messagedRun = await orchestra.messageAgent("Reviewer", "Continue.", { busId: undefined });
+  const closedRun = await orchestra.closeAgent("Reviewer", { busId: undefined });
 
   assert.deepEqual(runtime.messaged, { id: run.id, message: "Continue." });
   assert.deepEqual(runtime.closedIds, [run.id]);
@@ -101,17 +105,17 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const bus = orchestra.createBus();
+  const bus = orchestra.createBus({ name: undefined });
 
-  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id);
+  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id, { name: undefined });
   store.saveRun({ ...run, state: "success" });
-  const messagedRun = await orchestra.messageAgent(run.id, "Continue.");
-  const closedRun = await orchestra.closeAgent(run.id);
+  const messagedRun = await orchestra.messageAgent(run.id, "Continue.", { busId: undefined });
+  const closedRun = await orchestra.closeAgent(run.id, { busId: undefined });
 
   assert.deepEqual(runtime.spawned, { profile, task: "Inspect the code.", busId: bus.id });
   assert.deepEqual(runtime.messaged, { id: run.id, message: "Continue." });
   assert.deepEqual(runtime.closedIds, [run.id]);
-  assert.equal(orchestra.getRun(run.id), closedRun);
+  assert.equal(orchestra.getRun(run.id, { busId: undefined }), closedRun);
   assert.equal(store.getRun(run.id), closedRun);
   assert.equal(messagedRun.state, "idle");
   assert.equal(closedRun?.state, "closed");
@@ -121,9 +125,9 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const bus = orchestra.createBus();
+  const bus = orchestra.createBus({ name: undefined });
 
-  const output = await orchestra.publishBus(bus.id, "New constraint.");
+  const output = await orchestra.publishBus(bus.id, "New constraint.", "main");
 
   assert.deepEqual(runtime.published, { busId: bus.id, message: "New constraint.", from: "main" });
   assert.deepEqual(output.bus.messages, [output.busMessage]);
@@ -137,7 +141,7 @@ test("orchestra messages idle agents", async () => {
   const idleRun = run({ id: "agent-1", state: "idle" });
   store.saveRun(idleRun);
 
-  const output = await orchestra.messageAgent(idleRun.id, "Continue.");
+  const output = await orchestra.messageAgent(idleRun.id, "Continue.", { busId: undefined });
 
   assert.deepEqual(runtime.messaged, { id: idleRun.id, message: "Continue." });
   assert.equal(output, idleRun);

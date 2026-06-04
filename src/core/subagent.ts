@@ -6,8 +6,8 @@ export type AgentState = "idle" | "closed" | AgentResultStatus;
 export interface AgentProfile {
   name: string;
   systemPrompt: string;
-  tools?: string[];
-  model?: string;
+  tools: string[] | undefined;
+  model: string | undefined;
 }
 
 export interface AgentResult {

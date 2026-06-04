@@ -60,6 +60,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   const orchestraEvents = new OrchestraEventController({
     store,
     sendEvents: (events, content) => sendOrchestraEvents(pi, events, content),
+    flushDelayMs: undefined,
   });
   const workgroupTool = createWorkgroupTool({
     orchestra,
@@ -77,7 +78,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     subagentTool: createSubagentTool({ orchestra }),
     workgroupTool,
     workflowTool: createWorkflowTool({ orchestra, store }),
-    workflowMonitor: new WorkflowMonitorController(store),
+    workflowMonitor: new WorkflowMonitorController(store, { now: undefined, tickMs: undefined }),
     orchestraEvents,
   };
   bundles.set(ctx.cwd, bundle);

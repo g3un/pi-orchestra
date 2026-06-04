@@ -51,7 +51,7 @@ test("store supports multiple run subscribers and removes them independently", (
 test("store notifies global run subscribers until unsubscribed", () => {
   const store = new InMemoryAgentStore();
   const observed: string[] = [];
-  const unsubscribe = store.subscribeRuns((updatedRun) => observed.push(updatedRun.id));
+  const unsubscribe = store.subscribeRuns((updatedRun) => observed.push(updatedRun.id), undefined);
 
   store.saveRun(run({ id: "agent-1" }));
   store.saveRun(run({ id: "agent-2" }));
@@ -110,7 +110,7 @@ test("store saves workflows and notifies workflow subscribers until unsubscribed
 test("store notifies global workflow subscribers until unsubscribed", () => {
   const store = new InMemoryAgentStore();
   const observed: string[] = [];
-  const unsubscribe = store.subscribeWorkflows((workflow) => observed.push(workflow.id));
+  const unsubscribe = store.subscribeWorkflows((workflow) => observed.push(workflow.id), undefined);
 
   store.saveWorkflow(workflowRun({ id: "workflow-1" }));
   store.saveWorkflow(workflowRun({ id: "workflow-2" }));

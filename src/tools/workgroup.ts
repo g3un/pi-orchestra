@@ -1,6 +1,6 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AgentProfile, AgentResultStatus, AgentRun, AgentRunResult } from "../core/subagent.ts";
+import type { AgentResultStatus, AgentRun, AgentRunResult } from "../core/subagent.ts";
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
@@ -18,6 +18,8 @@ import {
   AgentProfileParams,
   spawnSubagent,
   SubagentRunNameParam,
+  toAgentProfile,
+  type RawAgentProfileParams,
   type SubagentSpawnInput,
   withDefaultProfileModel,
 } from "./subagent.ts";
@@ -44,7 +46,7 @@ export interface WorkgroupSettlement {
   workerResults: AgentRunResult[];
   /** Every terminal result observed while settling this workgroup. */
   completedResults: AgentRunResult[];
-  winner?: AgentRunResult;
+  winner: AgentRunResult | undefined;
   pendingRunIds: string[];
 }
 
@@ -69,9 +71,9 @@ export interface WorkgroupLaunchFailedEvent extends WorkgroupLaunchEvent {
 
 export interface WorkgroupToolDeps {
   orchestra: OrchestraApi;
-  onWorkgroupLaunching?: (event: WorkgroupLaunchEvent) => void;
-  onWorkgroupLaunched?: (event: WorkgroupLaunchedEvent) => void;
-  onWorkgroupLaunchFailed?: (event: WorkgroupLaunchFailedEvent) => void;
+  onWorkgroupLaunching: ((event: WorkgroupLaunchEvent) => void) | undefined;
+  onWorkgroupLaunched: ((event: WorkgroupLaunchedEvent) => void) | undefined;
+  onWorkgroupLaunchFailed: ((event: WorkgroupLaunchFailedEvent) => void) | undefined;
 }
 
 export const WorkgroupMemberParams = Type.Object(
@@ -144,7 +146,7 @@ export function createWorkgroupTool({
       try {
         const preparedInput: PreparedWorkgroupInput = {
           ...input,
-          members: prepareMembers(input.members, orchestra.listRuns()),
+          members: prepareMembers(input.members, orchestra.listRuns({ busId: undefined })),
         };
         const spawnResults = await Promise.allSettled(
           preparedInput.members.map(async (member): Promise<SpawnSuccess> => {
@@ -157,7 +159,7 @@ export function createWorkgroupTool({
         const failures = collectSpawnFailures(preparedInput.members, spawnResults);
         if (failures.length > 0) {
           const cleanupResults = await Promise.allSettled(
-            successes.map((success) => orchestra.closeAgent(success.run.id)),
+            successes.map((success) => orchestra.closeAgent(success.run.id, { busId: undefined })),
           );
           throw new Error(formatLaunchFailure(failures, successes, cleanupResults));
         }
@@ -275,6 +277,7 @@ class WorkgroupSettlementCollector {
           status: resolveWorkgroupStatus(this.completedResults),
           workerResults: this.completedResults,
           completedResults: this.completedResults,
+          winner: undefined,
           pendingRunIds: this.getPendingRunIds(),
         });
       };
@@ -294,6 +297,7 @@ class WorkgroupSettlementCollector {
           status: "failed",
           workerResults: [],
           completedResults: [],
+          winner: undefined,
           pendingRunIds: [],
         });
       }
@@ -353,7 +357,7 @@ function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
 
 export function toWorkgroupMember(member: RawWorkgroupMemberParams, label: string): WorkgroupMember {
   if (!member.profile) throw new Error(`${label} requires profile.`);
-  return { profile: member.profile, name: member.name, assignment: member.assignment };
+  return { profile: toAgentProfile(member.profile), name: member.name, assignment: member.assignment };
 }
 
 function withDefaultModelsForWorkgroup(input: WorkgroupInput, ctx: ExtensionContext): WorkgroupInput {
@@ -531,7 +535,7 @@ type RawWorkgroupParams = {
 };
 
 export type RawWorkgroupMemberParams = {
-  profile?: AgentProfile;
+  profile?: RawAgentProfileParams;
   name?: string;
   assignment?: string;
 };

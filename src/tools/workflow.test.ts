@@ -10,37 +10,50 @@ import { createWorkflowTool } from "./workflow.ts";
 const workerProfile: AgentProfile = {
   name: "worker",
   systemPrompt: "Do worker tasks.",
+  tools: undefined,
+  model: undefined,
 };
 
 const leaderProfile: AgentProfile = {
   name: "leader",
   systemPrompt: "Synthesize worker output.",
   tools: ["read"],
+  model: undefined,
 };
 
 const blockedWorkerProfile: AgentProfile = {
   name: "blocked-worker-profile",
   systemPrompt: "Block the worker task.",
+  tools: undefined,
+  model: undefined,
 };
 
 const failedWorkerProfile: AgentProfile = {
   name: "failed-worker-profile",
   systemPrompt: "Fail the worker task.",
+  tools: undefined,
+  model: undefined,
 };
 
 const hangingWorkerProfile: AgentProfile = {
   name: "hanging-worker-profile",
   systemPrompt: "Keep working until cancelled.",
+  tools: undefined,
+  model: undefined,
 };
 
 const blockedLeaderProfile: AgentProfile = {
   name: "blocked-leader",
   systemPrompt: "Block the workflow.",
+  tools: undefined,
+  model: undefined,
 };
 
 const failedLeaderProfile: AgentProfile = {
   name: "failed-leader",
   systemPrompt: "Fail the workflow.",
+  tools: undefined,
+  model: undefined,
 };
 
 test("workflow runs linear stages and feeds leader output forward", async () => {
@@ -57,15 +70,15 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "collect-worker", profile: workerProfile }],
-        leader: { name: "collect-lead", profile: leaderProfile },
+        members: [{ name: "collect-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "collect-lead", profile: leaderProfile, assignment: undefined },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
         strategy: "synthesize",
-        members: [{ name: "analyze-worker", profile: workerProfile }],
-        leader: { name: "analyze-lead", profile: leaderProfile },
+        members: [{ name: "analyze-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "analyze-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -110,9 +123,10 @@ test("workflow compete stage races to first success then uses a leader", async (
         goal: "Produce independent options.",
         strategy: "compete",
         members: [
-          { name: "option-worker", profile: workerProfile },
-          { name: "slow-option", profile: hangingWorkerProfile },
+          { name: "option-worker", profile: workerProfile, assignment: undefined },
+          { name: "slow-option", profile: hangingWorkerProfile, assignment: undefined },
         ],
+        leader: undefined,
       },
     ],
   });
@@ -146,15 +160,17 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
         goal: "Produce independent options.",
         strategy: "compete",
         members: [
-          { name: "blocked-option", profile: blockedWorkerProfile },
-          { name: "failed-option", profile: failedWorkerProfile },
+          { name: "blocked-option", profile: blockedWorkerProfile, assignment: undefined },
+          { name: "failed-option", profile: failedWorkerProfile, assignment: undefined },
         ],
+        leader: undefined,
       },
       {
         name: "never",
         goal: "Should not run.",
         strategy: "compete",
-        members: [{ name: "never-after-blocked-compete", profile: workerProfile }],
+        members: [{ name: "never-after-blocked-compete", profile: workerProfile, assignment: undefined }],
+        leader: undefined,
       },
     ],
   });
@@ -186,13 +202,15 @@ test("workflow compete stage fails when every worker fails", async () => {
         name: "options",
         goal: "Produce independent options.",
         strategy: "compete",
-        members: [{ name: "failed-only-option", profile: failedWorkerProfile }],
+        members: [{ name: "failed-only-option", profile: failedWorkerProfile, assignment: undefined }],
+        leader: undefined,
       },
       {
         name: "never",
         goal: "Should not run.",
         strategy: "compete",
-        members: [{ name: "never-after-failed-compete", profile: workerProfile }],
+        members: [{ name: "never-after-failed-compete", profile: workerProfile, assignment: undefined }],
+        leader: undefined,
       },
     ],
   });
@@ -224,7 +242,8 @@ test("workflow status returns the latest workflow by name", async () => {
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "status-worker", profile: workerProfile }],
+        members: [{ name: "status-worker", profile: workerProfile, assignment: undefined }],
+        leader: undefined,
       },
     ],
   });
@@ -253,13 +272,15 @@ test("workflow start validates unique stage names and non-empty members", async 
             name: "collect",
             goal: "Collect source material.",
             strategy: "synthesize",
-            members: [{ profile: workerProfile }],
+            members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
+            leader: undefined,
           },
           {
             name: "collect",
             goal: "Collect more material.",
             strategy: "synthesize",
-            members: [{ profile: workerProfile }],
+            members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
+            leader: undefined,
           },
         ],
       }),
@@ -272,7 +293,9 @@ test("workflow start validates unique stage names and non-empty members", async 
         action: "start",
         name: "empty-members-flow",
         goal: "Research the topic.",
-        stages: [{ name: "collect", goal: "Collect source material.", strategy: "synthesize", members: [] }],
+        stages: [
+          { name: "collect", goal: "Collect source material.", strategy: "synthesize", members: [], leader: undefined },
+        ],
       }),
     /Workflow stage "collect" requires at least one member\./,
   );
@@ -292,7 +315,8 @@ test("workflow uses a default restricted leader when omitted", async () => {
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "default-worker", profile: workerProfile }],
+        members: [{ name: "default-worker", profile: workerProfile, assignment: undefined }],
+        leader: undefined,
       },
     ],
   });
@@ -338,7 +362,8 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
         name: "collect",
         goal: "Collect source material.",
         strategy: "compete",
-        members: [{ name: "slow-worker", profile: workerProfile }],
+        members: [{ name: "slow-worker", profile: workerProfile, assignment: undefined }],
+        leader: undefined,
       },
     ],
   });
@@ -367,15 +392,15 @@ test("workflow fails when a stage leader fails", async () => {
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "failed-worker", profile: workerProfile }],
-        leader: { name: "failed-lead", profile: failedLeaderProfile },
+        members: [{ name: "failed-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "failed-lead", profile: failedLeaderProfile, assignment: undefined },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
         strategy: "synthesize",
-        members: [{ name: "never-failed-worker", profile: workerProfile }],
-        leader: { name: "never-failed-lead", profile: leaderProfile },
+        members: [{ name: "never-failed-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "never-failed-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -407,15 +432,15 @@ test("workflow stops when a stage leader blocks", async () => {
         name: "collect",
         goal: "Collect source material.",
         strategy: "synthesize",
-        members: [{ name: "blocked-worker", profile: workerProfile }],
-        leader: { name: "blocked-lead", profile: blockedLeaderProfile },
+        members: [{ name: "blocked-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "blocked-lead", profile: blockedLeaderProfile, assignment: undefined },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
         strategy: "synthesize",
-        members: [{ name: "never-worker", profile: workerProfile }],
-        leader: { name: "never-lead", profile: leaderProfile },
+        members: [{ name: "never-worker", profile: workerProfile, assignment: undefined }],
+        leader: { name: "never-lead", profile: leaderProfile, assignment: undefined },
       },
     ],
   });
@@ -455,7 +480,7 @@ class FakeOrchestra implements OrchestraApi {
     return { started, release };
   }
 
-  createBus(options: { name?: string } = {}): Bus {
+  createBus(options: { name: string | undefined }): Bus {
     const id = slugify(options.name ?? `bus-${this.buses.size + 1}`);
     const bus: Bus = { id, name: options.name ?? id, messages: [] };
     this.buses.set(bus.id, bus);
@@ -466,7 +491,7 @@ class FakeOrchestra implements OrchestraApi {
     return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
   }
 
-  async publishBus(id: string, message: string, from = "main"): Promise<PublishedBusMessage> {
+  async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     const bus = this.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
     const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, message, from };
@@ -478,7 +503,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    options: { name?: string } = {},
+    options: { name: string | undefined },
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
@@ -523,23 +548,23 @@ class FakeOrchestra implements OrchestraApi {
     return run;
   }
 
-  getRun(id: string): AgentRun | undefined {
+  getRun(id: string, _options: { busId: string | undefined }): AgentRun | undefined {
     return this.runs.get(id);
   }
 
-  listRuns(options: { busId?: string } = {}): AgentRun[] {
+  listRuns(options: { busId: string | undefined }): AgentRun[] {
     const runs = [...this.runs.values()];
     if (!options.busId) return runs;
     return runs.filter((run) => run.busId === options.busId);
   }
 
-  async messageAgent(id: string, _message: string): Promise<AgentRun> {
+  async messageAgent(id: string, _message: string, _options: { busId: string | undefined }): Promise<AgentRun> {
     const run = this.runs.get(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
 
-  async closeAgent(id: string): Promise<AgentRun | undefined> {
+  async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
     const run = this.runs.get(id);
     if (!run) return undefined;
 

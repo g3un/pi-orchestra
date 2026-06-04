@@ -1,11 +1,18 @@
 import type { AgentProfile } from "../core/subagent.ts";
 
 export interface StageLeaderProfileOptions {
-  name?: string;
-  model?: string;
+  name: string | undefined;
+  model: string | undefined;
 }
 
-export function createStageLeaderProfile(options: StageLeaderProfileOptions = {}): AgentProfile {
+const DEFAULT_STAGE_LEADER_PROFILE_OPTIONS: StageLeaderProfileOptions = {
+  name: undefined,
+  model: undefined,
+};
+
+export function createStageLeaderProfile(
+  options: StageLeaderProfileOptions = DEFAULT_STAGE_LEADER_PROFILE_OPTIONS,
+): AgentProfile {
   return {
     name: options.name ?? "stage-leader",
     systemPrompt: [
