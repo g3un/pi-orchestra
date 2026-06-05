@@ -21,10 +21,10 @@ Don't pre-load everything an agent _might_ need. Instead:
   queries — and load the full payload only when needed, via tools.
 - Use metadata (naming conventions, folder structure, timestamps) to let the
   agent decide what to pull. Progressive disclosure beats a giant upfront dump.
-- This mirrors how this repo's runtime _drains_ bus messages on demand and
-  injects only unread ones (`drainBusMessages` /
-  `withBusMessages` in `src/adapters/pi-runtime.ts`) rather than replaying the
-  whole bus every turn.
+- This mirrors how this repo's runtime _drains_ subscribed bus messages on
+  demand and injects only unread ones (`drainSubscribedBusMessages` /
+  `withSubscribedBusMessages` in `src/adapters/pi-runtime.ts`) rather than
+  replaying the whole bus every turn.
 
 ## Long-horizon techniques
 

@@ -14,7 +14,14 @@ import {
   type AgentResultStatus,
   type AgentRun,
 } from "../core/subagent.ts";
-import type { Bus, BusMessage } from "../core/bus.ts";
+import {
+  createBusSubscription,
+  isBusMessageDelivered,
+  markBusMessagesDelivered,
+  type Bus,
+  type BusMessage,
+  type BusSubscription,
+} from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
@@ -27,7 +34,6 @@ export interface PiAgentRuntimeOptions {
 
 interface RuntimeEntry {
   session: AgentSession;
-  seenBusMessageIds: Set<string>;
   promptTask?: Promise<void>;
 }
 
@@ -83,12 +89,13 @@ export class PiAgentRuntime implements AgentRuntime {
     });
 
     this.store.saveRun(run);
-    const entry: RuntimeEntry = { session, seenBusMessageIds: new Set() };
+    this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
+    const entry: RuntimeEntry = { session };
     this.entries.set(run.id, entry);
     this.startPromptTask(
       run.id,
       entry,
-      this.withBusMessages(run.id, entry, buildInitialPrompt(profile, task, run.name)),
+      this.withSubscribedBusMessages(run.id, buildInitialPrompt(profile, task, run.name)),
     );
     return run;
   }
@@ -97,7 +104,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const entry = this.requireEntry(id);
     const run = this.requireRun(id);
     this.assertOpenRun(run);
-    const messageWithBusContext = this.withBusMessages(id, entry, message);
+    const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
     if (run.state === "running" && entry.session.isStreaming) {
       await entry.session.steer(messageWithBusContext);
@@ -122,13 +129,22 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const steeringMessage = formatBusMessages([busMessage]);
     const steerTasks: Array<Promise<void>> = [];
-    for (const [runId, entry] of this.entries) {
-      const run = this.store.getRun(runId);
-      if (!run || run.busId !== busId) continue;
-      if (run.id === from || run.state !== "running" || !entry.session.isStreaming) continue;
+    for (const subscription of this.store.listBusSubscriptions({
+      busId,
+      subscriberId: undefined,
+      subscriberKind: "agent",
+    })) {
+      if (subscription.subscriberId === from || isBusMessageDelivered(subscription, busMessage.id)) continue;
 
-      entry.seenBusMessageIds.add(busMessage.id);
-      steerTasks.push(entry.session.steer(steeringMessage));
+      const run = this.store.getRun(subscription.subscriberId);
+      const entry = this.entries.get(subscription.subscriberId);
+      if (!run || !entry || run.state !== "running" || !entry.session.isStreaming) continue;
+
+      steerTasks.push(
+        entry.session
+          .steer(steeringMessage)
+          .then(() => this.markSubscriptionMessagesDelivered(subscription, busMessage)),
+      );
     }
 
     await Promise.all(steerTasks);
@@ -147,6 +163,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const closedRun: AgentRun = { ...run, state: "closed" };
     this.store.saveRun(closedRun);
+    this.deleteAgentBusSubscriptions(id);
     entry?.session.dispose();
     return closedRun;
   }
@@ -285,22 +302,51 @@ export class PiAgentRuntime implements AgentRuntime {
     return bus;
   }
 
-  private withBusMessages(runId: string, entry: RuntimeEntry, message: string): string {
-    const busMessages = this.drainBusMessages(runId, entry);
+  private withSubscribedBusMessages(runId: string, message: string): string {
+    const busMessages = this.drainSubscribedBusMessages(runId);
     if (busMessages.length === 0) return message;
     return [message, "", formatBusMessages(busMessages)].join("\n");
   }
 
-  private drainBusMessages(runId: string, entry: RuntimeEntry): BusMessage[] {
-    const run = this.requireRun(runId);
-    const bus = this.requireBus(run.busId);
-    const unreadMessages = bus.messages.filter((message) => {
-      if (message.from === run.id) return false;
-      return !entry.seenBusMessageIds.has(message.id);
+  private drainSubscribedBusMessages(runId: string): BusMessage[] {
+    const subscriptions = this.store.listBusSubscriptions({
+      busId: undefined,
+      subscriberId: runId,
+      subscriberKind: "agent",
     });
+    const unreadMessages: BusMessage[] = [];
+    for (const subscription of subscriptions) {
+      const bus = this.store.getBus(subscription.busId);
+      if (!bus) {
+        this.store.deleteBusSubscription(subscription.id);
+        continue;
+      }
 
-    for (const message of unreadMessages) entry.seenBusMessageIds.add(message.id);
+      const subscriptionUnreadMessages = bus.messages.filter((message) => {
+        if (message.from === runId) return false;
+        return !isBusMessageDelivered(subscription, message.id);
+      });
+      if (subscriptionUnreadMessages.length === 0) continue;
+
+      unreadMessages.push(...subscriptionUnreadMessages);
+      this.markSubscriptionMessagesDelivered(subscription, subscriptionUnreadMessages);
+    }
     return unreadMessages;
+  }
+
+  private markSubscriptionMessagesDelivered(subscription: BusSubscription, messages: BusMessage | BusMessage[]): void {
+    const latestSubscription = this.store.getBusSubscription(subscription.id) ?? subscription;
+    this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages));
+  }
+
+  private deleteAgentBusSubscriptions(runId: string): void {
+    for (const subscription of this.store.listBusSubscriptions({
+      busId: undefined,
+      subscriberId: runId,
+      subscriberKind: "agent",
+    })) {
+      this.store.deleteBusSubscription(subscription.id);
+    }
   }
 
   private async resolveProfileModel(profile: AgentProfile): Promise<Model<any> | undefined> {
@@ -332,6 +378,15 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
 function requireProfileTools(profile: AgentProfile): string[] {
   if (!Array.isArray(profile.tools)) throw new Error(`Profile "${profile.name}" must specify tools.`);
   return profile.tools;
+}
+
+function createAgentBusSubscription(runId: string, busId: string): BusSubscription {
+  return createBusSubscription({
+    busId,
+    subscriberId: runId,
+    subscriberKind: "agent",
+    deliveredMessageIds: [],
+  });
 }
 
 function buildFinishRequiredPrompt(): string {

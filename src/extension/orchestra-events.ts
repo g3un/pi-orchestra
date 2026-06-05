@@ -1,3 +1,4 @@
+import { isBusMessageDelivered, markBusMessagesDelivered, type BusMessage } from "../core/bus.ts";
 import type { AgentRun, AgentRunResult, AgentState } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
@@ -22,6 +23,11 @@ export type OrchestraMainEvent =
   | {
       type: "workflow.finished";
       workflow: WorkflowRun;
+    }
+  | {
+      type: "bus.message";
+      busId: string;
+      message: BusMessage;
     };
 
 export interface WorkgroupRegistration {
@@ -47,6 +53,11 @@ interface LaunchingWorkgroup {
   finishedRunIds: Set<string>;
 }
 
+interface BusMessageDelivery {
+  subscriptionId: string;
+  message: BusMessage;
+}
+
 export class OrchestraEventController {
   private readonly store: AgentStore;
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
@@ -56,7 +67,9 @@ export class OrchestraEventController {
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
   private readonly queuedEvents: OrchestraMainEvent[] = [];
+  private readonly queuedBusMessageDeliveries: BusMessageDelivery[] = [];
   private readonly unsubscribeRuns: () => void;
+  private readonly unsubscribeBusMessages: () => void;
   private readonly unsubscribeWorkflows: () => void;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -69,6 +82,10 @@ export class OrchestraEventController {
     for (const workflow of this.store.listWorkflows()) this.workflowStates.set(workflow.id, workflow.state);
 
     this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run), undefined);
+    this.unsubscribeBusMessages = this.store.subscribeBusMessages(
+      (event) => this.handleBusMessageSaved(event),
+      undefined,
+    );
     this.unsubscribeWorkflows = this.store.subscribeWorkflows(
       (workflow) => this.handleWorkflowSaved(workflow),
       undefined,
@@ -101,7 +118,9 @@ export class OrchestraEventController {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = undefined;
     this.queuedEvents.length = 0;
+    this.queuedBusMessageDeliveries.length = 0;
     this.unsubscribeRuns();
+    this.unsubscribeBusMessages();
     this.unsubscribeWorkflows();
   }
 
@@ -110,8 +129,12 @@ export class OrchestraEventController {
     this.flushTimer = undefined;
     if (this.queuedEvents.length === 0) return;
 
-    const events = this.queuedEvents.splice(0);
+    const events = [...this.queuedEvents];
+    const busMessageDeliveries = [...this.queuedBusMessageDeliveries];
     this.sendEvents(events, formatOrchestraEvents(events));
+    this.queuedEvents.splice(0, events.length);
+    this.queuedBusMessageDeliveries.splice(0, busMessageDeliveries.length);
+    for (const delivery of busMessageDeliveries) this.markBusMessageDelivered(delivery);
   }
 
   private handleRunSaved(run: AgentRun): void {
@@ -150,6 +173,23 @@ export class OrchestraEventController {
     this.queueEvent({ type: "subagent.finished", busId: run.busId, run: toAgentRunResult(run) });
   }
 
+  private handleBusMessageSaved(event: { busId: string; message: BusMessage }): void {
+    if (event.message.from === "main") return;
+
+    const subscriptions = this.store.listBusSubscriptions({
+      busId: event.busId,
+      subscriberId: "main",
+      subscriberKind: "main",
+    });
+    for (const subscription of subscriptions) {
+      if (isBusMessageDelivered(subscription, event.message.id)) continue;
+      if (this.hasQueuedBusMessageDelivery(subscription.id, event.message.id)) continue;
+
+      this.queuedBusMessageDeliveries.push({ subscriptionId: subscription.id, message: event.message });
+      this.queueEvent({ type: "bus.message", busId: event.busId, message: event.message });
+    }
+  }
+
   private handleWorkflowSaved(workflow: WorkflowRun): void {
     const previousState = this.workflowStates.get(workflow.id);
     this.workflowStates.set(workflow.id, workflow.state);
@@ -177,6 +217,19 @@ export class OrchestraEventController {
       .map((run) => run.id);
   }
 
+  private hasQueuedBusMessageDelivery(subscriptionId: string, messageId: string): boolean {
+    return this.queuedBusMessageDeliveries.some(
+      (delivery) => delivery.subscriptionId === subscriptionId && delivery.message.id === messageId,
+    );
+  }
+
+  private markBusMessageDelivered(delivery: BusMessageDelivery): void {
+    const subscription = this.store.getBusSubscription(delivery.subscriptionId);
+    if (!subscription) return;
+
+    this.store.saveBusSubscription(markBusMessagesDelivered(subscription, delivery.message));
+  }
+
   private queueEvent(event: OrchestraMainEvent): void {
     this.queuedEvents.push(event);
     if (this.flushDelayMs === 0) {
@@ -195,6 +248,7 @@ export function formatOrchestraEvents(events: OrchestraMainEvent[]): string {
 
 function formatOrchestraEvent(event: OrchestraMainEvent): string {
   if (event.type === "workflow.finished") return formatWorkflowFinishedEvent(event.workflow);
+  if (event.type === "bus.message") return formatBusMessageEvent(event);
 
   const runLabel = event.run.name === event.run.runId ? event.run.runId : `${event.run.name} (${event.run.runId})`;
   const lines =
@@ -208,6 +262,10 @@ function formatOrchestraEvent(event: OrchestraMainEvent): string {
 
   lines.push(...formatRunResultLines(event.run));
   return lines.join("\n");
+}
+
+function formatBusMessageEvent(event: Extract<OrchestraMainEvent, { type: "bus.message" }>): string {
+  return [`- Bus message on ${event.busId} from ${event.message.from}:`, event.message.message].join("\n");
 }
 
 function formatWorkflowFinishedEvent(workflow: WorkflowRun): string {

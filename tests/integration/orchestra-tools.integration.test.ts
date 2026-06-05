@@ -28,7 +28,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
   const store = new InMemoryAgentStore();
   const runtime = new ControllableRuntime({ store });
   const orchestra = new Orchestra({ runtime, store });
-  const busTool = createBusTool({ orchestra });
+  const busTool = createBusTool({ orchestra, store });
   const subagentTool = createSubagentTool({ orchestra });
   const eventBatches: OrchestraMainEvent[][] = [];
   new OrchestraEventController({

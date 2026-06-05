@@ -1,7 +1,14 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { Bus, BusMessage } from "../core/bus.ts";
+import {
+  createBusSubscription,
+  createBusSubscriptionId,
+  type Bus,
+  type BusMessage,
+  type BusSubscription,
+} from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
+import type { AgentStore } from "../core/store.ts";
 
 export type BusInput =
   | {
@@ -17,11 +24,20 @@ export type BusInput =
       name: string;
       message: string;
       from: string;
+    }
+  | {
+      action: "subscribe";
+      name: string;
+    }
+  | {
+      action: "unsubscribe";
+      name: string;
     };
 
 export interface BusOutput {
   bus?: Bus;
   busMessage?: BusMessage;
+  subscription?: BusSubscription;
   message: string;
 }
 
@@ -32,11 +48,13 @@ export interface BusTool {
 
 export interface BusToolDeps {
   orchestra: OrchestraApi;
+  store: AgentStore;
 }
 
 const BusActionParams = Type.String({
-  enum: ["create", "status", "publish"],
-  description: "create/status/publish shared context buses; completion is delivered through pi-orchestra events.",
+  enum: ["create", "status", "publish", "subscribe", "unsubscribe"],
+  description:
+    "create/status/publish/subscribe/unsubscribe shared context buses; completion is delivered through pi-orchestra events.",
 });
 
 const BusToolParams = Type.Object(
@@ -50,14 +68,14 @@ const BusToolParams = Type.Object(
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=publish. Shared context for attached agents.",
+        description: "Required for action=publish. Shared context for subscribed agents.",
       }),
     ),
   },
   { additionalProperties: false },
 );
 
-export function createBusTool({ orchestra }: BusToolDeps): BusTool {
+export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
   return {
     name: "bus",
 
@@ -72,6 +90,17 @@ export function createBusTool({ orchestra }: BusToolDeps): BusTool {
 
       if (input.action === "status") {
         return { bus, message: formatBusStatus(bus) };
+      }
+
+      if (input.action === "subscribe") {
+        const subscription = subscribeMainToBus(store, bus);
+        return { bus, subscription, message: `Subscribed main to bus ${formatBusLabel(bus)} for new messages.` };
+      }
+
+      if (input.action === "unsubscribe") {
+        const subscriptionId = createBusSubscriptionId(bus.id, "main", "main");
+        store.deleteBusSubscription(subscriptionId);
+        return { bus, message: `Unsubscribed main from bus ${formatBusLabel(bus)}.` };
       }
 
       const published = await orchestra.publishBus(input.name, input.message, input.from ?? "main");
@@ -92,7 +121,8 @@ export function defineBusPiTool(resolveTool: (ctx: ExtensionContext) => BusTool)
     promptSnippet: "Use one bus per delegated work item; spawn related subagents or workgroups on it.",
     promptGuidelines: [
       "Use bus create before spawning related subagents or workgroups; reuse it for that work item.",
-      "Use bus publish with the bus name, not a bus id, to send shared context to attached agents; bus status shows published messages.",
+      "Use bus publish with the bus name, not a bus id, to send shared context to subscribed agents; bus status shows published messages.",
+      "Use bus subscribe when main needs live bus messages; it starts from new messages after subscription. Unsubscribe when tracking is no longer useful.",
       "Do not wait on buses; pi-orchestra delivers subagent and workgroup finish events automatically.",
     ],
     parameters: BusToolParams,
@@ -116,9 +146,33 @@ function toBusInput(params: RawBusParams): BusInput {
     return { action: "status", name: params.name };
   }
 
+  if (params.action === "subscribe") {
+    if (!params.name) throw new Error("bus action=subscribe requires name.");
+    return { action: "subscribe", name: params.name };
+  }
+
+  if (params.action === "unsubscribe") {
+    if (!params.name) throw new Error("bus action=unsubscribe requires name.");
+    return { action: "unsubscribe", name: params.name };
+  }
+
   if (!params.name) throw new Error("bus action=publish requires name.");
   if (!params.message) throw new Error("bus action=publish requires message.");
   return { action: "publish", name: params.name, message: params.message, from: "main" };
+}
+
+function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
+  const id = createBusSubscriptionId(bus.id, "main", "main");
+  const subscription =
+    store.getBusSubscription(id) ??
+    createBusSubscription({
+      busId: bus.id,
+      subscriberId: "main",
+      subscriberKind: "main",
+      deliveredMessageIds: bus.messages.map((message) => message.id),
+    });
+  store.saveBusSubscription(subscription);
+  return subscription;
 }
 
 function formatBusNotFound(name: string): string {
@@ -143,7 +197,7 @@ function formatBusLabel(bus: Bus): string {
 }
 
 type RawBusParams = {
-  action: "create" | "status" | "publish";
+  action: "create" | "status" | "publish" | "subscribe" | "unsubscribe";
   name?: string;
   message?: string;
 };

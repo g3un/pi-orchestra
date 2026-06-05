@@ -3,7 +3,7 @@
 pi-orchestra builds delegation in four layers:
 
 1. **Bus** — shared context channel.
-2. **Subagent** — isolated child agent attached to a bus.
+2. **Subagent** — isolated child agent subscribed to a bus.
 3. **Workgroup** — multiple subagents working on one bus.
 4. **Workflow** — ordered workgroup stages with stage synthesis.
 
@@ -14,8 +14,9 @@ ordered `messages`.
 
 Bus messages are peer reference context only:
 
-- `publish_bus` sends useful findings to sibling agents on the same bus.
-- Bus context is injected as supplemental `<bus_reference_context>`.
+- `publish_bus` sends useful findings to subscribers of the same bus.
+- Subagents subscribe to their assigned bus when spawned.
+- Subscribed bus context is delivered as supplemental `<bus_reference_context>`.
 - Decisions and escalation do not go through the bus; call the `finish` tool with
   `status: "blocked"`.
 
@@ -25,7 +26,9 @@ A subagent is an `AgentRun`: a child agent with a profile, task, bus id, state,
 and optional result.
 
 Profiles define the child agent's `systemPrompt`, explicit tool allowlist, and
-optional model. The runtime attaches each subagent to exactly one bus.
+optional model. The runtime creates a bus subscription for each spawned subagent;
+`AgentRun.busId` remains the lifecycle/query scope, not the context delivery
+path.
 
 Every subagent must call the `finish` tool with:
 
@@ -63,7 +66,7 @@ and a leader.
 For each stage:
 
 1. Create a fresh bus.
-2. Spawn the worker workgroup.
+2. Spawn the worker workgroup; workers subscribe to the stage bus.
 3. Collect worker results through store finish-event subscriptions in the background.
 4. Spawn the stage leader to synthesize the worker results.
 5. Store the leader's canonical output as the stage output.

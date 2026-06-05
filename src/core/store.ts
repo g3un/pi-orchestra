@@ -1,5 +1,5 @@
 import type { AgentRun } from "./subagent.ts";
-import type { Bus, BusMessage } from "./bus.ts";
+import type { Bus, BusMessage, BusMessageEvent, BusSubscription, ListBusSubscriptionsOptions } from "./bus.ts";
 import type { WorkflowRun } from "./workflow.ts";
 
 export interface AgentStore {
@@ -13,6 +13,15 @@ export interface AgentStore {
   listBuses(): Bus[];
   /** Add or replace a bus message by id. */
   addBusMessage(busId: string, message: BusMessage): void;
+  subscribeBusMessages(
+    listener: (event: BusMessageEvent) => void,
+    filter: ((event: BusMessageEvent) => boolean) | undefined,
+  ): () => void;
+
+  saveBusSubscription(subscription: BusSubscription): void;
+  getBusSubscription(id: string): BusSubscription | undefined;
+  listBusSubscriptions(options: ListBusSubscriptionsOptions): BusSubscription[];
+  deleteBusSubscription(id: string): void;
 
   saveWorkflow(workflow: WorkflowRun): void;
   getWorkflow(id: string): WorkflowRun | undefined;

@@ -1,5 +1,12 @@
 import type { AgentRun } from "../core/subagent.ts";
-import type { Bus, BusMessage } from "../core/bus.ts";
+import {
+  matchesBusSubscription,
+  type Bus,
+  type BusMessage,
+  type BusMessageEvent,
+  type BusSubscription,
+  type ListBusSubscriptionsOptions,
+} from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
@@ -11,8 +18,10 @@ import { notifySubscribers, subscribeStore, type StoreSubscription } from "./sto
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
+  private readonly busSubscriptionsById = new Map<string, BusSubscription>();
   private readonly workflows = new Map<string, WorkflowRun>();
   private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
+  private readonly busMessageSubscriptions = new Set<StoreSubscription<BusMessageEvent>>();
   private readonly workflowSubscriptions = new Set<StoreSubscription<WorkflowRun>>();
 
   saveRun(run: AgentRun): void {
@@ -55,6 +64,32 @@ export class InMemoryAgentStore implements AgentStore {
     }
 
     bus.messages.push(message);
+    notifySubscribers(this.busMessageSubscriptions, { busId, message });
+  }
+
+  subscribeBusMessages(
+    listener: (event: BusMessageEvent) => void,
+    filter: ((event: BusMessageEvent) => boolean) | undefined,
+  ): () => void {
+    return subscribeStore(this.busMessageSubscriptions, listener, filter);
+  }
+
+  saveBusSubscription(subscription: BusSubscription): void {
+    this.busSubscriptionsById.set(subscription.id, subscription);
+  }
+
+  getBusSubscription(id: string): BusSubscription | undefined {
+    return this.busSubscriptionsById.get(id);
+  }
+
+  listBusSubscriptions(options: ListBusSubscriptionsOptions): BusSubscription[] {
+    return [...this.busSubscriptionsById.values()].filter((subscription) =>
+      matchesBusSubscription(subscription, options),
+    );
+  }
+
+  deleteBusSubscription(id: string): void {
+    this.busSubscriptionsById.delete(id);
   }
 
   saveWorkflow(workflow: WorkflowRun): void {

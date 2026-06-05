@@ -53,7 +53,7 @@ defineTool({
   promptSnippet: "Spawn a subagent on an existing bus, then status/message/close it later.",
   promptGuidelines: [
     // bullets injected into the system prompt
-    "Create a bus first; spawn attaches the subagent via busId.",
+    "Create a bus first; spawn subscribes the subagent to busId.",
     "Use returned run id/name for status, message, or close.",
   ],
   parameters: SubagentToolParams, // Typebox schema

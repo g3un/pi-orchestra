@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
-import type { Bus, BusMessage } from "../core/bus.ts";
+import { createBusSubscriptionId, type Bus, type BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { createBusTool } from "./bus.ts";
 
 test("bus create allocates a standalone bus through orchestra", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra });
+  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
 
   const output = await tool.execute({ action: "create", name: undefined });
 
@@ -20,7 +21,7 @@ test("bus create allocates a standalone bus through orchestra", async () => {
 
 test("bus status returns stored bus messages", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra });
+  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
   const bus: Bus = {
     id: "bus-1",
     name: "bus-1",
@@ -42,7 +43,7 @@ test("bus status returns stored bus messages", async () => {
 
 test("bus publish delegates with the bus name", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra });
+  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
   const bus: Bus = { id: "shared-context", name: "Shared Context", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
@@ -63,7 +64,7 @@ test("bus publish delegates with the bus name", async () => {
 
 test("bus publish preserves an explicit sender", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra });
+  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
   const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
@@ -75,6 +76,35 @@ test("bus publish preserves an explicit sender", async () => {
     from: "agent-1",
   });
   assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
+});
+
+test("bus subscribe and unsubscribe manage the main bus subscription", async () => {
+  const orchestra = new FakeOrchestra();
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
+  const bus: Bus = {
+    id: "bus-1",
+    name: "bus-1",
+    messages: [{ id: "message-1", from: "agent-1", message: "Existing context." }],
+  };
+  orchestra.buses.set(bus.id, bus);
+
+  const subscribeOutput = await tool.execute({ action: "subscribe", name: bus.name });
+  const subscriptionId = createBusSubscriptionId(bus.id, "main", "main");
+
+  assert.equal(subscribeOutput.message, "Subscribed main to bus bus-1 for new messages.");
+  assert.deepEqual(store.getBusSubscription(subscriptionId), {
+    id: subscriptionId,
+    busId: bus.id,
+    subscriberId: "main",
+    subscriberKind: "main",
+    deliveredMessageIds: ["message-1"],
+  });
+
+  const unsubscribeOutput = await tool.execute({ action: "unsubscribe", name: bus.name });
+
+  assert.equal(unsubscribeOutput.message, "Unsubscribed main from bus bus-1.");
+  assert.equal(store.getBusSubscription(subscriptionId), undefined);
 });
 
 class FakeOrchestra implements OrchestraApi {

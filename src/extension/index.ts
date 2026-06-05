@@ -76,7 +76,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     onWorkgroupLaunchFailed: ({ bus }) => orchestraEvents.cancelWorkgroupLaunch(bus.id),
   });
   const bundle = {
-    busTool: createBusTool({ orchestra }),
+    busTool: createBusTool({ orchestra, store }),
     subagentTool: createSubagentTool({ orchestra }),
     workgroupTool,
     workflowTool: createWorkflowTool({ orchestra, store }),

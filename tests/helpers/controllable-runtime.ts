@@ -1,6 +1,6 @@
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../../src/core/runtime.ts";
 import type { AgentProfile, AgentResult, AgentRun } from "../../src/core/subagent.ts";
-import type { BusMessage } from "../../src/core/bus.ts";
+import { createBusSubscription, type BusMessage } from "../../src/core/bus.ts";
 import type { AgentStore } from "../../src/core/store.ts";
 
 export interface SpawnRecord {
@@ -60,6 +60,9 @@ export class ControllableRuntime implements AgentRuntime {
     const record = { profile, task, busId, options };
     this.spawned.push(record);
     this.store.saveRun(run);
+    this.store.saveBusSubscription(
+      createBusSubscription({ busId, subscriberId: run.id, subscriberKind: "agent", deliveredMessageIds: [] }),
+    );
 
     const spawnedRun = await this.onSpawn?.(run, record);
     if (!spawnedRun) return run;
@@ -95,6 +98,13 @@ export class ControllableRuntime implements AgentRuntime {
 
     const closedRun: AgentRun = { ...run, state: "closed" };
     this.store.saveRun(closedRun);
+    for (const subscription of this.store.listBusSubscriptions({
+      busId: undefined,
+      subscriberId: id,
+      subscriberKind: "agent",
+    })) {
+      this.store.deleteBusSubscription(subscription.id);
+    }
     return closedRun;
   }
 

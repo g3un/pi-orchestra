@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentRun } from "../core/subagent.ts";
-import type { Bus } from "../core/bus.ts";
+import type { Bus, BusSubscription } from "../core/bus.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 
@@ -86,6 +86,51 @@ test("store rejects bus messages for missing buses", () => {
   );
 });
 
+test("store notifies bus message subscribers until unsubscribed", () => {
+  const store = new InMemoryAgentStore();
+  const bus: Bus = { id: "bus-1", name: "Bus 1", messages: [] };
+  const observed: string[] = [];
+  store.saveBus(bus);
+  store.saveBus({ id: "bus-2", name: "Bus 2", messages: [] });
+  const unsubscribe = store.subscribeBusMessages(
+    (event) => observed.push(event.message.id),
+    (event) => event.busId === bus.id,
+  );
+
+  store.addBusMessage(bus.id, { id: "message-1", from: "main", message: "Initial." });
+  store.addBusMessage("bus-2", { id: "message-2", from: "main", message: "Ignored." });
+  unsubscribe();
+  store.addBusMessage(bus.id, { id: "message-3", from: "main", message: "After unsubscribe." });
+
+  assert.deepEqual(observed, ["message-1"]);
+});
+
+test("store saves, lists, and deletes bus subscriptions", () => {
+  const store = new InMemoryAgentStore();
+  store.saveBusSubscription(busSubscription({ id: "sub-1", busId: "bus-1", subscriberId: "agent-1" }));
+  store.saveBusSubscription(busSubscription({ id: "sub-2", busId: "bus-2", subscriberId: "agent-1" }));
+  store.saveBusSubscription(
+    busSubscription({ id: "sub-3", busId: "bus-1", subscriberId: "main", subscriberKind: "main" }),
+  );
+
+  assert.deepEqual(
+    store
+      .listBusSubscriptions({ busId: "bus-1", subscriberId: undefined, subscriberKind: undefined })
+      .map((sub) => sub.id),
+    ["sub-1", "sub-3"],
+  );
+  assert.deepEqual(
+    store
+      .listBusSubscriptions({ busId: undefined, subscriberId: "agent-1", subscriberKind: "agent" })
+      .map((sub) => sub.id),
+    ["sub-1", "sub-2"],
+  );
+
+  store.deleteBusSubscription("sub-1");
+
+  assert.equal(store.getBusSubscription("sub-1"), undefined);
+});
+
 test("store saves workflows and notifies workflow subscribers until unsubscribed", () => {
   const store = new InMemoryAgentStore();
   const workflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
@@ -129,6 +174,17 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",
+    ...overrides,
+  };
+}
+
+function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscription {
+  return {
+    id: "sub-1",
+    busId: "bus-1",
+    subscriberId: "agent-1",
+    subscriberKind: "agent",
+    deliveredMessageIds: [],
     ...overrides,
   };
 }

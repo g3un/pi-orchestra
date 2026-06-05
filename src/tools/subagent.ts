@@ -146,7 +146,7 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     description: "Create and manage isolated subagents.",
     promptSnippet: "Spawn a subagent on an existing bus, then status/message/close it later.",
     promptGuidelines: [
-      "Create a bus first; spawn attaches the subagent via busId.",
+      "Create a bus first; spawn subscribes the subagent to busId.",
       "Attach cooperating subagents to the same bus.",
       "Use returned run id/name for status, message, or close.",
     ],

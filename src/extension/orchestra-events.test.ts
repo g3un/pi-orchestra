@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
+import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
@@ -95,6 +96,58 @@ test("orchestra event controller routes workgroup finishes during launch before 
   if (event?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
   assert.equal(event.strategy, "compete");
   assert.equal(event.run.runId, memberRun.id);
+});
+
+test("orchestra event controller emits subscribed main bus messages", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBusSubscription({
+    id: createBusSubscriptionId("bus-1", "main", "main"),
+    busId: "bus-1",
+    subscriberId: "main",
+    subscriberKind: "main",
+    deliveredMessageIds: [],
+  });
+  new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+
+  store.addBusMessage("bus-1", { id: "message-1", from: "agent-1", message: "Shared fact." });
+  store.addBusMessage("bus-1", { id: "message-2", from: "main", message: "Own fact." });
+
+  assert.equal(sent.batches.length, 1);
+  assert.deepEqual(sent.batches[0]?.events[0], {
+    type: "bus.message",
+    busId: "bus-1",
+    message: { id: "message-1", from: "agent-1", message: "Shared fact." },
+  });
+  assert.match(sent.batches[0]?.content ?? "", /Bus message on bus-1 from agent-1/);
+  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "main", "main"))?.deliveredMessageIds, [
+    "message-1",
+  ]);
+});
+
+test("orchestra event controller does not mark queued main bus messages delivered before flush", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const subscriptionId = createBusSubscriptionId("bus-1", "main", "main");
+  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBusSubscription({
+    id: subscriptionId,
+    busId: "bus-1",
+    subscriberId: "main",
+    subscriberKind: "main",
+    deliveredMessageIds: [],
+  });
+  const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 10_000 });
+
+  store.addBusMessage("bus-1", { id: "message-1", from: "agent-1", message: "Shared fact." });
+
+  assert.deepEqual(store.getBusSubscription(subscriptionId)?.deliveredMessageIds, []);
+  assert.equal(sent.batches.length, 0);
+
+  controller.dispose();
+
+  assert.deepEqual(store.getBusSubscription(subscriptionId)?.deliveredMessageIds, []);
 });
 
 test("orchestra event controller suppresses workflow-internal run finishes and emits workflow finish", () => {

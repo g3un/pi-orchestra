@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "vitest";
 import type { AgentRun } from "../core/subagent.ts";
-import type { Bus } from "../core/bus.ts";
+import type { Bus, BusSubscription } from "../core/bus.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { createProjectSqliteAgentStore, getProjectSqliteStorePath, SqliteAgentStore } from "./sqlite-store.ts";
 
@@ -22,9 +22,11 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
       result: { status: "success", summary: "Done.", data: { files: ["src/index.ts"] } },
     });
     const savedWorkflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
+    const savedBusSubscription = busSubscription({ id: "subscription-1", busId: bus.id });
 
     store.saveBus(bus);
     store.addBusMessage(bus.id, busMessage);
+    store.saveBusSubscription(savedBusSubscription);
     store.saveRun(savedRun);
     store.saveWorkflow(savedWorkflow);
     store.dispose();
@@ -33,9 +35,14 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
     try {
       assert.deepEqual(reopened.getBus(bus.id), { ...bus, messages: [busMessage] });
       assert.deepEqual(reopened.getRun(savedRun.id), savedRun);
+      assert.deepEqual(reopened.getBusSubscription(savedBusSubscription.id), savedBusSubscription);
       assert.deepEqual(reopened.getWorkflow(savedWorkflow.id), savedWorkflow);
       assert.deepEqual(reopened.listBuses(), [{ ...bus, messages: [busMessage] }]);
       assert.deepEqual(reopened.listRuns(), [savedRun]);
+      assert.deepEqual(
+        reopened.listBusSubscriptions({ busId: undefined, subscriberId: undefined, subscriberKind: undefined }),
+        [savedBusSubscription],
+      );
       assert.deepEqual(reopened.listWorkflows(), [savedWorkflow]);
     } finally {
       reopened.dispose();
@@ -116,6 +123,52 @@ test("SQLite store rejects bus messages for missing buses", () => {
   });
 });
 
+test("SQLite store notifies bus message subscribers until unsubscribed", () => {
+  withTempStore((store) => {
+    const observed: string[] = [];
+    store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+    store.saveBus({ id: "bus-2", name: "Bus 2", messages: [] });
+    const unsubscribe = store.subscribeBusMessages(
+      (event) => observed.push(event.message.id),
+      (event) => event.busId === "bus-1",
+    );
+
+    store.addBusMessage("bus-1", { id: "message-1", from: "main", message: "Initial." });
+    store.addBusMessage("bus-2", { id: "message-2", from: "main", message: "Ignored." });
+    unsubscribe();
+    store.addBusMessage("bus-1", { id: "message-3", from: "main", message: "After unsubscribe." });
+
+    assert.deepEqual(observed, ["message-1"]);
+  });
+});
+
+test("SQLite store saves, lists, and deletes bus subscriptions", () => {
+  withTempStore((store) => {
+    store.saveBusSubscription(busSubscription({ id: "sub-1", busId: "bus-1", subscriberId: "agent-1" }));
+    store.saveBusSubscription(busSubscription({ id: "sub-2", busId: "bus-2", subscriberId: "agent-1" }));
+    store.saveBusSubscription(
+      busSubscription({ id: "sub-3", busId: "bus-1", subscriberId: "main", subscriberKind: "main" }),
+    );
+
+    assert.deepEqual(
+      store
+        .listBusSubscriptions({ busId: "bus-1", subscriberId: undefined, subscriberKind: undefined })
+        .map((sub) => sub.id),
+      ["sub-1", "sub-3"],
+    );
+    assert.deepEqual(
+      store
+        .listBusSubscriptions({ busId: undefined, subscriberId: "agent-1", subscriberKind: "agent" })
+        .map((sub) => sub.id),
+      ["sub-1", "sub-2"],
+    );
+
+    store.deleteBusSubscription("sub-1");
+
+    assert.equal(store.getBusSubscription("sub-1"), undefined);
+  });
+});
+
 test("SQLite store rejects a database written by a newer schema version", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
   try {
@@ -161,6 +214,17 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",
+    ...overrides,
+  };
+}
+
+function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscription {
+  return {
+    id: "sub-1",
+    busId: "bus-1",
+    subscriberId: "agent-1",
+    subscriberKind: "agent",
+    deliveredMessageIds: [],
     ...overrides,
   };
 }

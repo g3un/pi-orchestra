@@ -6,12 +6,19 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { AgentRun } from "../core/subagent.ts";
-import type { Bus, BusMessage } from "../core/bus.ts";
+import {
+  matchesBusSubscription,
+  type Bus,
+  type BusMessage,
+  type BusMessageEvent,
+  type BusSubscription,
+  type ListBusSubscriptionsOptions,
+} from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const ORCHESTRA_STORE_RELATIVE_DIR = join(".pi", "orchestra");
 const ORCHESTRA_STORE_FILENAME = "store.db";
 
@@ -27,6 +34,7 @@ export class SqliteAgentStore implements AgentStore {
   private readonly db: DatabaseSync;
   private readonly statements: StoreStatements;
   private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
+  private readonly busMessageSubscriptions = new Set<StoreSubscription<BusMessageEvent>>();
   private readonly workflowSubscriptions = new Set<StoreSubscription<WorkflowRun>>();
   private closed = false;
 
@@ -74,11 +82,41 @@ export class SqliteAgentStore implements AgentStore {
     const messages = [...bus.messages];
     if (existingIndex >= 0) {
       messages[existingIndex] = message;
-    } else {
-      messages.push(message);
+      this.saveBus({ ...bus, messages });
+      return;
     }
 
+    messages.push(message);
     this.saveBus({ ...bus, messages });
+    notifySubscribers(this.busMessageSubscriptions, { busId, message });
+  }
+
+  subscribeBusMessages(
+    listener: (event: BusMessageEvent) => void,
+    filter: ((event: BusMessageEvent) => boolean) | undefined,
+  ): () => void {
+    return subscribeStore(this.busMessageSubscriptions, listener, filter);
+  }
+
+  saveBusSubscription(subscription: BusSubscription): void {
+    this.statements.saveBusSubscription.run(
+      subscription.id,
+      stringifyPayload(subscription, `bus subscription ${subscription.id}`),
+    );
+  }
+
+  getBusSubscription(id: string): BusSubscription | undefined {
+    return getPayload(this.statements.getBusSubscription, id, `bus subscription ${id}`);
+  }
+
+  listBusSubscriptions(options: ListBusSubscriptionsOptions): BusSubscription[] {
+    return listPayloads<BusSubscription>(this.statements.listBusSubscriptions, "bus subscriptions").filter(
+      (subscription) => matchesBusSubscription(subscription, options),
+    );
+  }
+
+  deleteBusSubscription(id: string): void {
+    this.statements.deleteBusSubscription.run(id);
   }
 
   saveWorkflow(workflow: WorkflowRun): void {
@@ -115,6 +153,10 @@ interface StoreStatements {
   saveBus: StatementSync;
   getBus: StatementSync;
   listBuses: StatementSync;
+  saveBusSubscription: StatementSync;
+  getBusSubscription: StatementSync;
+  listBusSubscriptions: StatementSync;
+  deleteBusSubscription: StatementSync;
   saveWorkflow: StatementSync;
   getWorkflow: StatementSync;
   listWorkflows: StatementSync;
@@ -144,6 +186,11 @@ function initializeSchema(db: DatabaseSync): void {
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS buses (
+      id TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS bus_subscriptions (
       id TEXT PRIMARY KEY,
       payload_json TEXT NOT NULL
     ) STRICT;
@@ -178,6 +225,14 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
     `),
     getBus: db.prepare("SELECT payload_json FROM buses WHERE id = ?"),
     listBuses: db.prepare("SELECT payload_json FROM buses ORDER BY rowid"),
+    saveBusSubscription: db.prepare(`
+      INSERT INTO bus_subscriptions (id, payload_json)
+      VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json
+    `),
+    getBusSubscription: db.prepare("SELECT payload_json FROM bus_subscriptions WHERE id = ?"),
+    listBusSubscriptions: db.prepare("SELECT payload_json FROM bus_subscriptions ORDER BY rowid"),
+    deleteBusSubscription: db.prepare("DELETE FROM bus_subscriptions WHERE id = ?"),
     saveWorkflow: db.prepare(`
       INSERT INTO workflows (id, payload_json)
       VALUES (?, ?)

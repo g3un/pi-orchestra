@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
 import { beforeEach, test, vi } from "vitest";
+import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { PiAgentRuntime } from "./pi-runtime.ts";
@@ -46,6 +47,13 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     state: "running",
   });
   assert.equal(store.getRun(run.id), run);
+  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", run.id)), {
+    id: createBusSubscriptionId("bus-1", "agent", run.id),
+    busId: "bus-1",
+    subscriberId: run.id,
+    subscriberKind: "agent",
+    deliveredMessageIds: [],
+  });
   assert.deepEqual(resolveModel.mock.calls, [["mock-provider/mock-model"]]);
   assert.deepEqual(codingAgentMocks.sessionManagerInMemory.mock.calls, [["/workspace"]]);
 
@@ -157,6 +165,33 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   assert.equal(secondSession.promptCalls.at(-1)?.message, "Continue after seeing the bus fact.");
 });
 
+test("pi runtime publishes bus messages to active subscribers rather than run bus membership", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-2", name: "Bus 2", messages: [] });
+  const session = queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-2",
+    { id: "agent-1", name: "Agent 1" },
+  );
+  store.saveBusSubscription({
+    id: createBusSubscriptionId("bus-1", "agent", run.id),
+    busId: "bus-1",
+    subscriberId: run.id,
+    subscriberKind: "agent",
+    deliveredMessageIds: [],
+  });
+
+  await runtime.publishBus("bus-1", "Subscribed fact.", "main");
+
+  assert.equal(run.busId, "bus-2");
+  assert.equal(session.steerCalls.length, 1);
+  assert.match(session.steerCalls[0] ?? "", /Subscribed fact\./);
+});
+
 test("pi runtime child tools publish to the run bus, finish runs, and reject closed runs", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
@@ -191,6 +226,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   assert.equal(store.getRun(run.id)?.state, "idle");
 
   await runtime.close(run.id);
+  assert.equal(store.getBusSubscription(createBusSubscriptionId(run.busId, "agent", run.id)), undefined);
   assert.equal(session.disposed, true);
   await assert.rejects(
     () => finishTool.execute("tool-call-3", { status: "success", summary: "Too late." }),
