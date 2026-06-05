@@ -109,6 +109,7 @@ test("orchestra event controller emits subscribed main bus messages", () => {
     subscriberKind: "main",
     deliveredMessageIds: [],
   });
+  store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
   store.addBusMessage("bus-1", { id: "message-1", from: "agent-1", message: "Shared fact." });
@@ -120,7 +121,8 @@ test("orchestra event controller emits subscribed main bus messages", () => {
     busId: "bus-1",
     message: { id: "message-1", from: "agent-1", message: "Shared fact." },
   });
-  assert.match(sent.batches[0]?.content ?? "", /Bus message on bus-1 from agent-1/);
+  assert.match(sent.batches[0]?.content ?? "", /Bus message on bus-1 from Researcher A/);
+  assert.doesNotMatch(sent.batches[0]?.content ?? "", /from agent-1/);
   assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "main", "main"))?.deliveredMessageIds, [
     "message-1",
   ]);

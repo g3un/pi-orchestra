@@ -82,14 +82,14 @@ export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
     async execute(input) {
       if (input.action === "create") {
         const bus = orchestra.createBus({ name: input.name });
-        return { bus, message: formatBusStatus(bus, `Created bus ${formatBusLabel(bus)}.`) };
+        return { bus, message: formatBusStatus(bus, store, `Created bus ${formatBusLabel(bus)}.`) };
       }
 
       const bus = orchestra.getBus(input.name);
       if (!bus) return { message: formatBusNotFound(input.name) };
 
       if (input.action === "status") {
-        return { bus, message: formatBusStatus(bus) };
+        return { bus, message: formatBusStatus(bus, store) };
       }
 
       if (input.action === "subscribe") {
@@ -107,7 +107,7 @@ export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
       return {
         bus: published.bus,
         busMessage: published.busMessage,
-        message: formatBusStatus(published.bus, `Published message to bus ${formatBusLabel(published.bus)}.`),
+        message: formatBusStatus(published.bus, store, `Published message to bus ${formatBusLabel(published.bus)}.`),
       };
     },
   };
@@ -181,15 +181,21 @@ function formatBusNotFound(name: string): string {
 
 function formatBusStatus(
   bus: Bus,
+  store: AgentStore,
   headline = `Bus ${formatBusLabel(bus)} has ${bus.messages.length} message(s).`,
 ): string {
   if (bus.messages.length === 0) return headline;
 
-  return [headline, "", "Messages:", ...bus.messages.map(formatBusMessage)].join("\n");
+  return [headline, "", "Messages:", ...bus.messages.map((message) => formatBusMessage(message, store))].join("\n");
 }
 
-function formatBusMessage(message: BusMessage): string {
-  return [`- ${message.id} from ${message.from}:`, message.message].join("\n");
+function formatBusMessage(message: BusMessage, store: AgentStore): string {
+  return [`- ${message.id} from ${formatBusMessageFrom(message.from, store)}:`, message.message].join("\n");
+}
+
+function formatBusMessageFrom(from: string, store: AgentStore): string {
+  if (from === "main") return from;
+  return store.getRun(from)?.name ?? from;
 }
 
 function formatBusLabel(bus: Bus): string {

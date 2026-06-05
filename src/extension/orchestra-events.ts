@@ -58,6 +58,10 @@ interface BusMessageDelivery {
   message: BusMessage;
 }
 
+interface FormatOrchestraEventsOptions {
+  formatBusMessageFrom: ((from: string) => string) | undefined;
+}
+
 export class OrchestraEventController {
   private readonly store: AgentStore;
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
@@ -131,7 +135,10 @@ export class OrchestraEventController {
 
     const events = [...this.queuedEvents];
     const busMessageDeliveries = [...this.queuedBusMessageDeliveries];
-    this.sendEvents(events, formatOrchestraEvents(events));
+    this.sendEvents(
+      events,
+      formatOrchestraEvents(events, { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
+    );
     this.queuedEvents.splice(0, events.length);
     this.queuedBusMessageDeliveries.splice(0, busMessageDeliveries.length);
     for (const delivery of busMessageDeliveries) this.markBusMessageDelivered(delivery);
@@ -223,6 +230,11 @@ export class OrchestraEventController {
     );
   }
 
+  private formatBusMessageFrom(from: string): string {
+    if (from === "main") return from;
+    return this.store.getRun(from)?.name ?? from;
+  }
+
   private markBusMessageDelivered(delivery: BusMessageDelivery): void {
     const subscription = this.store.getBusSubscription(delivery.subscriptionId);
     if (!subscription) return;
@@ -241,14 +253,14 @@ export class OrchestraEventController {
   }
 }
 
-export function formatOrchestraEvents(events: OrchestraMainEvent[]): string {
+export function formatOrchestraEvents(events: OrchestraMainEvent[], options?: FormatOrchestraEventsOptions): string {
   const headline = events.length === 1 ? "Pi-orchestra event:" : `Pi-orchestra events (${events.length}):`;
-  return [headline, ...events.flatMap((event) => ["", formatOrchestraEvent(event)])].join("\n");
+  return [headline, ...events.flatMap((event) => ["", formatOrchestraEvent(event, options)])].join("\n");
 }
 
-function formatOrchestraEvent(event: OrchestraMainEvent): string {
+function formatOrchestraEvent(event: OrchestraMainEvent, options: FormatOrchestraEventsOptions | undefined): string {
   if (event.type === "workflow.finished") return formatWorkflowFinishedEvent(event.workflow);
-  if (event.type === "bus.message") return formatBusMessageEvent(event);
+  if (event.type === "bus.message") return formatBusMessageEvent(event, options);
 
   const runLabel = event.run.name === event.run.runId ? event.run.runId : `${event.run.name} (${event.run.runId})`;
   const lines =
@@ -264,8 +276,12 @@ function formatOrchestraEvent(event: OrchestraMainEvent): string {
   return lines.join("\n");
 }
 
-function formatBusMessageEvent(event: Extract<OrchestraMainEvent, { type: "bus.message" }>): string {
-  return [`- Bus message on ${event.busId} from ${event.message.from}:`, event.message.message].join("\n");
+function formatBusMessageEvent(
+  event: Extract<OrchestraMainEvent, { type: "bus.message" }>,
+  options: FormatOrchestraEventsOptions | undefined,
+): string {
+  const from = options?.formatBusMessageFrom?.(event.message.from) ?? event.message.from;
+  return [`- Bus message on ${event.busId} from ${from}:`, event.message.message].join("\n");
 }
 
 function formatWorkflowFinishedEvent(workflow: WorkflowRun): string {

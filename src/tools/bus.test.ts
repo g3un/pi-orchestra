@@ -21,13 +21,18 @@ test("bus create allocates a standalone bus through orchestra", async () => {
 
 test("bus status returns stored bus messages", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
   const bus: Bus = {
     id: "bus-1",
     name: "bus-1",
-    messages: [{ id: "message-1", from: "main", message: "Initial context." }],
+    messages: [
+      { id: "message-1", from: "main", message: "Initial context." },
+      { id: "message-2", from: "agent-1", message: "Agent context." },
+    ],
   };
   orchestra.buses.set(bus.id, bus);
+  store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
 
   const output = await tool.execute({ action: "status", name: bus.name });
   const missingOutput = await tool.execute({ action: "status", name: "missing" });
@@ -35,7 +40,15 @@ test("bus status returns stored bus messages", async () => {
   assert.equal(output.bus, bus);
   assert.equal(
     output.message,
-    ["Bus bus-1 has 1 message(s).", "", "Messages:", "- message-1 from main:", "Initial context."].join("\n"),
+    [
+      "Bus bus-1 has 2 message(s).",
+      "",
+      "Messages:",
+      "- message-1 from main:",
+      "Initial context.",
+      "- message-2 from Researcher A:",
+      "Agent context.",
+    ].join("\n"),
   );
   assert.equal(missingOutput.bus, undefined);
   assert.equal(missingOutput.message, "Bus missing not found.");
@@ -64,9 +77,11 @@ test("bus publish delegates with the bus name", async () => {
 
 test("bus publish preserves an explicit sender", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
   const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
   orchestra.buses.set(bus.id, bus);
+  store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
 
   const output = await tool.execute({ action: "publish", name: bus.name, message: "Peer context.", from: "agent-1" });
 
@@ -76,6 +91,10 @@ test("bus publish preserves an explicit sender", async () => {
     from: "agent-1",
   });
   assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
+  assert.equal(
+    output.message,
+    "Published message to bus bus-1.\n\nMessages:\n- message-1 from Researcher A:\nPeer context.",
+  );
 });
 
 test("bus subscribe and unsubscribe manage the main bus subscription", async () => {
