@@ -127,7 +127,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
     this.store.addBusMessage(busId, busMessage);
 
-    const steeringMessage = formatBusMessages([busMessage]);
+    const steeringMessage = this.formatBusMessagesForPrompt([busMessage]);
     const steerTasks: Array<Promise<void>> = [];
     for (const subscription of this.store.listBusSubscriptions({
       busId,
@@ -305,7 +305,7 @@ export class PiAgentRuntime implements AgentRuntime {
   private withSubscribedBusMessages(runId: string, message: string): string {
     const busMessages = this.drainSubscribedBusMessages(runId);
     if (busMessages.length === 0) return message;
-    return [message, "", formatBusMessages(busMessages)].join("\n");
+    return [message, "", this.formatBusMessagesForPrompt(busMessages)].join("\n");
   }
 
   private drainSubscribedBusMessages(runId: string): BusMessage[] {
@@ -337,6 +337,15 @@ export class PiAgentRuntime implements AgentRuntime {
   private markSubscriptionMessagesDelivered(subscription: BusSubscription, messages: BusMessage | BusMessage[]): void {
     const latestSubscription = this.store.getBusSubscription(subscription.id) ?? subscription;
     this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages));
+  }
+
+  private formatBusMessagesForPrompt(messages: BusMessage[]): string {
+    return formatBusMessages(messages, { formatFrom: (from) => this.formatBusMessageFrom(from) });
+  }
+
+  private formatBusMessageFrom(from: string): string {
+    if (from === "main") return from;
+    return this.store.getRun(from)?.name ?? from;
   }
 
   private deleteAgentBusSubscriptions(runId: string): void {

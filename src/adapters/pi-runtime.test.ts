@@ -157,6 +157,8 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   assert.deepEqual(firstSession.steerCalls, []);
   assert.equal(secondSession.steerCalls.length, 1);
   assert.match(secondSession.steerCalls[0] ?? "", /<bus_reference_context>/);
+  assert.match(secondSession.steerCalls[0] ?? "", /<bus_message from="Agent 1">/);
+  assert.doesNotMatch(secondSession.steerCalls[0] ?? "", /<bus_message from="agent-1">/);
   assert.match(secondSession.steerCalls[0] ?? "", /New shared fact\./);
 
   secondSession.isStreaming = false;
