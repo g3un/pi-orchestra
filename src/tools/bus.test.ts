@@ -198,5 +198,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "idle",
     ...overrides,
+    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
   };
 }

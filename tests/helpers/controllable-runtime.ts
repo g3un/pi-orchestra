@@ -56,6 +56,7 @@ export class ControllableRuntime implements AgentRuntime {
       task,
       busId,
       state: "running",
+      sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
     };
     const record = { profile, task, busId, options };
     this.spawned.push(record);

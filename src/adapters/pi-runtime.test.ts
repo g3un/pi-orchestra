@@ -4,17 +4,22 @@ import { beforeEach, test, vi } from "vitest";
 import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
-import { PiAgentRuntime } from "./pi-runtime.ts";
+import { getProjectOrchestraSessionDir, PiAgentRuntime } from "./pi-runtime.ts";
 
 const codingAgentMocks = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
-  sessionManagerInMemory: vi.fn((cwd: string) => ({ cwd, type: "in-memory" })),
+  sessionManagerCreate: vi.fn((cwd: string, sessionDir: string) => ({
+    cwd,
+    sessionDir,
+    type: "file",
+    getSessionFile: () => `${sessionDir}/mock-session.jsonl`,
+  })),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: codingAgentMocks.createAgentSession,
   SessionManager: {
-    inMemory: codingAgentMocks.sessionManagerInMemory,
+    create: codingAgentMocks.sessionManagerCreate,
   },
 }));
 
@@ -44,6 +49,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     profile: "researcher",
     task: "Inspect the code.",
     busId: "bus-1",
+    sessionFile: `${getProjectOrchestraSessionDir("/workspace")}/mock-session.jsonl`,
     state: "running",
   });
   assert.equal(store.getRun(run.id), run);
@@ -55,7 +61,9 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     deliveredMessageIds: [],
   });
   assert.deepEqual(resolveModel.mock.calls, [["mock-provider/mock-model"]]);
-  assert.deepEqual(codingAgentMocks.sessionManagerInMemory.mock.calls, [["/workspace"]]);
+  assert.deepEqual(codingAgentMocks.sessionManagerCreate.mock.calls, [
+    ["/workspace", getProjectOrchestraSessionDir("/workspace")],
+  ]);
 
   const options = lastCreateAgentSessionOptions();
   assert.equal(options.cwd, "/workspace");
@@ -89,6 +97,7 @@ test("pi runtime rejects profiles without explicit tools", async () => {
     /Profile "researcher" must specify tools\./,
   );
   assert.equal(codingAgentMocks.createAgentSession.mock.calls.length, 0);
+  assert.equal(codingAgentMocks.sessionManagerCreate.mock.calls.length, 0);
 });
 
 test("pi runtime injects unread bus messages once and skips messages from the same run", async () => {
@@ -319,12 +328,13 @@ test("pi runtime rejects unresolved profile models before creating a session", a
     /Could not resolve profile model "missing\/model"\./,
   );
   assert.equal(codingAgentMocks.createAgentSession.mock.calls.length, 0);
+  assert.equal(codingAgentMocks.sessionManagerCreate.mock.calls.length, 0);
 });
 
 beforeEach(() => {
   queuedSessions.length = 0;
   codingAgentMocks.createAgentSession.mockReset();
-  codingAgentMocks.sessionManagerInMemory.mockClear();
+  codingAgentMocks.sessionManagerCreate.mockClear();
 });
 
 const queuedSessions: FakeSession[] = [];

@@ -173,6 +173,7 @@ class FakeRuntime implements AgentRuntime {
       task,
       busId,
       state: "running",
+      sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
     };
     this.store.saveRun(run);
     return run;
@@ -217,5 +218,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "idle",
     ...overrides,
+    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
   };
 }

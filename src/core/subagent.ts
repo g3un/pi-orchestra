@@ -24,6 +24,8 @@ export interface AgentRun {
   profile: string;
   task: string;
   busId: string;
+  /** Pi session file for this child agent. */
+  sessionFile: string;
   state: AgentState;
   result?: AgentResult;
 }

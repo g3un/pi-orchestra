@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { v7 as uuid7 } from "uuid";
 import type { Model } from "@earendil-works/pi-ai";
 import {
@@ -37,6 +38,8 @@ interface RuntimeEntry {
   promptTask?: Promise<void>;
 }
 
+const ORCHESTRA_SESSION_RELATIVE_DIR = join(".pi", "orchestra", "sessions");
+
 const FinishAgentParams = Type.Object({
   status: Type.String({ enum: [...AGENT_RESULT_STATUS_VALUES] }),
   summary: Type.String(),
@@ -67,25 +70,30 @@ export class PiAgentRuntime implements AgentRuntime {
   ): Promise<AgentRun> {
     this.requireBus(busId);
 
+    const baseTools = requireProfileTools(profile);
+    const model = await this.resolveProfileModel(profile);
+    const sessionManager = SessionManager.create(this.cwd, getProjectOrchestraSessionDir(this.cwd));
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("Could not create a persisted session for the subagent.");
+
     const run: AgentRun = {
       id: options.id,
       name: options.name,
       profile: profile.name,
       task,
       busId,
+      sessionFile,
       state: "running",
     };
 
     const childTools = this.createChildTools(run.id);
-    const model = await this.resolveProfileModel(profile);
-    const baseTools = requireProfileTools(profile);
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
     const { session } = await createAgentSession({
       cwd: this.cwd,
       model,
       tools: activeTools,
       customTools: childTools,
-      sessionManager: SessionManager.inMemory(this.cwd),
+      sessionManager,
     });
 
     this.store.saveRun(run);
@@ -365,6 +373,10 @@ export class PiAgentRuntime implements AgentRuntime {
     if (!model) throw new Error(`Could not resolve profile model "${profile.model}".`);
     return model;
   }
+}
+
+export function getProjectOrchestraSessionDir(cwd: string): string {
+  return join(cwd, ORCHESTRA_SESSION_RELATIVE_DIR);
 }
 
 function buildInitialPrompt(profile: AgentProfile, task: string, runName: string): string {

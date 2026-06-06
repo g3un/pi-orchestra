@@ -150,6 +150,7 @@ test("workgroup member name checks are global", async () => {
     profile: "security",
     task: "Existing work.",
     busId: otherBus.id,
+    sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
     state: "idle",
   });
 
@@ -362,6 +363,7 @@ class FakeOrchestra implements OrchestraApi {
       task,
       busId: bus.id,
       state: "running",
+      sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
     };
     this.runs.set(run.id, run);
     return run;
@@ -415,5 +417,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "idle",
     ...overrides,
+    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
   };
 }

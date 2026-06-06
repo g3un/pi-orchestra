@@ -115,6 +115,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
   };
 }
 
