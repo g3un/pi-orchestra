@@ -56,6 +56,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     busId: "bus-1",
     sessionFile: `${getProjectOrchestraSessionDir("/workspace")}/mock-session.jsonl`,
     state: "running",
+    result: null,
   });
   assert.equal(store.getRun(run.id), run);
   assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", run.id)), {
@@ -239,7 +240,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   assert.equal(finishOutput.terminate, true);
   assert.deepEqual(finishOutput.details, { status: "success", summary: "Inspection complete.", data: { files: 3 } });
   assert.deepEqual(store.getRun(run.id)?.result, finishOutput.details);
-  assert.equal(store.getRun(run.id)?.state, "idle");
+  assert.equal(store.getRun(run.id)?.state, "success");
 
   await runtime.close(run.id);
   assert.equal(store.getBusSubscription(createBusSubscriptionId(run.busId, "agent", run.id)), undefined);
@@ -270,7 +271,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
 
   store.saveRun({
     ...run,
-    state: "idle",
+    state: "blocked",
     result: { status: "blocked", summary: "Need direction." },
   });
   session.isStreaming = false;
@@ -278,7 +279,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
   const restartedRun = await runtime.message(run.id, "Use option B.");
 
   assert.equal(restartedRun.state, "running");
-  assert.equal(restartedRun.result, undefined);
+  assert.equal(restartedRun.result, null);
   assert.equal(store.getRun(run.id)?.state, "running");
   assert.equal(session.promptCalls.at(-1)?.message, "Use option B.");
 });

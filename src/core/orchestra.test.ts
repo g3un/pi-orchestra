@@ -90,7 +90,7 @@ test("orchestra resolves global run names for lifecycle actions", async () => {
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus({ name: "Frontend Audit" });
   const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, { name: "Reviewer" });
-  store.saveRun({ ...run, state: "success" });
+  store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
 
   const messagedRun = await orchestra.messageAgent("Reviewer", "Continue.", { busId: undefined });
   const closedRun = await orchestra.closeAgent("Reviewer", { busId: undefined });
@@ -108,7 +108,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   const bus = orchestra.createBus({ name: undefined });
 
   const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id, { name: undefined });
-  store.saveRun({ ...run, state: "success" });
+  store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
   const messagedRun = await orchestra.messageAgent(run.id, "Continue.", { busId: undefined });
   const closedRun = await orchestra.closeAgent(run.id, { busId: undefined });
 
@@ -134,18 +134,18 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.equal(store.getBus(bus.id), output.bus);
 });
 
-test("orchestra messages reusable idle agents", async () => {
+test("orchestra messages reusable finished agents", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
-  const idleRun = run({ id: "agent-1", state: "idle" });
+  const idleRun = run({ id: "agent-1", state: "blocked", result: { status: "blocked", summary: "Need input." } });
   store.saveRun(idleRun);
 
   const output = await orchestra.messageAgent(idleRun.id, "Continue.", { busId: undefined });
 
   assert.deepEqual(runtime.messaged, { id: idleRun.id, message: "Continue." });
   assert.equal(output.state, "running");
-  assert.equal(output.result, undefined);
+  assert.equal(output.result, null);
 });
 
 class FakeRuntime implements AgentRuntime {
@@ -174,6 +174,7 @@ class FakeRuntime implements AgentRuntime {
       busId,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
+      result: null,
     };
     this.store.saveRun(run);
     return run;
@@ -185,7 +186,7 @@ class FakeRuntime implements AgentRuntime {
     if (!run) throw new Error(`Agent ${id} not found.`);
     if (run.state === "running") return run;
 
-    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "running", result: null };
     this.store.saveRun(messagedRun);
     return messagedRun;
   }
@@ -216,8 +217,9 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }

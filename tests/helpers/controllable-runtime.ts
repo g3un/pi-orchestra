@@ -57,6 +57,7 @@ export class ControllableRuntime implements AgentRuntime {
       busId,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
+      result: null,
     };
     const record = { profile, task, busId, options };
     this.spawned.push(record);
@@ -77,7 +78,7 @@ export class ControllableRuntime implements AgentRuntime {
     const run = this.requireRun(id);
     if (run.state === "running") return run;
 
-    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "running", result: null };
     this.store.saveRun(messagedRun);
     return messagedRun;
   }
@@ -111,7 +112,7 @@ export class ControllableRuntime implements AgentRuntime {
 
   completeRun(id: string, result: AgentResult): AgentRun {
     const run = this.requireRun(id);
-    const completedRun: AgentRun = { ...run, state: "idle", result };
+    const completedRun: AgentRun = { ...run, state: result.status, result };
     this.store.saveRun(completedRun);
     return completedRun;
   }

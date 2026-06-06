@@ -13,7 +13,9 @@ const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
 test("workflow monitor renders the current stage progress", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(run({ id: "collector", name: "collector", state: "running" }));
-  store.saveRun(run({ id: "critic", name: "critic", state: "idle", result: { status: "success", summary: "Done." } }));
+  store.saveRun(
+    run({ id: "critic", name: "critic", state: "success", result: { status: "success", summary: "Done." } }),
+  );
   store.saveWorkflow(
     workflowRun({
       id: "research-flow",
@@ -38,7 +40,7 @@ test("workflow monitor renders the current stage progress", () => {
 test("workflow monitor counts the stage synthesizer while synthesizing", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(
-    run({ id: "collector", name: "collector", state: "idle", result: { status: "success", summary: "Done." } }),
+    run({ id: "collector", name: "collector", state: "success", result: { status: "success", summary: "Done." } }),
   );
   store.saveRun(run({ id: "collect-leader", name: "collect-leader", state: "running" }));
   store.saveWorkflow(
@@ -116,7 +118,8 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {

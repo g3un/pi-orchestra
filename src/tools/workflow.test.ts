@@ -541,6 +541,7 @@ class FakeOrchestra implements OrchestraApi {
           busId: bus.id,
           state: "running",
           sessionFile: `.pi/orchestra/sessions/${name}.jsonl`,
+          result: null,
         }
       : {
           id: name,
@@ -548,7 +549,7 @@ class FakeOrchestra implements OrchestraApi {
           profile,
           task,
           busId: bus.id,
-          state: "idle",
+          state: resultStatus,
           sessionFile: `.pi/orchestra/sessions/${name}.jsonl`,
           result: {
             status: resultStatus,

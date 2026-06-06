@@ -84,6 +84,7 @@ export class PiAgentRuntime implements AgentRuntime {
       busId,
       sessionFile,
       state: "running",
+      result: null,
     };
 
     const childTools = this.createChildTools(run.id);
@@ -119,7 +120,7 @@ export class PiAgentRuntime implements AgentRuntime {
       return run;
     }
 
-    const messagedRun: AgentRun = { ...run, state: "running", result: undefined };
+    const messagedRun: AgentRun = { ...run, state: "running", result: null };
     this.store.saveRun(messagedRun);
     this.startPromptTask(id, entry, messageWithBusContext);
     return messagedRun;
@@ -198,7 +199,7 @@ export class PiAgentRuntime implements AgentRuntime {
       if (run && isRunningWithoutResult(run)) {
         this.store.saveRun({
           ...run,
-          state: "idle",
+          state: "failed",
           result: {
             status: "failed",
             summary: "Agent stopped without calling finish.",
@@ -212,7 +213,7 @@ export class PiAgentRuntime implements AgentRuntime {
       if (!run) return;
       this.store.saveRun({
         ...run,
-        state: "idle",
+        state: "failed",
         result: {
           status: "failed",
           summary: error instanceof Error ? error.message : String(error),
@@ -239,7 +240,7 @@ export class PiAgentRuntime implements AgentRuntime {
         this.store.saveRun({
           ...run,
           result,
-          state: "idle",
+          state: result.status,
         });
         return {
           content: [
@@ -418,7 +419,7 @@ function buildFinishRequiredPrompt(): string {
 }
 
 function isRunningWithoutResult(run: AgentRun): boolean {
-  return run.state === "running" && run.result === undefined;
+  return run.state === "running" && run.result === null;
 }
 
 function getLastAssistantText(session: AgentSession): string | undefined {

@@ -274,7 +274,7 @@ function formatRunMessage(
   run: AgentRun,
   headline = `Subagent ${formatNamedEntityLabel(run)} is ${run.state}.`,
 ): string {
-  if (!run.result) return headline;
+  if (run.result === null) return headline;
 
   const parts = [headline, "", `Result: ${run.result.status}`, run.result.summary];
   if (run.result.data !== undefined) {

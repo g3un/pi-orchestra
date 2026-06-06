@@ -1,7 +1,7 @@
 import type { OrchestraApi } from "./core/orchestra.ts";
-import type { AgentRun, AgentRunResult, AgentState } from "./core/subagent.ts";
+import type { AgentRun, AgentRunResult } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
-import type { WorkflowRun } from "./core/workflow.ts";
+import type { WorkflowRun, WorkflowState } from "./core/workflow.ts";
 
 export interface NamedEntity {
   id: string;
@@ -60,16 +60,16 @@ export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
   return workflow;
 }
 
-export function isTerminalAgentState(state: AgentState): boolean {
+export function isTerminalAgentState(state: WorkflowState): boolean {
   return state === "success" || state === "blocked" || state === "failed" || state === "closed";
 }
 
 export function isAgentRunActive(run: AgentRun): boolean {
-  return run.state === "running" && run.result === undefined;
+  return run.state === "running" && run.result === null;
 }
 
 export function isAgentRunFinished(run: AgentRun): boolean {
-  return isTerminalAgentState(run.state) || run.result !== undefined;
+  return run.state === "closed" || run.result !== null;
 }
 
 export function indent(text: string, prefix = "  "): string {
@@ -84,14 +84,13 @@ export function formatError(error: unknown): string {
 }
 
 export function toAgentRunResult(run: AgentRun): AgentRunResult {
-  const runResult: AgentRunResult = {
+  return {
     runId: run.id,
     name: run.name,
     profile: run.profile.name,
     state: run.state,
+    result: run.result,
   };
-  if (run.result !== undefined) runResult.result = run.result;
-  return runResult;
 }
 
 export async function closeAgentRuns(orchestra: OrchestraApi, runIds: string[]): Promise<void> {

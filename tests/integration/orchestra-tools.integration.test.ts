@@ -94,7 +94,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
   });
 
   assert.equal(messaged.run?.state, "running");
-  assert.equal(messaged.run?.result, undefined);
+  assert.equal(messaged.run?.result, null);
   assert.deepEqual(runtime.messaged, [{ id: "reviewer-b", message: "Re-check with the new strict-mode constraint." }]);
 
   runtime.completeRun("researcher-a", { status: "blocked", summary: "Need a product decision." });
@@ -112,7 +112,10 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   const store = new InMemoryAgentStore();
   const runtime = new ControllableRuntime({
     store,
-    onSpawn: (run) => ({ ...run, state: "idle", result: successResult(`${run.name} completed.`) }),
+    onSpawn: (run) => {
+      const result = successResult(`${run.name} completed.`);
+      return { ...run, state: result.status, result };
+    },
   });
   const orchestra = new Orchestra({ runtime, store });
   const workflowTool = createWorkflowTool({ orchestra, store });

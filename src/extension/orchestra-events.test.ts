@@ -13,7 +13,7 @@ test("orchestra event controller emits standalone subagent finish events", () =>
   store.saveRun(runningRun);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
-  store.saveRun({ ...runningRun, state: "idle", result: { status: "success", summary: "Done." } });
+  store.saveRun({ ...runningRun, state: "success", result: { status: "success", summary: "Done." } });
 
   assert.equal(sent.batches.length, 1);
   assert.deepEqual(sent.batches[0]?.events[0], {
@@ -23,7 +23,7 @@ test("orchestra event controller emits standalone subagent finish events", () =>
       runId: "agent-1",
       name: "agent-1",
       profile: "researcher",
-      state: "idle",
+      state: "success",
       result: { status: "success", summary: "Done." },
     },
   });
@@ -39,14 +39,14 @@ test("orchestra event controller emits only active to finished run transitions",
 
   const firstFinished = {
     ...runningRun,
-    state: "idle" as const,
+    state: "success" as const,
     result: { status: "success" as const, summary: "Done." },
   };
   store.saveRun(firstFinished);
   store.saveRun({ ...firstFinished, result: { status: "success", summary: "Saved again." } });
   store.saveRun({ ...firstFinished, state: "closed" });
-  store.saveRun({ ...firstFinished, state: "running", result: undefined });
-  store.saveRun({ ...firstFinished, state: "idle", result: { status: "success", summary: "Done again." } });
+  store.saveRun({ ...firstFinished, state: "running", result: null });
+  store.saveRun({ ...firstFinished, state: "success", result: { status: "success", summary: "Done again." } });
 
   assert.equal(sent.batches.length, 2);
   assert.equal(sent.batches[0]?.events[0]?.type, "subagent.finished");
@@ -67,7 +67,7 @@ test("orchestra event controller routes registered workgroup member finish event
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
   controller.registerWorkgroup({ busId: "bus-1", strategy: "synthesize", runIds: [firstRun.id, secondRun.id] });
 
-  store.saveRun({ ...firstRun, state: "idle", result: { status: "blocked", summary: "Need input." } });
+  store.saveRun({ ...firstRun, state: "blocked", result: { status: "blocked", summary: "Need input." } });
 
   assert.equal(sent.batches.length, 1);
   const event = sent.batches[0]?.events[0];
@@ -87,7 +87,7 @@ test("orchestra event controller routes workgroup finishes during launch before 
   const memberRun = run({ id: "fast", name: "fast", state: "running" });
   store.saveRun(memberRun);
 
-  store.saveRun({ ...memberRun, state: "idle", result: { status: "success", summary: "Won." } });
+  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Won." } });
   controller.registerWorkgroup({ busId: "bus-1", strategy: "compete", runIds: [memberRun.id] });
 
   assert.equal(sent.batches.length, 1);
@@ -163,7 +163,7 @@ test("orchestra event controller suppresses workflow-internal run finishes and e
 
   store.saveRun({
     ...workflowRunAgent,
-    state: "idle",
+    state: "success",
     result: { status: "success", summary: "Worker done." },
   });
   store.saveWorkflow({
@@ -206,10 +206,11 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {

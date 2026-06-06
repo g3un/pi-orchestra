@@ -20,6 +20,7 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
     const savedRun = run({
       id: "agent-1",
       profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: "mock/model" },
+      state: "success",
       result: { status: "success", summary: "Done.", data: { files: ["src/index.ts"] } },
     });
     const savedWorkflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
@@ -53,12 +54,12 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
 
 test("SQLite store preserves insertion order when updating existing records", () => {
   withTempStore((store) => {
-    const first = run({ id: "agent-1", state: "idle" });
-    const second = run({ id: "agent-2", state: "idle" });
+    const first = run({ id: "agent-1", state: "running" });
+    const second = run({ id: "agent-2", state: "running" });
 
     store.saveRun(first);
     store.saveRun(second);
-    store.saveRun({ ...first, state: "success" });
+    store.saveRun({ ...first, state: "closed", result: null });
 
     assert.deepEqual(
       store.listRuns().map((current) => current.id),
@@ -107,7 +108,7 @@ test("SQLite store notifies matching subscribers until unsubscribed", () => {
 
     unsubscribeRuns();
     unsubscribeWorkflows();
-    store.saveRun({ ...savedRun, state: "success" });
+    store.saveRun({ ...savedRun, state: "closed", result: savedRun.result });
     store.saveWorkflow({ ...savedWorkflow, state: "success" });
 
     assert.deepEqual(observedRuns, [savedRun]);
@@ -214,10 +215,11 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscription {

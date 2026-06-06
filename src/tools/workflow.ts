@@ -566,7 +566,7 @@ function buildStageOutput(
   leaderRunId: string,
   workerResults: AgentRunResult[],
 ): WorkflowStageOutput {
-  if (!leaderRun.result) {
+  if (leaderRun.result === null) {
     return {
       status: "failed",
       summary: `Evidence synthesizer ${leaderRunId} reached ${leaderRun.state} without a result payload.`,
@@ -586,13 +586,13 @@ function buildStageOutput(
 }
 
 function toWorkflowRunResult(result: AgentRunResult) {
-  const output = {
+  return {
     runId: result.runId,
     name: result.name,
     profile: result.profile,
     state: result.state,
+    result: result.result,
   };
-  return result.result === undefined ? output : { ...output, result: result.result };
 }
 
 function formatStageOutput(output: WorkflowStageOutput): string {

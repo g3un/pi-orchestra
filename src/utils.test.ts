@@ -75,11 +75,11 @@ test("workflow lookup helpers resolve by id or name", () => {
   assert.throws(() => requireWorkflow(store, "missing"), /Workflow missing not found\./);
 });
 
-test("toAgentRunResult copies result payloads only when present", () => {
-  const idleRun = run({ state: "idle" });
+test("toAgentRunResult copies result payloads with explicit null when absent", () => {
+  const idleRun = run({ state: "running" });
   const successRun = run({
     id: "agent-2",
-    state: "idle",
+    state: "success",
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
 
@@ -87,13 +87,14 @@ test("toAgentRunResult copies result payloads only when present", () => {
     runId: idleRun.id,
     name: idleRun.name,
     profile: idleRun.profile.name,
-    state: "idle",
+    state: "running",
+    result: null,
   });
   assert.deepEqual(toAgentRunResult(successRun), {
     runId: successRun.id,
     name: successRun.name,
     profile: successRun.profile.name,
-    state: "idle",
+    state: "success",
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
 });
@@ -122,10 +123,11 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {

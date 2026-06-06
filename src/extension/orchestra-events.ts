@@ -1,7 +1,7 @@
 import { isBusMessageDelivered, markBusMessagesDelivered, type BusMessage } from "../core/bus.ts";
-import type { AgentRun, AgentRunResult, AgentState } from "../core/subagent.ts";
+import type { AgentRun, AgentRunResult } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
-import type { WorkflowRun } from "../core/workflow.ts";
+import type { WorkflowRun, WorkflowState } from "../core/workflow.ts";
 import type { WorkgroupStrategy } from "../core/workgroup.ts";
 import { formatNamedEntityLabel, isAgentRunActive, isTerminalAgentState, toAgentRunResult } from "../utils.ts";
 
@@ -67,7 +67,7 @@ export class OrchestraEventController {
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
   private readonly flushDelayMs: number;
   private readonly runFinished = new Map<string, boolean>();
-  private readonly workflowStates = new Map<string, AgentState>();
+  private readonly workflowStates = new Map<string, WorkflowState>();
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
   private readonly queuedEvents: OrchestraMainEvent[] = [];
@@ -294,7 +294,7 @@ function formatWorkflowFinishedEvent(workflow: WorkflowRun): string {
 }
 
 function formatRunResultLines(run: AgentRunResult): string[] {
-  if (!run.result) return ["  No result payload recorded."];
+  if (run.result === null) return ["  No result payload recorded."];
 
   const lines = [`  Result: ${run.result.status}`, `  Summary: ${run.result.summary}`];
   if (run.result.data !== undefined) lines.push(`  Data: ${JSON.stringify(run.result.data)}`);
@@ -306,9 +306,5 @@ function formatRunFinishedState(run: AgentRunResult): string {
 }
 
 function isAgentFinishRun(run: AgentRun | AgentRunResult): boolean {
-  return run.result !== undefined || isAgentResultState(run.state);
-}
-
-function isAgentResultState(state: AgentState | undefined): boolean {
-  return state === "success" || state === "blocked" || state === "failed";
+  return run.result !== null || run.state === "closed";
 }

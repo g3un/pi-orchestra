@@ -90,7 +90,7 @@ test("subagent status reads orchestra state", async () => {
   const tool = createSubagentTool({ orchestra });
   const successRun = run({
     id: "agent-1",
-    state: "idle",
+    state: "success",
     result: {
       status: "success",
       summary: "Found the relevant implementation.",
@@ -106,7 +106,7 @@ test("subagent status reads orchestra state", async () => {
   assert.equal(
     output.message,
     [
-      "Subagent agent-1 is idle.",
+      "Subagent agent-1 is success.",
       "",
       "Result: success",
       "Found the relevant implementation.",
@@ -124,7 +124,7 @@ test("subagent status formats blocked results", async () => {
   const tool = createSubagentTool({ orchestra });
   const blockedRun = run({
     id: "agent-1",
-    state: "idle",
+    state: "blocked",
     result: { status: "blocked", summary: "Need a decision from the leader." },
   });
   orchestra.runs.set(blockedRun.id, blockedRun);
@@ -133,14 +133,14 @@ test("subagent status formats blocked results", async () => {
 
   assert.equal(
     output.message,
-    ["Subagent agent-1 is idle.", "", "Result: blocked", "Need a decision from the leader."].join("\n"),
+    ["Subagent agent-1 is blocked.", "", "Result: blocked", "Need a decision from the leader."].join("\n"),
   );
 });
 
 test("subagent message delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const existing = run({ id: "agent-1", state: "success" });
+  const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "message", id: existing.id, message: "Continue.", busId: undefined });
@@ -154,7 +154,7 @@ test("subagent message delegates to orchestra", async () => {
 test("subagent close delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const existing = run({ id: "agent-1", state: "success" });
+  const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
   const output = await tool.execute({ action: "close", id: existing.id, busId: undefined });
@@ -236,7 +236,7 @@ class FakeOrchestra implements OrchestraApi {
   async messageAgent(id: string, message: string, _options: { busId: string | undefined }): Promise<AgentRun> {
     this.messaged = { id, message };
     const current = this.runs.get(id) ?? run({ id });
-    const messagedRun = { ...current, state: "running" as const, result: undefined };
+    const messagedRun = { ...current, state: "running" as const, result: null };
     this.runs.set(id, messagedRun);
     return messagedRun;
   }
@@ -260,8 +260,9 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }

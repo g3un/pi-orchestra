@@ -22,7 +22,7 @@ test("store saves runs in insertion order and notifies matching subscribers", ()
   assert.deepEqual(store.listRuns(), [first, second]);
   assert.deepEqual(observed, [first]);
 
-  const updatedFirst = { ...first, state: "success" as const };
+  const updatedFirst = { ...first, state: "closed" as const };
   unsubscribe();
   store.saveRun(updatedFirst);
 
@@ -38,14 +38,14 @@ test("store supports multiple run subscribers and removes them independently", (
   const unsubscribeFirst = store.subscribeRuns((updatedRun) => firstObserved.push(updatedRun.state), agentFilter);
   const unsubscribeSecond = store.subscribeRuns((updatedRun) => secondObserved.push(updatedRun.state), agentFilter);
 
-  store.saveRun(run({ id: "agent-1", state: "success" }));
+  store.saveRun(run({ id: "agent-1", state: "running", result: null }));
   unsubscribeFirst();
-  store.saveRun(run({ id: "agent-1", state: "blocked" }));
+  store.saveRun(run({ id: "agent-1", state: "closed", result: null }));
   unsubscribeSecond();
-  store.saveRun(run({ id: "agent-1", state: "failed" }));
+  store.saveRun(run({ id: "agent-1", state: "failed", result: { status: "failed", summary: "Done." } }));
 
-  assert.deepEqual(firstObserved, ["success"]);
-  assert.deepEqual(secondObserved, ["success", "blocked"]);
+  assert.deepEqual(firstObserved, ["running"]);
+  assert.deepEqual(secondObserved, ["running", "closed"]);
 });
 
 test("store notifies global run subscribers until unsubscribed", () => {
@@ -173,10 +173,11 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscription {

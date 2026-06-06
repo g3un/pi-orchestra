@@ -151,7 +151,8 @@ test("workgroup member name checks are global", async () => {
     task: "Existing work.",
     busId: otherBus.id,
     sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
-    state: "idle",
+    state: "closed",
+    result: null,
   });
 
   await assert.rejects(
@@ -364,6 +365,7 @@ class FakeOrchestra implements OrchestraApi {
       busId: bus.id,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
+      result: null,
     };
     this.runs.set(run.id, run);
     return run;
@@ -415,8 +417,9 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
-    state: "idle",
+    state: "running",
     ...overrides,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-  };
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
