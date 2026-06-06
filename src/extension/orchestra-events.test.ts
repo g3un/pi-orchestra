@@ -280,24 +280,81 @@ test("orchestra event controller does not mark queued main bus messages delivere
   assert.deepEqual(store.getBusSubscription(subscriptionId)?.deliveredMessageIds, []);
 });
 
+test("orchestra event controller routes workflow child workgroup finishes to the flow leader", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const flowLeader = run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" });
+  const workgroup = workgroupRun({ id: "child-workgroup", busId: "child-bus", state: "running" });
+  store.saveRun(flowLeader);
+  store.saveWorkgroup(workgroup);
+  store.saveWorkflow(
+    workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: flowLeader.id, workgroupIds: [workgroup.id] }),
+  );
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Child done." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0]?.runId, flowLeader.id);
+  assert.equal(agentEvents[0]?.events[0]?.type, "workgroup.finished");
+});
+
+test("orchestra event controller falls back to main when a workflow child workgroup cannot reach the flow leader", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const flowLeader = run({
+    id: "flow-leader",
+    name: "flow-leader",
+    busId: "workflow-bus",
+    state: "failed",
+    result: { status: "failed", summary: "Leader failed." },
+  });
+  const workgroup = workgroupRun({ id: "child-workgroup", busId: "child-bus", state: "running" });
+  store.saveRun(flowLeader);
+  store.saveWorkgroup(workgroup);
+  store.saveWorkflow(
+    workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: flowLeader.id, workgroupIds: [workgroup.id] }),
+  );
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Child done." } });
+
+  assert.equal(agentEvents.length, 0);
+  assert.equal(sent.batches.length, 1);
+  assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
+});
+
 test("orchestra event controller suppresses workflow-internal run finishes and emits workflow finish", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const workflow = workflowRun({ state: "running", stages: [{ ...stageRun(), busId: "workflow-bus" }] });
+  const workflow = workflowRun({ state: "running", busId: "workflow-bus" });
   store.saveWorkflow(workflow);
-  const workflowRunAgent = run({ id: "stage-member", name: "stage-member", busId: "workflow-bus", state: "running" });
+  const workflowRunAgent = run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" });
   store.saveRun(workflowRunAgent);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
   store.saveRun({
     ...workflowRunAgent,
     state: "success",
-    result: { status: "success", summary: "Member done." },
+    result: { status: "success", summary: "Leader done." },
   });
   store.saveWorkflow({
     ...workflow,
-    state: "success",
-    result: { status: "success", summary: "Workflow done.", memberResults: [] },
+    state: "closed",
+    result: { status: "success", summary: "Workflow done." },
   });
 
   assert.equal(sent.batches.length, 1);
@@ -305,8 +362,8 @@ test("orchestra event controller suppresses workflow-internal run finishes and e
     type: "workflow.finished",
     workflow: {
       ...workflow,
-      state: "success",
-      result: { status: "success", summary: "Workflow done.", memberResults: [] },
+      state: "closed",
+      result: { status: "success", summary: "Workflow done." },
     },
   });
 });
@@ -362,22 +419,11 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     name: "workflow",
     goal: "Complete workflow.",
     startedAtMs: 1_700_000_000_000,
-    state: "idle",
-    currentStageIndex: 0,
-    stages: [],
+    state: "running",
+    busId: "workflow-bus",
+    leaderRunId: null,
+    workgroupIds: [],
+    result: null,
     ...overrides,
-  };
-}
-
-function stageRun() {
-  return {
-    name: "collect",
-    goal: "Collect data.",
-    leader: {
-      profile: { name: "leader", systemPrompt: "Lead.", tools: [], model: undefined },
-      name: "leader",
-    },
-    state: "idle" as const,
-    startedAtMs: 1_700_000_000_000,
   };
 }

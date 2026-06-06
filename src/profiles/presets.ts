@@ -1,6 +1,5 @@
 import type { AgentProfile } from "../core/subagent.ts";
 import { createCodeReviewerProfile } from "./code-reviewer.ts";
-import { createEvidenceSynthesizerProfile } from "./evidence-synthesizer.ts";
 import { createExternalResearcherProfile } from "./external-researcher.ts";
 import { createSourceCodeQaProfile } from "./source-code-qa.ts";
 import type { ToolProfileOptions } from "./profile.ts";
@@ -11,7 +10,6 @@ export const AGENT_PROFILE_PRESETS = {
   "source-code-qa": createSourceCodeQaProfile,
   "external-researcher": createExternalResearcherProfile,
   "code-reviewer": createCodeReviewerProfile,
-  "evidence-synthesizer": createEvidenceSynthesizerProfile,
 } satisfies Record<string, AgentProfilePresetFactory>;
 
 export type AgentProfilePreset = keyof typeof AGENT_PROFILE_PRESETS;

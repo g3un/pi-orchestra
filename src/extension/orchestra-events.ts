@@ -1,9 +1,9 @@
 import { isBusMessageDelivered, markBusMessagesDelivered, type BusMessage } from "../core/bus.ts";
 import type { AgentRun, AgentRunResult } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
-import type { WorkflowRun, WorkflowState } from "../core/workflow.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun, WorkgroupState } from "../core/workgroup.ts";
-import { formatNamedEntityLabel, isAgentRunActive, isTerminalAgentState, toAgentRunResult } from "../utils.ts";
+import { formatNamedEntityLabel, isAgentRunActive, toAgentRunResult } from "../utils.ts";
 
 export const ORCHESTRA_EVENT_CUSTOM_TYPE = "pi-orchestra.event";
 
@@ -74,7 +74,10 @@ export class OrchestraEventController {
   private readonly sendAgentEvents: NonNullable<OrchestraEventControllerOptions["sendAgentEvents"]> | undefined;
   private readonly flushDelayMs: number;
   private readonly runFinished = new Map<string, boolean>();
-  private readonly workflowStates = new Map<string, WorkflowState>();
+  private readonly workflowStates = new Map<string, WorkflowRun["state"]>();
+  private readonly workflowIndexes = new Map<string, { busId: string; workgroupIds: string[] }>();
+  private readonly workflowIdByWorkgroupId = new Map<string, string>();
+  private readonly workflowIdByBusId = new Map<string, string>();
   private readonly workgroupStates = new Map<string, WorkgroupState>();
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
@@ -94,8 +97,14 @@ export class OrchestraEventController {
     this.flushDelayMs = options.flushDelayMs ?? 50;
 
     for (const run of this.store.listRuns()) this.runFinished.set(run.id, isAgentFinishRun(run));
-    for (const workflow of this.store.listWorkflows()) this.workflowStates.set(workflow.id, workflow.state);
-    for (const workgroup of this.store.listWorkgroups()) this.workgroupStates.set(workgroup.id, workgroup.state);
+    for (const workflow of this.store.listWorkflows()) {
+      this.workflowStates.set(workflow.id, workflow.state);
+      this.indexWorkflow(workflow);
+    }
+    for (const workgroup of this.store.listWorkgroups()) {
+      this.workgroupStates.set(workgroup.id, workgroup.state);
+      this.indexWorkflowWorkgroupBus(workgroup);
+    }
 
     this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run), undefined);
     this.unsubscribeBusMessages = this.store.subscribeBusMessages(
@@ -186,6 +195,7 @@ export class OrchestraEventController {
       if (persistedWorkgroup.leaderRunId && this.sendLeaderWorkgroupEvent(persistedWorkgroup.leaderRunId, event)) {
         return;
       }
+      if (this.findWorkflowForWorkgroup(persistedWorkgroup.id)) return;
 
       this.queueEvent(event);
       return;
@@ -203,6 +213,7 @@ export class OrchestraEventController {
       if (launchingWorkgroup.leaderRunId && this.sendLeaderWorkgroupEvent(launchingWorkgroup.leaderRunId, event)) {
         return;
       }
+      if (this.isWorkflowBus(run.busId)) return;
 
       this.queueEvent(event);
       return;
@@ -244,18 +255,27 @@ export class OrchestraEventController {
   private handleWorkflowSaved(workflow: WorkflowRun): void {
     const previousState = this.workflowStates.get(workflow.id);
     this.workflowStates.set(workflow.id, workflow.state);
+    this.indexWorkflow(workflow);
 
-    if (!isTerminalAgentState(workflow.state) || (previousState !== undefined && isTerminalAgentState(previousState)))
-      return;
+    if (workflow.state !== "closed" || previousState === "closed") return;
     this.queueEvent({ type: "workflow.finished", workflow });
   }
 
   private handleWorkgroupSaved(workgroup: WorkgroupRun): void {
     const previousState = this.workgroupStates.get(workgroup.id);
     this.workgroupStates.set(workgroup.id, workgroup.state);
+    this.indexWorkflowWorkgroupBus(workgroup);
 
     if (workgroup.state !== "closed" || previousState === "closed") return;
-    if (this.isWorkflowBus(workgroup.busId)) return;
+
+    const workflow = this.findWorkflowForWorkgroup(workgroup.id);
+    if (workflow) {
+      const event = { type: "workgroup.finished" as const, workgroup };
+      if (this.sendWorkflowLeaderEvent(workflow, event)) return;
+      if (workflow.state === "running") this.queueEvent(event);
+      return;
+    }
+
     this.queueEvent({ type: "workgroup.finished", workgroup });
   }
 
@@ -264,10 +284,26 @@ export class OrchestraEventController {
     event: Extract<OrchestraMainEvent, { type: "workgroup.member_finished" }>,
   ): boolean {
     const leaderRun = this.store.getRun(leaderRunId);
-    if (!leaderRun || !isAgentRunActive(leaderRun)) return false;
+    if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents?.(
+    this.sendAgentEvents(
       leaderRunId,
+      [event],
+      formatOrchestraEvents([event], { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
+    );
+    return true;
+  }
+
+  private sendWorkflowLeaderEvent(
+    workflow: WorkflowRun,
+    event: Extract<OrchestraMainEvent, { type: "workgroup.finished" }>,
+  ): boolean {
+    if (!workflow.leaderRunId || workflow.state !== "running") return false;
+    const leaderRun = this.store.getRun(workflow.leaderRunId);
+    if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
+
+    this.sendAgentEvents(
+      leaderRun.id,
       [event],
       formatOrchestraEvents([event], { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
     );
@@ -278,8 +314,42 @@ export class OrchestraEventController {
     return this.store.listWorkgroups().find((workgroup) => workgroup.memberRunIds.includes(runId));
   }
 
+  private findWorkflowForWorkgroup(workgroupId: string): WorkflowRun | undefined {
+    const workflowId = this.workflowIdByWorkgroupId.get(workgroupId);
+    return workflowId ? this.store.getWorkflow(workflowId) : undefined;
+  }
+
   private isWorkflowBus(busId: string): boolean {
-    return this.store.listWorkflows().some((workflow) => workflow.stages.some((stage) => stage.busId === busId));
+    return this.workflowIdByBusId.has(busId);
+  }
+
+  private indexWorkflow(workflow: WorkflowRun): void {
+    const previous = this.workflowIndexes.get(workflow.id);
+    if (previous) {
+      if (this.workflowIdByBusId.get(previous.busId) === workflow.id) this.workflowIdByBusId.delete(previous.busId);
+      for (const workgroupId of previous.workgroupIds) {
+        if (this.workflowIdByWorkgroupId.get(workgroupId) === workflow.id) {
+          this.workflowIdByWorkgroupId.delete(workgroupId);
+        }
+        const workgroup = this.store.getWorkgroup(workgroupId);
+        if (workgroup && this.workflowIdByBusId.get(workgroup.busId) === workflow.id) {
+          this.workflowIdByBusId.delete(workgroup.busId);
+        }
+      }
+    }
+
+    this.workflowIndexes.set(workflow.id, { busId: workflow.busId, workgroupIds: [...workflow.workgroupIds] });
+    this.workflowIdByBusId.set(workflow.busId, workflow.id);
+    for (const workgroupId of workflow.workgroupIds) {
+      this.workflowIdByWorkgroupId.set(workgroupId, workflow.id);
+      const workgroup = this.store.getWorkgroup(workgroupId);
+      if (workgroup) this.workflowIdByBusId.set(workgroup.busId, workflow.id);
+    }
+  }
+
+  private indexWorkflowWorkgroupBus(workgroup: WorkgroupRun): void {
+    const workflowId = this.workflowIdByWorkgroupId.get(workgroup.id);
+    if (workflowId) this.workflowIdByBusId.set(workgroup.busId, workflowId);
   }
 
   private getPendingWorkgroupRunIds(busId: string, runIds: Set<string>): string[] {

@@ -3,68 +3,54 @@ import { test } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { AgentRun } from "../core/subagent.ts";
-import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { buildWorkflowMonitorLines, WorkflowMonitorController } from "./workflow-monitor.ts";
 
 const WORKFLOW_STARTED_AT_MS = 1_700_000_000_000;
-const STAGE_STARTED_AT_MS = WORKFLOW_STARTED_AT_MS + 6_000;
 const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
 
-test("workflow monitor renders the current stage progress", () => {
+test("workflow monitor renders flow leader, workgroup, and run progress", () => {
   const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
+  store.saveRun(run({ id: "group-leader", name: "group-leader", state: "running" }));
   store.saveRun(run({ id: "collector", name: "collector", state: "running" }));
   store.saveRun(
     run({ id: "critic", name: "critic", state: "success", result: { status: "success", summary: "Done." } }),
   );
-  store.saveWorkgroup(workgroupRun({ memberRunIds: ["collector", "critic"] }));
+  store.saveWorkgroup(workgroupRun({ leaderRunId: "group-leader", memberRunIds: ["collector", "critic"] }));
   store.saveWorkflow(
     workflowRun({
       id: "research-flow",
       name: "Research Flow",
-      stages: [
-        stageRun({
-          name: "collect",
-          busId: "bus-1",
-          workgroupId: "workgroup-1",
-        }),
-        stageRun({ name: "analyze" }),
-      ],
+      leaderRunId: "flow-leader",
+      workgroupIds: ["workgroup-1"],
     }),
   );
 
   assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
-    "Research Flow [10s] | collect [4s] (1/2) | agents (1/2)",
+    "Research Flow [10s] | leader flow-leader: running | workgroups (0/1) | runs (1/4)",
   ]);
 });
 
-test("workflow monitor counts the stage synthesizer while synthesizing", () => {
+test("workflow monitor counts closed workgroups", () => {
   const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
   store.saveRun(
     run({ id: "collector", name: "collector", state: "success", result: { status: "success", summary: "Done." } }),
   );
-  store.saveRun(run({ id: "collect-leader", name: "collect-leader", state: "running" }));
-  store.saveWorkgroup(workgroupRun({ memberRunIds: ["collector"], leaderRunId: "collect-leader" }));
-  store.saveWorkflow(
-    workflowRun({
-      stages: [
-        stageRun({
-          phase: "leader",
-          workgroupId: "workgroup-1",
-          leaderRunId: "collect-leader",
-        }),
-      ],
-    }),
-  );
+  store.saveWorkgroup(workgroupRun({ state: "closed", memberRunIds: ["collector"] }));
+  store.saveWorkflow(workflowRun({ leaderRunId: "flow-leader", workgroupIds: ["workgroup-1"] }));
 
   assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
-    "workflow [10s] | collect [4s] (1/1) | agents (1/2)",
+    "workflow [10s] | leader flow-leader: running | workgroups (1/1) | runs (1/2)",
   ]);
 });
 
 test("workflow monitor controller updates the widget and clears it when workflows finish", () => {
   const store = new InMemoryAgentStore();
-  const workflow = workflowRun({ stages: [stageRun({ phase: "leader" })] });
+  const workflow = workflowRun({ leaderRunId: "flow-leader" });
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
   store.saveWorkflow(workflow);
   const widgets: Array<string[] | undefined> = [];
   const statuses: Array<string | undefined> = [];
@@ -72,13 +58,13 @@ test("workflow monitor controller updates the widget and clears it when workflow
   const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
 
   assert.equal(monitor.show(ctx), true);
-  assert.equal(widgets[0]?.[0], "workflow [10s] | collect [4s] (1/1) | agents (0/1)");
+  assert.equal(widgets[0]?.[0], "workflow [10s] | leader flow-leader: running | workgroups (0/0) | runs (0/1)");
   assert.deepEqual(statuses, []);
 
-  store.saveRun(run({ id: "collector", name: "collector" }));
-  assert.equal(widgets.at(-1)?.at(-1), "workflow [10s] | collect [4s] (1/1) | agents (0/1)");
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
+  assert.equal(widgets.at(-1)?.at(-1), "workflow [10s] | leader flow-leader: running | workgroups (0/0) | runs (0/1)");
 
-  store.saveWorkflow({ ...workflow, state: "success" });
+  store.saveWorkflow({ ...workflow, state: "closed" });
 
   assert.equal(widgets.at(-1), undefined);
   assert.deepEqual(statuses, []);
@@ -86,7 +72,7 @@ test("workflow monitor controller updates the widget and clears it when workflow
 
 test("workflow monitor returns no lines when there are no active workflows", () => {
   const store = new InMemoryAgentStore();
-  store.saveWorkflow(workflowRun({ state: "success" }));
+  store.saveWorkflow(workflowRun({ state: "closed" }));
 
   assert.deepEqual(buildWorkflowMonitorLines(store), []);
 });
@@ -131,27 +117,10 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     goal: "Complete the workflow.",
     startedAtMs: WORKFLOW_STARTED_AT_MS,
     state: "running",
-    currentStageIndex: 0,
-    stages: [],
-    ...overrides,
-  };
-}
-
-function stageRun(overrides: Partial<WorkflowStageRun> = {}): WorkflowStageRun {
-  return {
-    name: "collect",
-    goal: "Collect evidence.",
-    leader: {
-      profile: {
-        name: "leader",
-        systemPrompt: "Synthesize.",
-        tools: [],
-        model: undefined,
-      },
-      name: "leader",
-    },
-    state: "idle",
-    startedAtMs: STAGE_STARTED_AT_MS,
+    busId: "workflow-bus",
+    leaderRunId: null,
+    workgroupIds: [],
+    result: null,
     ...overrides,
   };
 }
@@ -166,7 +135,7 @@ function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
     memberRunIds: [],
     state: "running",
     result: null,
-    createdAtMs: STAGE_STARTED_AT_MS,
+    createdAtMs: WORKFLOW_STARTED_AT_MS + 6_000,
     ...overrides,
   };
 }

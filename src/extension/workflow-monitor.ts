@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
-import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 import { isAgentRunFinished, isTerminalAgentState, pluralize } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
@@ -41,9 +41,11 @@ export class WorkflowMonitorController {
     if (!this.unsubscribe) {
       const unsubscribeRuns = this.store.subscribeRuns(() => this.render(), undefined);
       const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.render(), undefined);
+      const unsubscribeWorkgroups = this.store.subscribeWorkgroups(() => this.render(), undefined);
       this.unsubscribe = () => {
         unsubscribeRuns();
         unsubscribeWorkflows();
+        unsubscribeWorkgroups();
       };
     }
     this.startTicking();
@@ -111,34 +113,75 @@ export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now())
 function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun, nowMs: number): void {
   if (lines.length >= MAX_WIDGET_LINES) return;
 
-  const stage = getCurrentStage(workflow);
   const workflowLabel = `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}]`;
-  const stageLabel = stage
-    ? formatStageLabel(store, workflow, stage, nowMs)
-    : `none (0/${workflow.stages.length}) | agents (0/0)`;
-  lines.push(`${workflowLabel} | ${stageLabel}`);
+  const leaderLabel = formatLeaderLabel(store, workflow);
+  const workgroupProgress = calculateWorkgroupProgress(store, workflow);
+  const runProgress = calculateRunProgress(store, workflow);
+  lines.push(
+    `${workflowLabel} | leader ${leaderLabel} | workgroups (${workgroupProgress.completed}/${workgroupProgress.total}) | runs (${runProgress.completed}/${runProgress.total})`,
+  );
 }
 
 function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
   return store.listWorkflows().filter((workflow) => !isTerminalAgentState(workflow.state));
 }
 
-function getCurrentStage(workflow: WorkflowRun): WorkflowStageRun | undefined {
-  return (
-    workflow.stages[workflow.currentStageIndex] ?? workflow.stages.find((stage) => !isTerminalAgentState(stage.state))
-  );
+function formatLeaderLabel(store: AgentStore, workflow: WorkflowRun): string {
+  if (!workflow.leaderRunId) return "pending";
+  const leaderRun = store.getRun(workflow.leaderRunId);
+  return `${leaderRun?.name ?? workflow.leaderRunId}: ${leaderRun?.state ?? "unknown"}`;
 }
 
-function formatStageLabel(store: AgentStore, workflow: WorkflowRun, stage: WorkflowStageRun, nowMs: number): string {
-  const stageIndex = workflow.stages.indexOf(stage);
-  const stagePosition = stageIndex >= 0 ? `${stageIndex + 1}/${workflow.stages.length}` : `?/${workflow.stages.length}`;
-  const stageUptime = formatUptimeSince(stage.startedAtMs, nowMs);
-  return `${stage.name} [${stageUptime}] (${stagePosition}) | agents (${formatStageProgress(store, stage)})`;
+function calculateWorkgroupProgress(store: AgentStore, workflow: WorkflowRun): { completed: number; total: number } {
+  const workgroups = workflow.workgroupIds.flatMap((workgroupId) => {
+    const workgroup = store.getWorkgroup(workgroupId);
+    return workgroup ? [workgroup] : [];
+  });
+  return {
+    completed: workgroups.filter((workgroup) => workgroup.state === "closed").length,
+    total: workgroups.length,
+  };
 }
 
-function formatStageProgress(store: AgentStore, stage: WorkflowStageRun): string {
-  const progress = calculateStageProgress(store, stage);
-  return `${progress.completed}/${progress.total}`;
+function calculateRunProgress(store: AgentStore, workflow: WorkflowRun): { completed: number; total: number } {
+  const runs = collectWorkflowRuns(store, workflow);
+  return { completed: runs.filter(isAgentRunFinished).length, total: runs.length };
+}
+
+function collectWorkflowRuns(store: AgentStore, workflow: WorkflowRun): AgentRun[] {
+  const runsById = new Map<string, AgentRun>();
+
+  if (workflow.leaderRunId) {
+    const leaderRun = store.getRun(workflow.leaderRunId);
+    if (leaderRun) runsById.set(leaderRun.id, leaderRun);
+  }
+
+  if (workflow.busId) {
+    for (const run of store.listRuns().filter((current) => current.busId === workflow.busId)) {
+      runsById.set(run.id, run);
+    }
+  }
+
+  for (const workgroupId of workflow.workgroupIds) {
+    const workgroup = store.getWorkgroup(workgroupId);
+    if (!workgroup) continue;
+
+    if (workgroup.leaderRunId) {
+      const groupLeaderRun = store.getRun(workgroup.leaderRunId);
+      if (groupLeaderRun) runsById.set(groupLeaderRun.id, groupLeaderRun);
+    }
+
+    for (const runId of workgroup.memberRunIds) {
+      const run = store.getRun(runId);
+      if (run) runsById.set(run.id, run);
+    }
+
+    for (const run of store.listRuns().filter((current) => current.busId === workgroup.busId)) {
+      runsById.set(run.id, run);
+    }
+  }
+
+  return [...runsById.values()];
 }
 
 function formatUptimeSince(startedAtMs: number, nowMs: number): string {
@@ -155,39 +198,4 @@ function formatUptimeSince(startedAtMs: number, nowMs: number): string {
 
 function pad2(value: number): string {
   return value.toString().padStart(2, "0");
-}
-
-function calculateStageProgress(store: AgentStore, stage: WorkflowStageRun): { completed: number; total: number } {
-  const runs = collectStageRuns(store, stage);
-  const completed = runs.filter(isAgentRunFinished).length;
-  const memberRunCount = runs.filter((run) => run.id !== stage.leaderRunId).length;
-  const memberRunIds = stage.workgroupId ? (store.getWorkgroup(stage.workgroupId)?.memberRunIds ?? []) : [];
-  const memberTotal = Math.max(memberRunIds.length, memberRunCount);
-  const leaderTotal = stage.phase === "leader" || stage.leaderRunId !== undefined ? 1 : 0;
-  const total = Math.max(memberTotal + leaderTotal, runs.length);
-  return { completed: Math.min(completed, total), total };
-}
-
-function collectStageRuns(store: AgentStore, stage: WorkflowStageRun): AgentRun[] {
-  const runsById = new Map<string, AgentRun>();
-
-  if (stage.workgroupId) {
-    for (const runId of store.getWorkgroup(stage.workgroupId)?.memberRunIds ?? []) {
-      const run = store.getRun(runId);
-      if (run) runsById.set(run.id, run);
-    }
-  }
-
-  if (stage.leaderRunId) {
-    const leaderRun = store.getRun(stage.leaderRunId);
-    if (leaderRun) runsById.set(leaderRun.id, leaderRun);
-  }
-
-  if (stage.busId) {
-    for (const run of store.listRuns().filter((current) => current.busId === stage.busId)) {
-      runsById.set(run.id, run);
-    }
-  }
-
-  return [...runsById.values()];
 }

@@ -15,34 +15,54 @@ pi -e npm:@g3un/pi-orchestra
 ```
 
 Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and `workflow`.
-Subagent, workgroup-member, and workflow completions are delivered back to the
-main agent as pi-orchestra events, so the main conversation stays responsive
-while delegated work runs. Active workflows are also shown in a TUI progress
-widget with the current stage and agent completion counts. Use
-`/orchestra-workflows` to reopen the widget if needed.
+Subagent, workgroup-member, workgroup, and workflow completions are delivered as
+pi-orchestra events, so the main conversation stays responsive while delegated
+work runs. Active workflows are also shown in a TUI progress widget with flow
+leader, workgroup, and agent completion counts. Use `/orchestra-workflows` to
+reopen the widget if needed.
 
 ## Core concepts
 
 ### Subagent
 
-A subagent is an isolated child agent with its own role, task, explicit tool allowlist, and optional model. Subagents attach to a bus so they can receive shared reference context while working independently.
+A subagent is an isolated child agent with its own role, task, explicit tool
+allowlist, and optional model. Subagents attach to a bus so they can receive
+shared reference context while working independently.
 
-Use subagents when you want to delegate a focused task, such as review, research, implementation planning, or an alternative solution attempt.
+Use subagents when you want to delegate a focused task, such as review, research,
+implementation planning, or an alternative solution attempt.
 
 ### Workgroup
 
-A workgroup starts multiple subagents on the same bus for one shared goal. Each member can have a different profile or assignment. Member completions are delivered as `workgroup.member_finished` events with the strategy and pending run ids.
+A workgroup is a private-bus coordination scope for one shared goal. `workgroup
+create` creates the bus internally. A leader can add member subagents as needed,
+receive `workgroup.member_finished` events, then call `workgroup finish` with the
+canonical group output. Finishing closes member runs and the workgroup bus. The
+workgroup leader is the effective owner of the workgroup result; parent scopes
+consume `workgroup.finished` and should not finish the group on the leader's
+behalf.
 
-Workgroups support two strategies:
-
-- `compete`: several agents attempt the same goal; one successful result can be enough.
-- `synthesize`: agents work on complementary parts; their findings are collected and combined.
+Use workgroups when a leader should coordinate competing alternatives,
+complementary research, reviews, or follow-ups before producing one result.
 
 ### Workflow
 
-A workflow runs ordered workgroup stages. Each stage gets a fresh bus, starts its workers, collects results through internal finish-event subscriptions, and uses an evidence synthesizer to produce a canonical stage output. The main agent receives a single `workflow.finished` event for the whole workflow.
+A workflow is led by one flow leader subagent. The flow leader creates child
+workgroups with `workflow spawn_workgroup`, reviews each `workgroup.finished`
+result, and decides whether to create another workgroup or call `workflow finish`.
+Each child workgroup has its own private bus and workgroup leader.
 
-Use workflows for multi-step plans where later stages should depend on the summarized output of earlier stages instead of raw worker transcripts.
+Use workflows for adaptive multi-step goals where the next group should depend on
+previous group outputs. Workflow lifecycle state mirrors workgroups
+(`running`/`closing`/`closed`); final success/blocked/failed is stored in the
+workflow result. Main receives one final `workflow.finished` event for the whole
+workflow; workflow-internal workgroup events are routed to the flow leader.
+
+Workflow caller ownership is hierarchical: the flow leader is the effective owner
+of the workflow result and is the only actor that should call `workflow finish`.
+Only the supervising parent above that owner, normally main, should call
+`workflow cancel`. If the flow leader cannot complete the goal, it should finish
+with `blocked` or `failed` instead of cancelling its own workflow.
 
 ## Reusable profiles
 
@@ -51,14 +71,24 @@ Use workflows for multi-step plans where later stages should depend on the summa
 - `createSourceCodeQaProfile`: answer repository questions from local code, tests, and docs.
 - `createExternalResearcherProfile`: gather and synthesize external source material with citations and uncertainty handling.
 - `createCodeReviewerProfile`: review local code or changes with findings-first output.
-- `createEvidenceSynthesizerProfile`: synthesize supplied evidence and context, using tools only for targeted verification or gap-filling.
 
-Profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
+Profile factories require an options object with an explicit `tools` allowlist.
+The main agent should inject the installed/active tool names each child actually
+needs. Pass `undefined` for `name` or `model` to use the factory default.
 
-Tool calls can use these reusable profiles through `profile.preset` instead of writing the full system prompt each time. Supported preset names are `source-code-qa`, `external-researcher`, `code-reviewer`, and `evidence-synthesizer`; each still requires an explicit `tools` allowlist and may override `name` or `model`.
+Tool calls can use these reusable profiles through `profile.preset` instead of
+writing the full system prompt each time. Supported preset names are
+`source-code-qa`, `external-researcher`, and `code-reviewer`; each still
+requires an explicit `tools` allowlist and may override `name` or `model`.
 
 ## Notes
 
-- Create a `bus` before spawning related subagents or workgroups.
-- Subagents report completion results with `success`, `blocked`, or `failed`; after `finish`, reusable runs return to `idle` until messaged or closed.
-- Use `workflow` for linear staged work, not branching/DAG execution.
+- Create a `bus` only for standalone subagents; workgroups and workflows create
+  their own private buses internally.
+- Subagents report completion results with `success`, `blocked`, or `failed`;
+  `closed` means the run has been disposed.
+- `finish` belongs to the effective owner of the current scope: the subagent for
+  its own run, the workgroup leader for a workgroup, and the flow leader for a
+  workflow. `cancel` belongs to the supervising parent above that owner.
+- Use `workflow` for flow-leader-driven adaptive work, not arbitrary DAG
+  execution.

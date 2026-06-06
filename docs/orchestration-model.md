@@ -5,7 +5,7 @@ pi-orchestra builds delegation in four layers:
 1. **Bus** — shared context channel.
 2. **Subagent** — isolated child agent subscribed to a bus.
 3. **Workgroup** — multiple subagents working on one bus.
-4. **Workflow** — ordered workgroup stages with stage synthesis.
+4. **Workflow** — adaptive workgroups coordinated by a flow leader.
 
 ## Bus
 
@@ -30,20 +30,26 @@ optional model. The runtime creates a bus subscription for each spawned subagent
 `AgentRun.busId` remains the lifecycle/query scope, not the context delivery
 path.
 
-Every subagent must call the `finish` tool with:
+Every subagent is the effective owner of its own run result and must call the
+`finish` tool with:
 
 - `status`: `success`, `blocked`, or `failed`
 - `summary`: concise handoff text
 - `data`: optional structured output
 
+A parent may steer, close, or otherwise clean up a child run, but it should not
+finish the child run for it. If a child cannot proceed, it should finish with
+`blocked` or `failed` so the parent can decide the next higher-level action.
+
 While a subagent is working, its state is `running`. Calling `finish` records the
-result status and returns the reusable run to `idle`, so the leader can message it
-again without recreating the session. `closed` is separate and means the run has
-been disposed.
+result status (`success`, `blocked`, or `failed`). `closed` is separate and means
+the run has been disposed.
 
 ## Workgroup
 
-A workgroup is a set of subagents spawned on a private coordination bus for one shared goal. `workgroup create` creates that bus internally; callers do not create a bus first. Each member is an `AgentRun` with its own task. Persisted workgroup runs keep the bus id, keep the leader as a subagent run id when an agent created the group, or `null` when main created it, keep members as subagent run ids, and record workgroup `state` plus final `result`. The leader id is routing metadata, not a permission boundary.
+A workgroup is a set of subagents spawned on a private coordination bus for one shared goal. `workgroup create` creates that bus internally; callers do not create a bus first. Each member is an `AgentRun` with its own task. Persisted workgroup runs keep the bus id, keep the leader as a subagent run id when an agent created the group, or `null` when main created it, keep members as subagent run ids, and record workgroup `state` plus final `result`.
+
+Ownership is scoped. The effective owner of a workgroup result is its leader: the leader receives member completion events and is the only actor that should call `workgroup action=finish`. A parent scope observes the final `workgroup.finished` output; it should not finish the child group for the leader. If the parent needs to abort a scope, that is a higher-level cancellation/cleanup decision, not a child finish.
 
 Main receives finish events instead of blocking on completion calls:
 
@@ -54,16 +60,39 @@ Main receives finish events instead of blocking on completion calls:
 
 ## Workflow
 
-A workflow runs ordered stages. Each stage defines a goal and leader.
+A workflow is led by one flow leader subagent. Persisted workflow runs mirror the
+workgroup lifecycle shape: they store the workflow bus id, the flow leader run id,
+child workgroup ids, `state` (`running`, `closing`, `closed`), and final `result`.
+The final success/blocked/failed status lives in `result.status`, not in workflow
+state. Child outputs stay on their `WorkgroupRun.result`; the workflow points to
+those runs with `workgroupIds` instead of duplicating a workflow-specific
+workgroup result shape. Workflows do not persist a separate leader spec; once
+started, the leader is an `AgentRun`.
 
-For each stage:
+Workflow flow:
 
-1. Create a fresh private bus for the stage.
-2. Create a persisted stage workgroup on that bus.
-3. Spawn the stage leader and attach it to the workgroup as `leaderRunId`.
-4. The leader uses `workgroup add_members` to create member subagents as needed.
-5. The leader normally calls `workgroup finish` with the stage's final output; the workflow stores that workgroup result as the canonical stage output and closes the leader. If the leader's own `finish` payload arrives first, the workflow can still use that as a fallback stage output.
+1. `workflow create` creates a private workflow bus and spawns the flow leader.
+2. The flow leader uses `workflow spawn_workgroup` with `workflowId` to create
+   the next child workgroup only when the current evidence shows it is useful.
+3. Each child workgroup gets its own private bus and its own workgroup leader.
+4. The workgroup leader uses `workgroup add_members` and `workgroup finish` to
+   coordinate members and produce the group output.
+5. Workflow-internal `workgroup.finished` events are routed to the flow leader,
+   not main. The flow leader uses those outputs to decide the next group or final
+   workflow result.
+6. The flow leader calls `workflow finish` with `status`, `summary`, and optional
+   `data` when the overall goal is complete, blocked, or failed.
 
-Workflow-internal member and leader completions are not sent to main as member events. Workflow-internal `workgroup.finished` outputs are consumed as stage outputs. Main receives a single `workflow.finished` event when the whole workflow reaches `success`, `blocked`, `failed`, or `closed`.
+Workflow ownership follows the same scoped rule. The flow leader is the effective
+owner of the workflow result and is the only actor that should call
+`workflow action=finish`. The supervising parent above the flow leader, normally
+main, is the only actor that should call `workflow action=cancel`. The flow
+leader should not cancel its own workflow; if it cannot proceed, it should finish
+with `blocked` or `failed` and let the parent decide whether any broader cleanup
+is needed.
 
-The next stage receives the previous stage output, not raw member transcripts. Each stage specifies its leader explicitly; the leader decides how many members to create and when the stage has enough evidence to finish.
+Closing a workflow moves it through `closing`, closes every child workgroup,
+closes all child buses, closes the workflow bus, closes child group leaders and
+the flow leader, then emits one `workflow.finished` event to main. Standalone
+workgroup events still go to main; workflow-internal workgroup events stay inside
+the workflow control loop.

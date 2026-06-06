@@ -320,7 +320,7 @@ function formatRunMessage(
   return parts.join("\n");
 }
 
-function formatResultData(data: unknown): string {
+export function formatResultData(data: unknown): string {
   if (typeof data === "string") return data;
   return JSON.stringify(data, null, 2) ?? String(data);
 }

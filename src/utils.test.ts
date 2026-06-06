@@ -56,7 +56,6 @@ test("format helpers handle names, indentation, and unknown errors", () => {
 });
 
 test("terminal agent state matches the shared AgentState model", () => {
-  assert.equal(isTerminalAgentState("idle"), false);
   assert.equal(isTerminalAgentState("running"), false);
   assert.equal(isTerminalAgentState("success"), true);
   assert.equal(isTerminalAgentState("blocked"), true);
@@ -136,9 +135,11 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     name: "workflow-1",
     goal: "Complete the workflow.",
     startedAtMs: 1_700_000_000_000,
-    state: "idle",
-    currentStageIndex: 0,
-    stages: [],
+    state: "running",
+    busId: "workflow-bus",
+    leaderRunId: null,
+    workgroupIds: [],
+    result: null,
     ...overrides,
   };
 }

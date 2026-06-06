@@ -18,8 +18,9 @@ don't always lead to better outcomes."
   multi-step workflow into one meaningful call.
 - Example: instead of `list_users` + `list_events` + `create_event`, ship one
   `schedule_event` that finds a slot and books it.
-- In this repo, the `workflow` tool drives a whole staged pipeline rather than
-  exposing every primitive; the `subagent` tool bundles the full lifecycle.
+- In this repo, the `workflow` tool lets a flow leader create child workgroups
+  adaptively rather than exposing every primitive; the `subagent` tool bundles
+  the full lifecycle.
 
 ## 2. Consolidate; use an `action` enum
 
@@ -49,6 +50,10 @@ to get right.
 - Make implicit context explicit, as if onboarding a new teammate: what the tool
   is for, when to use it vs. a sibling tool, input format, edge cases,
   boundaries.
+- For lifecycle tools, document the caller ownership contract. `finish` belongs
+  to the effective owner of the current scope (the subagent itself, the
+  workgroup leader, or the workflow flow leader). `cancel` belongs to the
+  supervising parent above that owner, not to the scope owner.
 - Describe **every** parameter (Typebox `description`). See `AgentProfileParams`
   in `src/tools/subagent.ts`.
 - Small wording refinements produce outsized behavior changes — treat

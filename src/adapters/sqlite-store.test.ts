@@ -125,7 +125,7 @@ test("SQLite store notifies matching subscribers until unsubscribed", () => {
     unsubscribeWorkflows();
     store.saveRun({ ...savedRun, state: "closed", result: savedRun.result });
     store.saveWorkgroup({ ...savedWorkgroup, name: "updated" });
-    store.saveWorkflow({ ...savedWorkflow, state: "success" });
+    store.saveWorkflow({ ...savedWorkflow, state: "closed" });
 
     assert.deepEqual(observedRuns, [savedRun]);
     assert.deepEqual(observedWorkgroups, [savedWorkgroup]);
@@ -204,7 +204,7 @@ test("SQLite store rejects existing unversioned stores and tells the user to rec
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 0; expected 4\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 0; expected 5\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -222,7 +222,7 @@ test("SQLite store rejects older schemas and tells the user to recreate the stor
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 2; expected 4\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 2; expected 5\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -312,9 +312,11 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     name: "workflow-1",
     goal: "Complete the workflow.",
     startedAtMs: 1_700_000_000_000,
-    state: "idle",
-    currentStageIndex: 0,
-    stages: [],
+    state: "running",
+    busId: "workflow-bus",
+    leaderRunId: null,
+    workgroupIds: [],
+    result: null,
     ...overrides,
   };
 }

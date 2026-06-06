@@ -95,11 +95,13 @@ test("workflow parameters use an OpenAI-compatible root object schema without wa
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["start", "status", "cancel"]);
-  assert.match(parameters.properties.action?.description ?? "", /status inspects/);
-  assert.match(parameters.properties.id?.description ?? "", /status\/cancel/);
-  assert.match(parameters.properties.goal?.description ?? "", /Overall workflow goal/);
-  assert.match(parameters.properties.stages?.description ?? "", /Linear stages/);
+  assert.deepEqual(parameters.properties.action?.enum, ["create", "spawn_workgroup", "finish", "status", "cancel"]);
+  assert.match(parameters.properties.action?.description ?? "", /spawn_workgroup/);
+  assert.equal(parameters.properties.id, undefined);
+  assert.match(parameters.properties.workflowId?.description ?? "", /spawn_workgroup\/finish\/status\/cancel/);
+  assert.match(parameters.properties.goal?.description ?? "", /create and spawn_workgroup/);
+  assert.equal(parameters.properties.stages, undefined);
+  assert.ok(parameters.properties.leader);
   assert.equal(parameters.properties.timeoutMs, undefined);
 });
 

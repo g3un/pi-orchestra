@@ -187,15 +187,15 @@ test("store saves workflows and notifies workflow subscribers until unsubscribed
   );
 
   store.saveWorkflow(workflow);
-  const succeeded = { ...workflow, state: "success" as const };
-  store.saveWorkflow(succeeded);
+  const closing = { ...workflow, state: "closing" as const };
+  store.saveWorkflow(closing);
   unsubscribe();
-  const closed = { ...succeeded, state: "closed" as const };
+  const closed = { ...closing, state: "closed" as const };
   store.saveWorkflow(closed);
 
   assert.deepEqual(store.getWorkflow(workflow.id), closed);
   assert.deepEqual(store.listWorkflows(), [closed]);
-  assert.deepEqual(observed, [workflow, succeeded]);
+  assert.deepEqual(observed, [workflow, closing]);
 });
 
 test("store notifies global workgroup subscribers until unsubscribed", () => {
@@ -271,9 +271,11 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     name: "workflow-1",
     goal: "Complete the workflow.",
     startedAtMs: 1_700_000_000_000,
-    state: "idle",
-    currentStageIndex: 0,
-    stages: [],
+    state: "running",
+    busId: "workflow-bus",
+    leaderRunId: null,
+    workgroupIds: [],
+    result: null,
     ...overrides,
   };
 }

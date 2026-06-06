@@ -62,8 +62,8 @@ engineering. Make handoffs:
 - **Condensed** — synthesized findings, not raw transcripts: produce concise
   canonical output, deduplicate and reconcile, and prefer finished results over
   ambient context.
-- **Decision-bearing** — note conflicts, gaps, and confidence so the next stage
-  doesn't re-derive them.
+- **Decision-bearing** — note conflicts, gaps, and confidence so the flow leader
+  or next workgroup doesn't re-derive them.
 
 ## Checklist for long-running flows
 

@@ -1,7 +1,7 @@
 import type { OrchestraApi } from "./core/orchestra.ts";
 import type { AgentRun, AgentRunResult } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
-import type { WorkflowRun, WorkflowState } from "./core/workflow.ts";
+import type { WorkflowRun } from "./core/workflow.ts";
 
 export interface NamedEntity {
   id: string;
@@ -60,7 +60,9 @@ export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
   return workflow;
 }
 
-export function isTerminalAgentState(state: WorkflowState): boolean {
+export type LifecycleState = AgentRun["state"] | WorkflowRun["state"];
+
+export function isTerminalAgentState(state: LifecycleState): boolean {
   return state === "success" || state === "blocked" || state === "failed" || state === "closed";
 }
 

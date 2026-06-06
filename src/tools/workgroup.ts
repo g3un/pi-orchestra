@@ -10,7 +10,14 @@ import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import { createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
-import { formatError, formatNamedEntityLabel, normalizeEntityName, pluralize, slugify } from "../utils.ts";
+import {
+  closeAgentRuns,
+  formatError,
+  formatNamedEntityLabel,
+  normalizeEntityName,
+  pluralize,
+  slugify,
+} from "../utils.ts";
 import {
   AgentProfileParams,
   spawnSubagent,
@@ -108,7 +115,7 @@ export interface WorkgroupToolDeps {
 const WorkgroupActionParams = Type.String({
   enum: ["create", "add_members", "finish", "status"],
   description:
-    "create stores a workgroup; add_members spawns member subagents; finish records final output and closes the workgroup; status inspects a workgroup.",
+    "create stores a workgroup; add_members spawns member subagents; finish records the leader-owned final output and closes the workgroup; status inspects a workgroup.",
 });
 
 const WorkgroupToolParams = Type.Object(
@@ -159,7 +166,7 @@ const WorkgroupToolParams = Type.Object(
     ),
     summary: Type.Optional(
       Type.String({
-        description: "Required for action=finish. Concise final workgroup summary for main or the workflow stage.",
+        description: "Required for action=finish. Concise final workgroup summary for main or the workflow leader.",
       }),
     ),
     data: Type.Optional(
@@ -231,14 +238,10 @@ export function createWorkgroupTool({
 
       if (input.action === "finish") {
         if (workgroup.state !== "running") throw new Error(`Workgroup ${input.id} is ${workgroup.state}.`);
-        const closingWorkgroup: WorkgroupRun = { ...workgroup, state: "closing", result: input.result };
-        store.saveWorkgroup(closingWorkgroup);
-        await Promise.allSettled(
-          workgroup.memberRunIds.map(async (runId) => await orchestra.closeAgent(runId, { busId: undefined })),
-        );
-        orchestra.closeBus(bus.id);
-        const closedWorkgroup: WorkgroupRun = { ...closingWorkgroup, state: "closed" };
-        store.saveWorkgroup(closedWorkgroup);
+        const closedWorkgroup = await closeWorkgroupRun(orchestra, store, workgroup, {
+          includeLeader: false,
+          result: input.result,
+        });
         return {
           action: "finish",
           workgroup: closedWorkgroup,
@@ -301,17 +304,54 @@ export function createWorkgroupTool({
   };
 }
 
+export interface CloseWorkgroupRunOptions {
+  includeLeader: boolean;
+  /** undefined preserves the current result; null clears it. */
+  result: AgentResult | null | undefined;
+}
+
+export async function closeWorkgroupRun(
+  orchestra: OrchestraApi,
+  store: AgentStore,
+  workgroup: WorkgroupRun,
+  options: CloseWorkgroupRunOptions,
+): Promise<WorkgroupRun> {
+  const latestWorkgroup = store.getWorkgroup(workgroup.id) ?? workgroup;
+  const runIds = [
+    ...latestWorkgroup.memberRunIds,
+    ...(options.includeLeader && latestWorkgroup.leaderRunId ? [latestWorkgroup.leaderRunId] : []),
+  ];
+
+  if (latestWorkgroup.state === "closed") {
+    await closeAgentRuns(orchestra, runIds);
+    orchestra.closeBus(latestWorkgroup.busId);
+    return latestWorkgroup;
+  }
+
+  const result = options.result === undefined ? latestWorkgroup.result : options.result;
+  const closingWorkgroup: WorkgroupRun = { ...latestWorkgroup, state: "closing", result };
+  store.saveWorkgroup(closingWorkgroup);
+  await closeAgentRuns(orchestra, runIds);
+  orchestra.closeBus(latestWorkgroup.busId);
+
+  const latestAfterCleanup = store.getWorkgroup(workgroup.id) ?? closingWorkgroup;
+  const closedWorkgroup: WorkgroupRun = { ...latestAfterCleanup, state: "closed", result };
+  store.saveWorkgroup(closedWorkgroup);
+  return closedWorkgroup;
+}
+
 export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => WorkgroupTool) {
   return defineTool({
     name: "workgroup",
     label: "Workgroup",
-    description: "Create a workgroup on an existing bus, add member subagents, and finish it with final output.",
+    description: "Create a workgroup on a private bus, add member subagents, and finish it with final output.",
     promptSnippet: "Create a workgroup, add members when useful, then finish it with final output.",
     promptGuidelines: [
       "Use workgroup action=create to store the group goal; it creates a private coordination bus automatically.",
       "Use workgroup action=add_members whenever the group needs more member subagents; members are not fixed at creation time.",
       "Each member input provides profile, task, and name only; workgroup fills runtime action and private bus fields automatically.",
       "Use workgroup action=finish exactly once when the workgroup has enough output; finish closes the workgroup bus and all member subagents and sends a workgroup.finished event.",
+      "Only the workgroup leader should call workgroup action=finish; parent scopes should consume workgroup.finished rather than finishing for the leader.",
       "The leader decides whether to run competing alternatives, complementary research, reviews, or follow-ups before finishing.",
       "Prefer profile.preset with explicit tools when a built-in member profile fits; use custom systemPrompt only for one-off roles.",
       "publish_bus is peer-reference context, not a leader-request channel.",

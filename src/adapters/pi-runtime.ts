@@ -232,10 +232,10 @@ export class PiAgentRuntime implements AgentRuntime {
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
         this.assertOpenRun(run);
-        const ledWorkgroup = this.findRunningLedWorkgroup(run.id);
-        if (ledWorkgroup) {
+        const ledScope = this.findRunningLedScope(run.id);
+        if (ledScope) {
           throw new Error(
-            `Agent ${run.id} leads running workgroup ${ledWorkgroup.id}; use workgroup action=finish before finish.`,
+            `Agent ${run.id} leads running ${ledScope.type} ${ledScope.id}; use ${ledScope.type} action=finish before finish.`,
           );
         }
         const result: AgentResult = {
@@ -311,10 +311,16 @@ export class PiAgentRuntime implements AgentRuntime {
     return run !== undefined && isRunningWithoutResult(run);
   }
 
-  private findRunningLedWorkgroup(runId: string) {
-    return this.store
+  private findRunningLedScope(runId: string): { type: "workgroup" | "workflow"; id: string } | undefined {
+    const workgroup = this.store
       .listWorkgroups()
-      .find((workgroup) => workgroup.leaderRunId === runId && workgroup.state === "running");
+      .find((current) => current.leaderRunId === runId && current.state === "running");
+    if (workgroup) return { type: "workgroup", id: workgroup.id };
+
+    const workflow = this.store
+      .listWorkflows()
+      .find((current) => current.leaderRunId === runId && current.state === "running");
+    return workflow ? { type: "workflow", id: workflow.id } : undefined;
   }
 
   private requireBus(id: string): Bus {
@@ -406,6 +412,7 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     "## Completion",
     "- End with exactly one finalization path; never stop text-only.",
     "- If you lead a running workgroup, use workgroup action=finish before calling finish for your own run.",
+    "- If you lead a running workflow, use workflow action=finish before calling finish for your own run.",
     "- Otherwise call finish exactly once with status, summary, and useful data.",
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
     "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
