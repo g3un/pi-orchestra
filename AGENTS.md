@@ -8,6 +8,7 @@
 - Do not add, change, or rely on environment variables unless the user explicitly asks for them.
 - Do not mark data as optional just to provide defaults. Use required fields when the caller must make an explicit choice.
 - Prefer explicit inputs over implicit defaults when behavior affects runtime capabilities, tools, permissions, or public API contracts.
+- Treat LLM-facing tool parameter schemas as a boundary exception: when complex `anyOf`/`oneOf` unions would hurt provider/tool-calling compatibility or model usability, use a simple input shape with actionable runtime validation, then normalize immediately into strict core/runtime types.
 
 ## Project Structure
 

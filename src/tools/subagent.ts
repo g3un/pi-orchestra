@@ -2,6 +2,11 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Type } from "typebox";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
+import {
+  AGENT_PROFILE_PRESET_VALUES,
+  createAgentProfileFromPreset,
+  type AgentProfilePreset,
+} from "../profiles/presets.ts";
 import { formatNamedEntityLabel } from "../utils.ts";
 
 export interface SubagentSpawnInput {
@@ -49,21 +54,39 @@ export const SubagentRunNameParam = Type.String({
   description: "Optional globally unique short run name.",
 });
 
+const AgentProfileToolsParam = Type.Array(Type.String(), {
+  description:
+    "Explicit tool allowlist for the subagent. Use [] for no work tools; finish and publish_bus are added automatically.",
+});
+
+const AgentProfileModelParam = Type.Optional(
+  Type.String({
+    description: "Optional provider/model id.",
+  }),
+);
+
 export const AgentProfileParams = Type.Object(
   {
-    name: Type.String({ description: "Short role/name for the subagent." }),
-    systemPrompt: Type.String({ description: "System prompt for the subagent." }),
-    tools: Type.Array(Type.String(), {
-      description:
-        "Explicit tool allowlist for the subagent. Use [] for no work tools; finish and publish_bus are added automatically.",
-    }),
-    model: Type.Optional(
+    preset: Type.Optional(
       Type.String({
-        description: "Optional provider/model id.",
+        enum: [...AGENT_PROFILE_PRESET_VALUES],
+        description: "Reusable profile preset. Use this instead of writing a full systemPrompt when one fits.",
       }),
     ),
+    name: Type.Optional(
+      Type.String({ description: "Optional preset role/name override; required when preset is omitted." }),
+    ),
+    systemPrompt: Type.Optional(
+      Type.String({ description: "Required when preset is omitted. Do not include with preset profiles." }),
+    ),
+    tools: AgentProfileToolsParam,
+    model: AgentProfileModelParam,
   },
-  { description: "Required for action=spawn. Defines the subagent role." },
+  {
+    additionalProperties: false,
+    description:
+      "Required for action=spawn. Set preset plus tools/name/model overrides, or omit preset and provide name/systemPrompt/tools for a custom profile.",
+  },
 );
 
 const SubagentActionParams = Type.String({
@@ -148,6 +171,7 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     promptGuidelines: [
       "Create a bus first; spawn subscribes the subagent to busId.",
       "Attach cooperating subagents to the same bus.",
+      "Prefer profile.preset with explicit tools when a built-in profile fits; use custom systemPrompt only for one-off roles.",
       "Use returned run id/name for status, message, or close.",
     ],
     parameters: SubagentToolParams,
@@ -202,7 +226,26 @@ function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): Subagent
 }
 
 export function toAgentProfile(profile: RawAgentProfileParams): AgentProfile {
-  if (!Array.isArray(profile.tools)) throw new Error(`Profile "${profile.name}" requires tools.`);
+  const profileLabel = profile.preset ? `Profile preset "${profile.preset}"` : `Profile "${profile.name ?? "custom"}"`;
+  if (!Array.isArray(profile.tools)) throw new Error(`${profileLabel} requires tools.`);
+
+  if (profile.preset) {
+    if (profile.systemPrompt !== undefined) {
+      throw new Error(
+        `Profile preset "${profile.preset}" must not include systemPrompt; omit preset for a custom profile.`,
+      );
+    }
+
+    return createAgentProfileFromPreset({
+      preset: profile.preset,
+      name: profile.name,
+      tools: profile.tools,
+      model: profile.model,
+    });
+  }
+
+  if (profile.name === undefined) throw new Error("Custom profile requires name.");
+  if (profile.systemPrompt === undefined) throw new Error(`Profile "${profile.name}" requires systemPrompt.`);
   return {
     name: profile.name,
     systemPrompt: profile.systemPrompt,
@@ -259,6 +302,12 @@ type RawSubagentParams = {
   message?: string;
 };
 
-export type RawAgentProfileParams = Omit<AgentProfile, "model"> & Partial<Pick<AgentProfile, "model">>;
+export type RawAgentProfileParams = {
+  preset?: AgentProfilePreset;
+  name?: string;
+  systemPrompt?: string;
+  tools?: string[];
+  model?: string;
+};
 
 type AgentProfileModel = NonNullable<ExtensionContext["model"]>;

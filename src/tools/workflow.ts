@@ -168,7 +168,7 @@ export function defineWorkflowPiTool(
     promptGuidelines: [
       "Use workflow for ordered multi-stage work; not branching/DAG plans.",
       "Each stage gets its own bus and requires an explicit leader that synthesizes its workers' output; previous stage outputs feed the next stage.",
-      "Prefer the evidence-synthesizer profile for stage leaders unless the stage needs a specialized synthesizer; give the leader an explicit tool allowlist (often the union of its workers' tools).",
+      "Prefer profile.preset (especially evidence-synthesizer for stage leaders) with explicit tools when a built-in profile fits; use custom systemPrompt only for one-off roles.",
       "Use compete when one worker success is enough; use synthesize when findings must be combined.",
       "Use workflow status for progress; workflow.finished events deliver terminal success/blocked/failed/closed results.",
     ],

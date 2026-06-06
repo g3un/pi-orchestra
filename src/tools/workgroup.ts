@@ -201,6 +201,7 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
       "Create a bus first; workgroup only spawns members.",
       "Use workgroup compete when one successful member is enough; close losers after a success event if appropriate.",
       "Use workgroup synthesize when members provide complementary findings; react to member finish events as they arrive.",
+      "Prefer profile.preset with explicit tools when a built-in member profile fits; use custom systemPrompt only for one-off roles.",
       "publish_bus is peer-reference context, not a leader-request channel.",
     ],
     parameters: WorkgroupToolParams,

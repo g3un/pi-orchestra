@@ -42,10 +42,11 @@ Do not: <boundaries, destructive actions, scope exclusions>
 Finish with: status success/blocked/failed, a concise summary, evidence, risks, and structured data if useful.
 ```
 
-Profile defaults:
+Profile options:
 
-- `name`: short role name, e.g. `reviewer`, `planner`, `doc-researcher`.
-- `systemPrompt`: one paragraph describing expertise, constraints, and output discipline.
+- Prefer a built-in `preset` when it fits: `source-code-qa`, `external-researcher`, `code-reviewer`, or `evidence-synthesizer`.
+- With a preset, provide `tools` explicitly and optionally override `name` or `model`; do not write a duplicate `systemPrompt`.
+- For custom roles, provide `name`, `systemPrompt`, `tools`, and optionally `model`.
 - `tools`: always inject an explicit allowlist from the tools available to the main agent. Include only tools the child needs, including installed extension tool names for research/browser work. Use `[]` for supplied-context-only roles.
 - `model`: omit unless the task needs a specific provider/model.
 

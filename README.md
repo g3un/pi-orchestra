@@ -55,6 +55,8 @@ Use workflows for multi-step plans where later stages should depend on the summa
 
 Profile factories require an options object with an explicit `tools` allowlist. The main agent should inject the installed/active tool names each child actually needs. Pass `undefined` for `name` or `model` to use the factory default.
 
+Tool calls can use these reusable profiles through `profile.preset` instead of writing the full system prompt each time. Supported preset names are `source-code-qa`, `external-researcher`, `code-reviewer`, and `evidence-synthesizer`; each still requires an explicit `tools` allowlist and may override `name` or `model`.
+
 ## Notes
 
 - Create a `bus` before spawning related subagents or workgroups.

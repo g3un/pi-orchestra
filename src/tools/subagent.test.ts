@@ -12,6 +12,20 @@ const profile: AgentProfile = {
   model: undefined,
 };
 
+test("agent profile params resolve presets with overrides", () => {
+  const resolvedProfile = toAgentProfile({
+    preset: "source-code-qa",
+    tools: ["read"],
+    name: "repo-qa",
+    model: "mock/model",
+  });
+
+  assert.equal(resolvedProfile.name, "repo-qa");
+  assert.equal(resolvedProfile.model, "mock/model");
+  assert.deepEqual(resolvedProfile.tools, ["read"]);
+  assert.match(resolvedProfile.systemPrompt, /source-code QA agent/);
+});
+
 test("agent profile params require explicit tools", () => {
   assert.throws(
     () =>
@@ -21,6 +35,20 @@ test("agent profile params require explicit tools", () => {
       } as unknown as RawAgentProfileParams),
     /Profile "researcher" requires tools\./,
   );
+  assert.throws(
+    () => toAgentProfile({ preset: "code-reviewer" } as unknown as RawAgentProfileParams),
+    /Profile preset "code-reviewer" requires tools\./,
+  );
+  assert.throws(
+    () =>
+      toAgentProfile({
+        preset: "code-reviewer",
+        systemPrompt: "Custom prompt.",
+        tools: [],
+      } as RawAgentProfileParams),
+    /Profile preset "code-reviewer" must not include systemPrompt/,
+  );
+  assert.throws(() => toAgentProfile({ tools: [] } as RawAgentProfileParams), /Custom profile requires name\./);
 });
 
 test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
