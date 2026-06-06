@@ -86,13 +86,13 @@ test("toAgentRunResult copies result payloads only when present", () => {
   assert.deepEqual(toAgentRunResult(idleRun), {
     runId: idleRun.id,
     name: idleRun.name,
-    profile: idleRun.profile,
+    profile: idleRun.profile.name,
     state: "idle",
   });
   assert.deepEqual(toAgentRunResult(successRun), {
     runId: successRun.id,
     name: successRun.name,
-    profile: successRun.profile,
+    profile: successRun.profile.name,
     state: "idle",
     result: { status: "success", summary: "Done.", data: { file: "src/index.ts" } },
   });
@@ -119,7 +119,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",

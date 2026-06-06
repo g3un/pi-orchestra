@@ -203,7 +203,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",

@@ -87,7 +87,7 @@ export function toAgentRunResult(run: AgentRun): AgentRunResult {
   const runResult: AgentRunResult = {
     runId: run.id,
     name: run.name,
-    profile: run.profile,
+    profile: run.profile.name,
     state: run.state,
   };
   if (run.result !== undefined) runResult.result = run.result;

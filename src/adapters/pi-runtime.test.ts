@@ -46,7 +46,12 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   assert.deepEqual(run, {
     id: "agent-1",
     name: "Agent 1",
-    profile: "researcher",
+    profile: {
+      name: "researcher",
+      systemPrompt: "Research the assigned task.",
+      tools: ["read", "bash", "read"],
+      model: "mock-provider/mock-model",
+    },
     task: "Inspect the code.",
     busId: "bus-1",
     sessionFile: `${getProjectOrchestraSessionDir("/workspace")}/mock-session.jsonl`,

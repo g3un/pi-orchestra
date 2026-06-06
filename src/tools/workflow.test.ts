@@ -536,7 +536,7 @@ class FakeOrchestra implements OrchestraApi {
       ? {
           id: name,
           name,
-          profile: profile.name,
+          profile,
           task,
           busId: bus.id,
           state: "running",
@@ -545,7 +545,7 @@ class FakeOrchestra implements OrchestraApi {
       : {
           id: name,
           name,
-          profile: profile.name,
+          profile,
           task,
           busId: bus.id,
           state: "idle",

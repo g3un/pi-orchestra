@@ -186,7 +186,7 @@ class FakeOrchestra implements OrchestraApi {
     const spawnedRun = run({
       id: "agent-1",
       name: "agent-1",
-      profile: profile.name,
+      profile,
       task,
       busId,
       state: "running",
@@ -229,7 +229,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",

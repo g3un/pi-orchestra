@@ -79,7 +79,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const run: AgentRun = {
       id: options.id,
       name: options.name,
-      profile: profile.name,
+      profile,
       task,
       busId,
       sessionFile,

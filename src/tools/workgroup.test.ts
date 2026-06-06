@@ -147,7 +147,7 @@ test("workgroup member name checks are global", async () => {
   orchestra.runs.set("security-review", {
     id: "security-review",
     name: "security-review",
-    profile: "security",
+    profile: securityProfile,
     task: "Existing work.",
     busId: otherBus.id,
     sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
@@ -359,7 +359,7 @@ class FakeOrchestra implements OrchestraApi {
     const run: AgentRun = {
       id,
       name,
-      profile: profile.name,
+      profile,
       task,
       busId: bus.id,
       state: "running",
@@ -412,7 +412,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",

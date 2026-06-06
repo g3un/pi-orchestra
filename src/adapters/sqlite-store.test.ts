@@ -19,6 +19,7 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
     const busMessage = { id: "message-1", from: "main", message: "Persist this." };
     const savedRun = run({
       id: "agent-1",
+      profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: "mock/model" },
       result: { status: "success", summary: "Done.", data: { files: ["src/index.ts"] } },
     });
     const savedWorkflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
@@ -210,7 +211,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",

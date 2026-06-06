@@ -169,7 +169,7 @@ class FakeRuntime implements AgentRuntime {
     const run: AgentRun = {
       id: options.id,
       name: options.name,
-      profile: profile.name,
+      profile,
       task,
       busId,
       state: "running",
@@ -213,7 +213,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
   return {
     id,
     name: overrides.name ?? id,
-    profile: "researcher",
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "idle",
