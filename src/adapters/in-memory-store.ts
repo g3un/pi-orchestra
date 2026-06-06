@@ -9,6 +9,7 @@ import {
 } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
 /**
@@ -19,22 +20,25 @@ export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly buses = new Map<string, Bus>();
   private readonly busSubscriptionsById = new Map<string, BusSubscription>();
+  private readonly workgroups = new Map<string, WorkgroupRun>();
   private readonly workflows = new Map<string, WorkflowRun>();
   private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
   private readonly busMessageSubscriptions = new Set<StoreSubscription<BusMessageEvent>>();
+  private readonly workgroupSubscriptions = new Set<StoreSubscription<WorkgroupRun>>();
   private readonly workflowSubscriptions = new Set<StoreSubscription<WorkflowRun>>();
 
   saveRun(run: AgentRun): void {
-    this.runs.set(run.id, run);
-    notifySubscribers(this.runSubscriptions, run);
+    const savedRun = snapshot(run);
+    this.runs.set(run.id, savedRun);
+    notifySubscribers(this.runSubscriptions, snapshot(savedRun));
   }
 
   getRun(id: string): AgentRun | undefined {
-    return this.runs.get(id);
+    return snapshotOrUndefined(this.runs.get(id));
   }
 
   listRuns(): AgentRun[] {
-    return [...this.runs.values()];
+    return [...this.runs.values()].map(snapshot);
   }
 
   subscribeRuns(listener: (run: AgentRun) => void, filter: ((run: AgentRun) => boolean) | undefined): () => void {
@@ -42,29 +46,33 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   saveBus(bus: Bus): void {
-    this.buses.set(bus.id, bus);
+    this.buses.set(bus.id, snapshot(bus));
   }
 
   getBus(id: string): Bus | undefined {
-    return this.buses.get(id);
+    return snapshotOrUndefined(this.buses.get(id));
   }
 
   listBuses(): Bus[] {
-    return [...this.buses.values()];
+    return [...this.buses.values()].map(snapshot);
   }
 
   addBusMessage(busId: string, message: BusMessage): void {
     const bus = this.buses.get(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
 
-    const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
+    const savedMessage = snapshot(message);
+    const existingIndex = bus.messages.findIndex((current) => current.id === savedMessage.id);
+    const messages = [...bus.messages];
     if (existingIndex >= 0) {
-      bus.messages[existingIndex] = message;
+      messages[existingIndex] = savedMessage;
+      this.buses.set(bus.id, { ...bus, messages });
       return;
     }
 
-    bus.messages.push(message);
-    notifySubscribers(this.busMessageSubscriptions, { busId, message });
+    messages.push(savedMessage);
+    this.buses.set(bus.id, { ...bus, messages });
+    notifySubscribers(this.busMessageSubscriptions, { busId, message: snapshot(savedMessage) });
   }
 
   subscribeBusMessages(
@@ -75,34 +83,56 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   saveBusSubscription(subscription: BusSubscription): void {
-    this.busSubscriptionsById.set(subscription.id, subscription);
+    this.busSubscriptionsById.set(subscription.id, snapshot(subscription));
   }
 
   getBusSubscription(id: string): BusSubscription | undefined {
-    return this.busSubscriptionsById.get(id);
+    return snapshotOrUndefined(this.busSubscriptionsById.get(id));
   }
 
   listBusSubscriptions(options: ListBusSubscriptionsOptions): BusSubscription[] {
-    return [...this.busSubscriptionsById.values()].filter((subscription) =>
-      matchesBusSubscription(subscription, options),
-    );
+    return [...this.busSubscriptionsById.values()]
+      .filter((subscription) => matchesBusSubscription(subscription, options))
+      .map(snapshot);
   }
 
   deleteBusSubscription(id: string): void {
     this.busSubscriptionsById.delete(id);
   }
 
+  saveWorkgroup(workgroup: WorkgroupRun): void {
+    const savedWorkgroup = snapshot(workgroup);
+    this.workgroups.set(workgroup.id, savedWorkgroup);
+    notifySubscribers(this.workgroupSubscriptions, snapshot(savedWorkgroup));
+  }
+
+  getWorkgroup(id: string): WorkgroupRun | undefined {
+    return snapshotOrUndefined(this.workgroups.get(id));
+  }
+
+  listWorkgroups(): WorkgroupRun[] {
+    return [...this.workgroups.values()].map(snapshot);
+  }
+
+  subscribeWorkgroups(
+    listener: (workgroup: WorkgroupRun) => void,
+    filter: ((workgroup: WorkgroupRun) => boolean) | undefined,
+  ): () => void {
+    return subscribeStore(this.workgroupSubscriptions, listener, filter);
+  }
+
   saveWorkflow(workflow: WorkflowRun): void {
-    this.workflows.set(workflow.id, workflow);
-    notifySubscribers(this.workflowSubscriptions, workflow);
+    const savedWorkflow = snapshot(workflow);
+    this.workflows.set(workflow.id, savedWorkflow);
+    notifySubscribers(this.workflowSubscriptions, snapshot(savedWorkflow));
   }
 
   getWorkflow(id: string): WorkflowRun | undefined {
-    return this.workflows.get(id);
+    return snapshotOrUndefined(this.workflows.get(id));
   }
 
   listWorkflows(): WorkflowRun[] {
-    return [...this.workflows.values()];
+    return [...this.workflows.values()].map(snapshot);
   }
 
   subscribeWorkflows(
@@ -111,4 +141,12 @@ export class InMemoryAgentStore implements AgentStore {
   ): () => void {
     return subscribeStore(this.workflowSubscriptions, listener, filter);
   }
+}
+
+function snapshot<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function snapshotOrUndefined<T>(value: T | undefined): T | undefined {
+  return value === undefined ? undefined : snapshot(value);
 }

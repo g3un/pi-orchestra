@@ -89,7 +89,6 @@ test("tools coordinate buses, subagents, messages, and completion events through
   const messaged = await subagentTool.execute({
     action: "message",
     id: "reviewer-b",
-    busId: "Review Work",
     message: "Re-check with the new strict-mode constraint.",
   });
 
@@ -128,16 +127,12 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
       {
         name: "collect",
         goal: "Collect readiness signals.",
-        strategy: "synthesize",
-        members: [{ name: "collect-worker", profile: researcherProfile, assignment: undefined }],
-        leader: { name: "collect-leader", profile: reviewerProfile, assignment: undefined },
+        leader: { name: "collect-leader", profile: reviewerProfile },
       },
       {
         name: "summarize",
         goal: "Summarize release readiness.",
-        strategy: "synthesize",
-        members: [{ name: "summary-worker", profile: reviewerProfile, assignment: undefined }],
-        leader: { name: "summary-leader", profile: reviewerProfile, assignment: undefined },
+        leader: { name: "summary-leader", profile: reviewerProfile },
       },
     ],
   });
@@ -161,17 +156,14 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   );
   assert.deepEqual(
     runtime.spawned.map((spawn) => spawn.options.name),
-    ["collect-worker", "collect-leader", "summary-worker", "summary-leader"],
+    ["collect-leader", "summary-leader"],
   );
 
-  const summaryWorkerTask = runtime.spawned.find((spawn) => spawn.options.name === "summary-worker")?.task ?? "";
-  assert.match(summaryWorkerTask, /<previous_stage_outputs>/);
-  assert.match(summaryWorkerTask, /<stage_output name="collect">/);
-  assert.match(summaryWorkerTask, /collect-leader completed\./);
-
   const summaryLeaderTask = runtime.spawned.find((spawn) => spawn.options.name === "summary-leader")?.task ?? "";
-  assert.match(summaryLeaderTask, /<worker_results>/);
-  assert.match(summaryLeaderTask, /summary-worker completed\./);
+  assert.match(summaryLeaderTask, /<previous_stage_outputs>/);
+  assert.match(summaryLeaderTask, /<stage_output name="collect">/);
+  assert.match(summaryLeaderTask, /collect-leader completed\./);
+  assert.match(summaryLeaderTask, /action=add_members/);
   assert.match(completed.message, /Workflow release-flow is success\./);
 });
 

@@ -1,7 +1,7 @@
 // Records are persisted as JSON payloads keyed by id rather than normalized columns:
-// the store is accessed only by primary key (TypeScript owns the shape, querying/filtering
-// happens in the application layer), so a document layout avoids joins and lets the domain
-// types evolve without schema migrations.
+// the store is accessed only by primary key (querying/filtering happens in the
+// application layer), so a document layout avoids joins. The store layout is still
+// versioned; incompatible local stores are rejected with a recreate-store message.
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -16,9 +16,10 @@ import {
 } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
 const ORCHESTRA_STORE_RELATIVE_DIR = join(".pi", "orchestra");
 const ORCHESTRA_STORE_FILENAME = "store.db";
 
@@ -35,13 +36,14 @@ export class SqliteAgentStore implements AgentStore {
   private readonly statements: StoreStatements;
   private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
   private readonly busMessageSubscriptions = new Set<StoreSubscription<BusMessageEvent>>();
+  private readonly workgroupSubscriptions = new Set<StoreSubscription<WorkgroupRun>>();
   private readonly workflowSubscriptions = new Set<StoreSubscription<WorkflowRun>>();
   private closed = false;
 
   constructor(options: SqliteAgentStoreOptions) {
     mkdirSync(dirname(options.databasePath), { recursive: true });
     this.db = new DatabaseSync(options.databasePath, { timeout: 5_000 });
-    initializeSchema(this.db);
+    initializeSchema(this.db, options.databasePath);
     this.statements = prepareStatements(this.db);
   }
 
@@ -119,6 +121,26 @@ export class SqliteAgentStore implements AgentStore {
     this.statements.deleteBusSubscription.run(id);
   }
 
+  saveWorkgroup(workgroup: WorkgroupRun): void {
+    this.statements.saveWorkgroup.run(workgroup.id, stringifyPayload(workgroup, `workgroup ${workgroup.id}`));
+    notifySubscribers(this.workgroupSubscriptions, workgroup);
+  }
+
+  getWorkgroup(id: string): WorkgroupRun | undefined {
+    return getPayload(this.statements.getWorkgroup, id, `workgroup ${id}`);
+  }
+
+  listWorkgroups(): WorkgroupRun[] {
+    return listPayloads(this.statements.listWorkgroups, "workgroups");
+  }
+
+  subscribeWorkgroups(
+    listener: (workgroup: WorkgroupRun) => void,
+    filter: ((workgroup: WorkgroupRun) => boolean) | undefined,
+  ): () => void {
+    return subscribeStore(this.workgroupSubscriptions, listener, filter);
+  }
+
   saveWorkflow(workflow: WorkflowRun): void {
     this.statements.saveWorkflow.run(workflow.id, stringifyPayload(workflow, `workflow ${workflow.id}`));
     notifySubscribers(this.workflowSubscriptions, workflow);
@@ -157,6 +179,9 @@ interface StoreStatements {
   getBusSubscription: StatementSync;
   listBusSubscriptions: StatementSync;
   deleteBusSubscription: StatementSync;
+  saveWorkgroup: StatementSync;
+  getWorkgroup: StatementSync;
+  listWorkgroups: StatementSync;
   saveWorkflow: StatementSync;
   getWorkflow: StatementSync;
   listWorkflows: StatementSync;
@@ -170,10 +195,16 @@ export function createProjectSqliteAgentStore(cwd: string): SqliteAgentStore {
   return new SqliteAgentStore({ databasePath: getProjectSqliteStorePath(cwd) });
 }
 
-function initializeSchema(db: DatabaseSync): void {
+function initializeSchema(db: DatabaseSync, databasePath: string): void {
   const schemaVersion = getSchemaVersion(db);
   if (schemaVersion > SCHEMA_VERSION) {
     throw new Error(`Unsupported pi-orchestra SQLite store schema version ${schemaVersion}.`);
+  }
+  if (schemaVersion > 0 && schemaVersion < SCHEMA_VERSION) {
+    throw new Error(formatIncompatibleSchemaMessage(schemaVersion, databasePath));
+  }
+  if (schemaVersion === 0 && hasExistingStoreTables(db)) {
+    throw new Error(formatIncompatibleSchemaMessage(schemaVersion, databasePath));
   }
 
   db.exec(`
@@ -195,6 +226,11 @@ function initializeSchema(db: DatabaseSync): void {
       payload_json TEXT NOT NULL
     ) STRICT;
 
+    CREATE TABLE IF NOT EXISTS workgroups (
+      id TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+
     CREATE TABLE IF NOT EXISTS workflows (
       id TEXT PRIMARY KEY,
       payload_json TEXT NOT NULL
@@ -202,6 +238,23 @@ function initializeSchema(db: DatabaseSync): void {
   `);
 
   if (schemaVersion < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+}
+
+function hasExistingStoreTables(db: DatabaseSync): boolean {
+  const rows = db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'buses', 'bus_subscriptions', 'workflows', 'workgroups')`,
+    )
+    .all() as unknown as Array<{ name: string }>;
+  return rows.length > 0;
+}
+
+function formatIncompatibleSchemaMessage(schemaVersion: number, databasePath: string): string {
+  return [
+    `Unsupported pi-orchestra SQLite store schema version ${schemaVersion}; expected ${SCHEMA_VERSION}.`,
+    "The local orchestration store layout changed and pi-orchestra will not migrate it automatically.",
+    `Delete ${databasePath} and run the command again to create a fresh store.`,
+  ].join(" ");
 }
 
 function getSchemaVersion(db: DatabaseSync): number {
@@ -233,6 +286,13 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
     getBusSubscription: db.prepare("SELECT payload_json FROM bus_subscriptions WHERE id = ?"),
     listBusSubscriptions: db.prepare("SELECT payload_json FROM bus_subscriptions ORDER BY rowid"),
     deleteBusSubscription: db.prepare("DELETE FROM bus_subscriptions WHERE id = ?"),
+    saveWorkgroup: db.prepare(`
+      INSERT INTO workgroups (id, payload_json)
+      VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json
+    `),
+    getWorkgroup: db.prepare("SELECT payload_json FROM workgroups WHERE id = ?"),
+    listWorkgroups: db.prepare("SELECT payload_json FROM workgroups ORDER BY rowid"),
     saveWorkflow: db.prepare(`
       INSERT INTO workflows (id, payload_json)
       VALUES (?, ?)

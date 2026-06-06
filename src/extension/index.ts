@@ -62,18 +62,24 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   const orchestraEvents = new OrchestraEventController({
     store,
     sendEvents: (events, content) => sendOrchestraEvents(pi, events, content),
+    sendAgentEvents: (runId, _events, content) => {
+      void orchestra.messageAgent(runId, content, { busId: undefined }).catch(() => undefined);
+    },
     flushDelayMs: undefined,
   });
   const workgroupTool = createWorkgroupTool({
     orchestra,
-    onWorkgroupLaunching: ({ input, bus }) => orchestraEvents.beginWorkgroup(bus.id, input.strategy),
-    onWorkgroupLaunched: ({ input, output }) =>
+    store,
+    onWorkgroupLaunching: ({ bus, workgroup, runIds }) =>
+      orchestraEvents.beginWorkgroup({ busId: bus.id, leaderRunId: workgroup.leaderRunId, runIds }),
+    onWorkgroupLaunched: ({ bus, workgroup, output }) =>
       orchestraEvents.registerWorkgroup({
-        busId: output.bus.id,
-        strategy: input.strategy,
+        busId: bus.id,
+        leaderRunId: workgroup.leaderRunId,
         runIds: output.runs.map((run) => run.id),
       }),
-    onWorkgroupLaunchFailed: ({ bus }) => orchestraEvents.cancelWorkgroupLaunch(bus.id),
+    onWorkgroupLaunchFailed: ({ bus, runIds }) =>
+      orchestraEvents.cancelWorkgroupLaunch(bus.id, { suppressRunIds: runIds }),
   });
   const bundle = {
     busTool: createBusTool({ orchestra, store }),

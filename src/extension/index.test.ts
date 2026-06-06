@@ -73,10 +73,16 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.match(parameters.properties.busId?.description ?? "", /Existing bus id\/name/);
+  assert.equal(parameters.properties.busId, undefined);
   assert.match(parameters.properties.goal?.description ?? "", /Shared workgroup goal/);
-  assert.deepEqual(parameters.properties.strategy?.enum, ["compete", "synthesize"]);
-  assert.match(parameters.properties.members?.description ?? "", /Subagents/);
+  assert.equal(parameters.properties.strategy, undefined);
+  assert.match(parameters.properties.members?.description ?? "", /subagents/);
+  assert.ok(parameters.properties.members?.items?.properties);
+  assert.equal(parameters.properties.members.items.properties.action, undefined);
+  assert.equal(parameters.properties.members.items.properties.busId, undefined);
+  assert.ok(parameters.properties.members.items.properties.profile);
+  assert.ok(parameters.properties.members.items.properties.task);
+  assert.ok(parameters.properties.members.items.properties.name);
 });
 
 test("workflow parameters use an OpenAI-compatible root object schema without wait action", () => {
@@ -117,7 +123,12 @@ test("extension backs tools with a project-local SQLite store", async () => {
     assert.equal(existsSync(getProjectSqliteStorePath(cwd)), true);
     const store = createProjectSqliteAgentStore(cwd);
     try {
-      assert.deepEqual(store.getBus("persistent-bus"), { id: "persistent-bus", name: "Persistent Bus", messages: [] });
+      assert.deepEqual(store.getBus("persistent-bus"), {
+        id: "persistent-bus",
+        name: "Persistent Bus",
+        state: "open",
+        messages: [],
+      });
     } finally {
       store.dispose();
     }
@@ -180,4 +191,5 @@ interface JsonSchemaObject {
 interface JsonSchemaProperty {
   enum?: string[];
   description?: string;
+  items?: JsonSchemaObject;
 }

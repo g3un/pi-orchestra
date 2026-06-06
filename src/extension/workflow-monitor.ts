@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
-import { isAgentRunFinished, isTerminalAgentState } from "../utils.ts";
+import { isAgentRunFinished, isTerminalAgentState, pluralize } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
 const MAX_MONITORED_WORKFLOWS = 2;
@@ -160,19 +160,22 @@ function pad2(value: number): string {
 function calculateStageProgress(store: AgentStore, stage: WorkflowStageRun): { completed: number; total: number } {
   const runs = collectStageRuns(store, stage);
   const completed = runs.filter(isAgentRunFinished).length;
-  const workerRunCount = runs.filter((run) => run.id !== stage.leaderRunId).length;
-  const workerTotal = Math.max(stage.members.length, stage.workerRunIds.length, workerRunCount);
+  const memberRunCount = runs.filter((run) => run.id !== stage.leaderRunId).length;
+  const memberRunIds = stage.workgroupId ? (store.getWorkgroup(stage.workgroupId)?.memberRunIds ?? []) : [];
+  const memberTotal = Math.max(memberRunIds.length, memberRunCount);
   const leaderTotal = stage.phase === "leader" || stage.leaderRunId !== undefined ? 1 : 0;
-  const total = Math.max(workerTotal + leaderTotal, runs.length);
+  const total = Math.max(memberTotal + leaderTotal, runs.length);
   return { completed: Math.min(completed, total), total };
 }
 
 function collectStageRuns(store: AgentStore, stage: WorkflowStageRun): AgentRun[] {
   const runsById = new Map<string, AgentRun>();
 
-  for (const runId of stage.workerRunIds) {
-    const run = store.getRun(runId);
-    if (run) runsById.set(run.id, run);
+  if (stage.workgroupId) {
+    for (const runId of store.getWorkgroup(stage.workgroupId)?.memberRunIds ?? []) {
+      const run = store.getRun(runId);
+      if (run) runsById.set(run.id, run);
+    }
   }
 
   if (stage.leaderRunId) {
@@ -187,8 +190,4 @@ function collectStageRuns(store: AgentStore, stage: WorkflowStageRun): AgentRun[
   }
 
   return [...runsById.values()];
-}
-
-function pluralize(noun: string, count: number): string {
-  return count === 1 ? noun : `${noun}s`;
 }

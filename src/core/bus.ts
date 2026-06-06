@@ -1,3 +1,5 @@
+export type BusState = "open" | "closed";
+
 export interface BusMessage {
   id: string;
   message: string;
@@ -28,6 +30,7 @@ export interface ListBusSubscriptionsOptions {
 export interface Bus {
   id: string;
   name: string;
+  state: BusState;
   messages: BusMessage[];
 }
 

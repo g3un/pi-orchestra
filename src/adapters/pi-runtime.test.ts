@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { beforeEach, test, vi } from "vitest";
 import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { getProjectOrchestraSessionDir, PiAgentRuntime } from "./pi-runtime.ts";
 
@@ -25,7 +26,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 test("pi runtime spawns sessions with resolved models, tools, and the initial prompt", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
   const resolvedModel = model({ provider: "mock-provider", id: "mock-model" });
   const resolveModel = vi.fn(async () => resolvedModel);
@@ -58,7 +59,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     state: "running",
     result: null,
   });
-  assert.equal(store.getRun(run.id), run);
+  assert.deepEqual(store.getRun(run.id), run);
   assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", run.id)), {
     id: createBusSubscriptionId("bus-1", "agent", run.id),
     busId: "bus-1",
@@ -83,13 +84,13 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   assert.match(session.promptCalls[0]?.message ?? "", /You are subagent run "Agent 1" with profile "researcher"\./);
   assert.match(session.promptCalls[0]?.message ?? "", /## System prompt\nResearch the assigned task\./);
   assert.match(session.promptCalls[0]?.message ?? "", /## Task\nInspect the code\./);
-  assert.match(session.promptCalls[0]?.message ?? "", /End by calling finish exactly once/);
+  assert.match(session.promptCalls[0]?.message ?? "", /End with exactly one finalization path/);
   assert.deepEqual(session.promptCalls[0]?.options, { expandPromptTemplates: false });
 });
 
 test("pi runtime rejects profiles without explicit tools", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
 
   await assert.rejects(
@@ -111,6 +112,7 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
   store.saveBus({
     id: "bus-1",
     name: "Bus 1",
+    state: "open",
     messages: [
       { id: "message-1", from: "main", message: "Existing shared context." },
       { id: "message-2", from: "agent-1", message: "Own message." },
@@ -141,7 +143,7 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
 
 test("pi runtime publishes bus messages and steers active sibling sessions without replaying seen messages", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const firstSession = queueSession();
   const secondSession = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
@@ -184,8 +186,8 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
 
 test("pi runtime publishes bus messages to active subscribers rather than run bus membership", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
-  store.saveBus({ id: "bus-2", name: "Bus 2", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  store.saveBus({ id: "bus-2", name: "Bus 2", state: "open", messages: [] });
   const session = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
@@ -211,7 +213,7 @@ test("pi runtime publishes bus messages to active subscribers rather than run bu
 
 test("pi runtime child tools publish to the run bus, finish runs, and reject closed runs", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
@@ -251,9 +253,37 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   );
 });
 
+test("pi runtime finish requires running workgroup leaders to finish the workgroup first", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const run = await runtime.spawn(
+    { name: "leader", systemPrompt: "Lead the group.", tools: ["workgroup"], model: undefined },
+    "Lead the workgroup.",
+    "bus-1",
+    { id: "leader-1", name: "Leader 1" },
+  );
+  store.saveWorkgroup(workgroupRun({ leaderRunId: run.id, state: "running" }));
+  const finishTool = customTool("finish");
+
+  await assert.rejects(
+    () => finishTool.execute("tool-call-1", { status: "success", summary: "Too early." }),
+    /Agent leader-1 leads running workgroup workgroup-1; use workgroup action=finish before finish\./,
+  );
+
+  store.saveWorkgroup(
+    workgroupRun({ leaderRunId: run.id, state: "closed", result: { status: "success", summary: "Done." } }),
+  );
+  const output = await finishTool.execute("tool-call-2", { status: "success", summary: "Leader done." });
+
+  assert.equal(output.terminate, true);
+  assert.equal(store.getRun(run.id)?.state, "success");
+});
+
 test("pi runtime steers streaming running runs and restarts idle result runs on message", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
   const run = await runtime.spawn(
@@ -265,7 +295,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
 
   const steeredRun = await runtime.message(run.id, "Please adjust your approach.");
 
-  assert.equal(steeredRun, run);
+  assert.deepEqual(steeredRun, run);
   assert.deepEqual(session.steerCalls, ["Please adjust your approach."]);
   assert.equal(session.promptCalls.length, 1);
 
@@ -286,7 +316,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
 
 test("pi runtime marks a run failed when the session ends without finish", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   queueSession(
     new FakeSession((_message, _options, session) => {
       session.messages.push({
@@ -320,7 +350,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
 
 test("pi runtime rejects unresolved profile models before creating a session", async () => {
   const store = new InMemoryAgentStore();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: async () => undefined });
 
   await assert.rejects(
@@ -455,6 +485,21 @@ function model(overrides: Partial<Model<"openai-responses">> = {}): Model<"opena
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 4_096,
+    ...overrides,
+  };
+}
+
+function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  return {
+    id: "workgroup-1",
+    name: "workgroup-1",
+    busId: "bus-1",
+    goal: "Complete workgroup.",
+    leaderRunId: null,
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    createdAtMs: 1_700_000_000_000,
     ...overrides,
   };
 }

@@ -65,7 +65,7 @@ Start from behavior, then select runtime options.
 - Establish quality with a capable model/runtime first, then lower cost or
   latency only after evals show the profile still meets its contract.
 - Prefer a simpler single profile when instructions and tools stay coherent.
-  Add routing, workers, or specialized profiles only when complexity improves
+  Add routing, members, or specialized profiles only when complexity improves
   measured outcomes.
 - Include stopping conditions or blocker behavior when the runtime allows
   long-running loops.

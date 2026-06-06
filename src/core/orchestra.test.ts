@@ -21,10 +21,39 @@ test("orchestra creates buses in the store", () => {
 
   const bus = orchestra.createBus({ name: undefined });
 
-  assert.equal(store.getBus(bus.id), bus);
+  assert.deepEqual(store.getBus(bus.id), bus);
   assert.equal(bus.id, "bus");
   assert.equal(bus.name, "bus");
+  assert.equal(bus.state, "open");
   assert.deepEqual(bus.messages, []);
+});
+
+test("orchestra closes buses, clears subscriptions, and rejects new work", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus({ name: "Close Me" });
+  store.saveBusSubscription({
+    id: "sub-1",
+    busId: bus.id,
+    subscriberId: "main",
+    subscriberKind: "main",
+    deliveredMessageIds: [],
+  });
+
+  const closedBus = orchestra.closeBus(bus.name);
+
+  assert.equal(closedBus?.state, "closed");
+  assert.equal(store.getBus(bus.id)?.state, "closed");
+  assert.deepEqual(
+    store.listBusSubscriptions({ busId: bus.id, subscriberId: undefined, subscriberKind: undefined }),
+    [],
+  );
+  await assert.rejects(() => orchestra.publishBus(bus.id, "Too late.", "main"), /Bus close-me is closed\./);
+  await assert.rejects(
+    () => orchestra.spawnAgent(profile, "Too late.", bus.id, { name: "late-agent" }),
+    /Bus close-me is closed\./,
+  );
 });
 
 test("orchestra accepts short names for buses and agent runs", async () => {
@@ -37,10 +66,10 @@ test("orchestra accepts short names for buses and agent runs", async () => {
 
   assert.equal(bus.id, "frontend-audit");
   assert.equal(bus.name, "Frontend Audit");
-  assert.equal(orchestra.getBus(bus.name), bus);
+  assert.deepEqual(orchestra.getBus(bus.name), bus);
   assert.equal(run.id, "reviewer-a");
   assert.equal(run.name, "Reviewer A");
-  assert.equal(orchestra.getRun(run.name, { busId: undefined }), run);
+  assert.deepEqual(orchestra.getRun(run.name, { busId: undefined }), run);
 });
 
 test("orchestra keeps agent run names globally unique", async () => {
@@ -62,7 +91,7 @@ test("orchestra keeps agent run names globally unique", async () => {
   assert.equal(firstAutoRun.name, "researcher");
   assert.equal(secondAutoRun.id, "researcher-2");
   assert.equal(secondAutoRun.name, "researcher-2");
-  assert.equal(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
+  assert.deepEqual(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
   await assert.rejects(
     () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer" }),
     /Agent name "Reviewer" is already in use\./,
@@ -115,8 +144,8 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   assert.deepEqual(runtime.spawned, { profile, task: "Inspect the code.", busId: bus.id });
   assert.deepEqual(runtime.messaged, { id: run.id, message: "Continue." });
   assert.deepEqual(runtime.closedIds, [run.id]);
-  assert.equal(orchestra.getRun(run.id, { busId: undefined }), closedRun);
-  assert.equal(store.getRun(run.id), closedRun);
+  assert.deepEqual(orchestra.getRun(run.id, { busId: undefined }), closedRun);
+  assert.deepEqual(store.getRun(run.id), closedRun);
   assert.equal(messagedRun.state, "running");
   assert.equal(closedRun?.state, "closed");
 });
@@ -131,7 +160,7 @@ test("orchestra publishes bus messages through runtime and reads updated store s
 
   assert.deepEqual(runtime.published, { busId: bus.id, message: "New constraint.", from: "main" });
   assert.deepEqual(output.bus.messages, [output.busMessage]);
-  assert.equal(store.getBus(bus.id), output.bus);
+  assert.deepEqual(store.getBus(bus.id), output.bus);
 });
 
 test("orchestra messages reusable finished agents", async () => {

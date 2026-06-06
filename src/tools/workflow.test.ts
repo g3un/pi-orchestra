@@ -8,38 +8,10 @@ import { isTerminalAgentState, slugify } from "../utils.ts";
 import { createEvidenceSynthesizerProfile } from "../profiles/evidence-synthesizer.ts";
 import { createWorkflowTool } from "./workflow.ts";
 
-const workerProfile: AgentProfile = {
-  name: "worker",
-  systemPrompt: "Do worker tasks.",
-  tools: ["read", "bash"],
-  model: undefined,
-};
-
 const leaderProfile: AgentProfile = {
   name: "leader",
-  systemPrompt: "Synthesize worker output.",
+  systemPrompt: "Lead stage members.",
   tools: ["read"],
-  model: undefined,
-};
-
-const blockedWorkerProfile: AgentProfile = {
-  name: "blocked-worker-profile",
-  systemPrompt: "Block the worker task.",
-  tools: ["read", "bash"],
-  model: undefined,
-};
-
-const failedWorkerProfile: AgentProfile = {
-  name: "failed-worker-profile",
-  systemPrompt: "Fail the worker task.",
-  tools: ["read", "bash"],
-  model: undefined,
-};
-
-const hangingWorkerProfile: AgentProfile = {
-  name: "hanging-worker-profile",
-  systemPrompt: "Keep working until cancelled.",
-  tools: ["read", "bash"],
   model: undefined,
 };
 
@@ -57,6 +29,13 @@ const failedLeaderProfile: AgentProfile = {
   model: undefined,
 };
 
+const hangingLeaderProfile: AgentProfile = {
+  name: "hanging-leader",
+  systemPrompt: "Wait for workgroup finish.",
+  tools: ["workgroup"],
+  model: undefined,
+};
+
 test("workflow runs linear stages and feeds leader output forward", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
@@ -70,16 +49,12 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "synthesize",
-        members: [{ name: "collect-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "collect-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "collect-lead", profile: leaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        strategy: "synthesize",
-        members: [{ name: "analyze-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "analyze-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "analyze-lead", profile: leaderProfile },
       },
     ],
   });
@@ -97,19 +72,106 @@ test("workflow runs linear stages and feeds leader output forward", async () => 
     [...orchestra.buses.values()].flatMap((bus) => bus.messages),
     [],
   );
-  assert.match(
-    orchestra.spawned.find((spawn) => spawn.name === "analyze-worker")?.task ?? "",
-    /<stage_output name="collect">/,
-  );
-  assert.match(orchestra.spawned.find((spawn) => spawn.name === "analyze-worker")?.task ?? "", /collect-lead summary/);
+  const collectStage = output.workflow.stages[0];
+  assert.ok(collectStage?.workgroupId);
+  assert.equal(store.getWorkgroup(collectStage.workgroupId)?.leaderRunId, "collect-lead");
   const analyzeLeaderTask = orchestra.spawned.find((spawn) => spawn.name === "analyze-lead")?.task ?? "";
   assert.match(analyzeLeaderTask, /<stage_output name="collect">/);
   assert.match(analyzeLeaderTask, /collect-lead summary/);
-  assert.match(analyzeLeaderTask, /Treat supplied context as primary/);
-  assert.match(analyzeLeaderTask, /note gaps/);
+  assert.match(analyzeLeaderTask, /Workgroup id:/);
+  assert.match(analyzeLeaderTask, /action=add_members/);
 });
 
-test("workflow compete stage races to first success then uses a leader", async () => {
+test("workflow stage can finish from workgroup final output", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  await workflowTool.execute({
+    action: "start",
+    name: "workgroup-finish-flow",
+    goal: "Generate alternatives.",
+    stages: [
+      {
+        name: "options",
+        goal: "Produce independent options.",
+        leader: { name: "workgroup-finish-lead", profile: hangingLeaderProfile },
+      },
+    ],
+  });
+
+  await eventually(() => store.listWorkgroups().some((workgroup) => workgroup.leaderRunId === "workgroup-finish-lead"));
+  const workgroup = store.listWorkgroups().find((current) => current.leaderRunId === "workgroup-finish-lead");
+  assert.ok(workgroup);
+  store.saveWorkgroup({
+    ...workgroup,
+    state: "closed",
+    result: { status: "success", summary: "Workgroup chose option A.", data: { option: "A" } },
+  });
+
+  const output = { workflow: await waitForWorkflow(store, "workgroup-finish-flow") };
+
+  assert.equal(output.workflow.state, "success");
+  assert.equal(output.workflow.result?.summary, "Workgroup chose option A.");
+  assert.deepEqual(output.workflow.result?.data, { option: "A" });
+  assert.equal(orchestra.runs.get("workgroup-finish-lead")?.state, "closed");
+});
+
+test("workflow closes workgroup members and bus when the leader finishes first", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  await workflowTool.execute({
+    action: "start",
+    name: "leader-finish-flow",
+    goal: "Generate alternatives.",
+    stages: [
+      {
+        name: "options",
+        goal: "Produce independent options.",
+        leader: { name: "early-lead", profile: hangingLeaderProfile },
+      },
+    ],
+  });
+
+  await eventually(() => store.listWorkgroups().some((workgroup) => workgroup.leaderRunId === "early-lead"));
+  const workgroup = store.listWorkgroups().find((current) => current.leaderRunId === "early-lead");
+  assert.ok(workgroup);
+  const memberRun: AgentRun = {
+    id: "slow-member",
+    name: "slow-member",
+    profile: leaderProfile,
+    task: "Slow member work.",
+    busId: workgroup.busId,
+    sessionFile: ".pi/orchestra/sessions/slow-member.jsonl",
+    state: "running",
+    result: null,
+  };
+  orchestra.runs.set(memberRun.id, memberRun);
+  store.saveRun(memberRun);
+  store.saveWorkgroup({ ...workgroup, memberRunIds: [memberRun.id] });
+  const leaderRun = store.getRun("early-lead");
+  assert.ok(leaderRun);
+  const finishedLeader: AgentRun = {
+    ...leaderRun,
+    state: "success",
+    result: { status: "success", summary: "Leader has enough evidence." },
+  };
+  orchestra.runs.set(finishedLeader.id, finishedLeader);
+  store.saveRun(finishedLeader);
+
+  const output = { workflow: await waitForWorkflow(store, "leader-finish-flow") };
+  const closedWorkgroup = store.getWorkgroup(workgroup.id);
+
+  assert.equal(output.workflow.state, "success");
+  assert.deepEqual(output.workflow.result?.memberResults, []);
+  assert.equal(closedWorkgroup?.state, "closed");
+  assert.equal(store.getBus(workgroup.busId)?.state, "closed");
+  assert.equal(orchestra.runs.get(memberRun.id)?.state, "closed");
+});
+
+test("workflow stage leader decides how to create members", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -122,12 +184,7 @@ test("workflow compete stage races to first success then uses a leader", async (
       {
         name: "options",
         goal: "Produce independent options.",
-        strategy: "compete",
-        members: [
-          { name: "option-worker", profile: workerProfile, assignment: undefined },
-          { name: "slow-option", profile: hangingWorkerProfile, assignment: undefined },
-        ],
-        leader: { name: "compete-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "compete-lead", profile: leaderProfile },
       },
     ],
   });
@@ -137,16 +194,15 @@ test("workflow compete stage races to first success then uses a leader", async (
   assert.ok(output.workflow);
   assert.equal(output.workflow.state, "success");
   assert.equal(output.workflow.result?.leaderRunId, "compete-lead");
-  assert.equal(output.workflow.result?.workerResults[0]?.runId, "option-worker");
-  assert.equal(orchestra.runs.get("slow-option")?.state, "closed");
+  assert.deepEqual(output.workflow.result?.memberResults, []);
+  assert.equal(orchestra.runs.get("slow-option"), undefined);
   const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "compete-lead")?.task ?? "";
-  assert.match(leaderTask, /Compete: condense the winning worker result/);
-  assert.match(leaderTask, /do not broaden scope/);
-  assert.match(leaderTask, /Call finish once/);
-  assert.match(leaderTask, /option-worker summary/);
+  assert.match(leaderTask, /Decide whether the stage needs competing alternatives/);
+  assert.match(leaderTask, /action=add_members/);
+  assert.match(leaderTask, /action=finish once/);
 });
 
-test("workflow compete stage blocks when no worker succeeds and one blocks", async () => {
+test("workflow stage blocks when the leader blocks", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -159,19 +215,12 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
       {
         name: "options",
         goal: "Produce independent options.",
-        strategy: "compete",
-        members: [
-          { name: "blocked-option", profile: blockedWorkerProfile, assignment: undefined },
-          { name: "failed-option", profile: failedWorkerProfile, assignment: undefined },
-        ],
-        leader: { name: "blocked-compete-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "blocked-compete-lead", profile: blockedLeaderProfile },
       },
       {
         name: "never",
         goal: "Should not run.",
-        strategy: "compete",
-        members: [{ name: "never-after-blocked-compete", profile: workerProfile, assignment: undefined }],
-        leader: { name: "never-blocked-compete-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "never-blocked-compete-lead", profile: leaderProfile },
       },
     ],
   });
@@ -189,7 +238,7 @@ test("workflow compete stage blocks when no worker succeeds and one blocks", asy
   );
 });
 
-test("workflow compete stage fails when every worker fails", async () => {
+test("workflow stage fails when the leader fails", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -202,16 +251,12 @@ test("workflow compete stage fails when every worker fails", async () => {
       {
         name: "options",
         goal: "Produce independent options.",
-        strategy: "compete",
-        members: [{ name: "failed-only-option", profile: failedWorkerProfile, assignment: undefined }],
-        leader: { name: "failed-compete-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "failed-compete-lead", profile: failedLeaderProfile },
       },
       {
         name: "never",
         goal: "Should not run.",
-        strategy: "compete",
-        members: [{ name: "never-after-failed-compete", profile: workerProfile, assignment: undefined }],
-        leader: { name: "never-failed-compete-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "never-failed-compete-lead", profile: leaderProfile },
       },
     ],
   });
@@ -242,9 +287,7 @@ test("workflow status returns the latest workflow by name", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "synthesize",
-        members: [{ name: "status-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "status-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "status-lead", profile: leaderProfile },
       },
     ],
   });
@@ -257,7 +300,7 @@ test("workflow status returns the latest workflow by name", async () => {
   assert.match(output.message, /- collect: success/);
 });
 
-test("workflow start validates unique stage names and non-empty members", async () => {
+test("workflow start validates unique stage names and required leaders", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
@@ -272,16 +315,12 @@ test("workflow start validates unique stage names and non-empty members", async 
           {
             name: "collect",
             goal: "Collect source material.",
-            strategy: "synthesize",
-            members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
-            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
+            leader: { profile: leaderProfile, name: "collect-lead" },
           },
           {
             name: "collect",
             goal: "Collect more material.",
-            strategy: "synthesize",
-            members: [{ profile: workerProfile, name: undefined, assignment: undefined }],
-            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
+            leader: { profile: leaderProfile, name: "collect-lead-2" },
           },
         ],
       }),
@@ -292,19 +331,65 @@ test("workflow start validates unique stage names and non-empty members", async 
     () =>
       workflowTool.execute({
         action: "start",
-        name: "empty-members-flow",
+        name: "duplicate-leader-flow",
         goal: "Research the topic.",
         stages: [
           {
             name: "collect",
             goal: "Collect source material.",
-            strategy: "synthesize",
-            members: [],
-            leader: { profile: leaderProfile, name: undefined, assignment: undefined },
+            leader: { profile: leaderProfile, name: "same-lead" },
+          },
+          {
+            name: "analyze",
+            goal: "Analyze source material.",
+            leader: { profile: leaderProfile, name: "same-lead" },
           },
         ],
       }),
-    /Workflow stage "collect" requires at least one member\./,
+    /Workflow leader name "same-lead" is already in use\./,
+  );
+
+  store.saveRun({
+    id: "existing-lead",
+    name: "existing-lead",
+    profile: leaderProfile,
+    task: "Existing work.",
+    busId: "bus-1",
+    sessionFile: ".pi/orchestra/sessions/existing-lead.jsonl",
+    state: "running",
+    result: null,
+  });
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "start",
+        name: "existing-leader-flow",
+        goal: "Research the topic.",
+        stages: [
+          {
+            name: "collect",
+            goal: "Collect source material.",
+            leader: { profile: leaderProfile, name: "existing-lead" },
+          },
+        ],
+      }),
+    /Workflow leader name "existing-lead" is already in use\./,
+  );
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "start",
+        name: "missing-leader-flow",
+        goal: "Research the topic.",
+        stages: [
+          {
+            name: "collect",
+            goal: "Collect source material.",
+          } as never,
+        ],
+      }),
+    /workflow stage collect requires a leader\./,
   );
 });
 
@@ -321,12 +406,9 @@ test("workflow runs an explicitly provided evidence synthesizer leader", async (
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "synthesize",
-        members: [{ name: "collect-worker", profile: workerProfile, assignment: undefined }],
         leader: {
           name: "collect-synth",
           profile: createEvidenceSynthesizerProfile({ name: undefined, tools: ["read", "bash"], model: undefined }),
-          assignment: undefined,
         },
       },
     ],
@@ -357,11 +439,11 @@ test("workflow status and cancel report missing workflows", async () => {
   assert.equal(cancelOutput.message, "Workflow missing-flow not found.");
 });
 
-test("workflow cancel closes workers spawned during cancellation race", async () => {
+test("workflow cancel closes leaders spawned during cancellation race", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
-  const delayedSpawn = orchestra.delaySpawn("slow-worker");
+  const delayedSpawn = orchestra.delaySpawn("cancel-lead");
 
   await workflowTool.execute({
     action: "start",
@@ -371,9 +453,7 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "compete",
-        members: [{ name: "slow-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "cancel-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "cancel-lead", profile: leaderProfile },
       },
     ],
   });
@@ -381,11 +461,11 @@ test("workflow cancel closes workers spawned during cancellation race", async ()
   await delayedSpawn.started;
   const cancelOutput = await workflowTool.execute({ action: "cancel", id: "cancel-flow" });
   delayedSpawn.release();
-  await eventually(() => orchestra.runs.get("slow-worker")?.state === "closed");
+  await eventually(() => orchestra.runs.get("cancel-lead")?.state === "closed");
 
   assert.equal(cancelOutput.workflow?.state, "closed");
   assert.equal(store.getWorkflow("cancel-flow")?.state, "closed");
-  assert.equal(orchestra.runs.get("slow-worker")?.state, "closed");
+  assert.equal(orchestra.runs.get("cancel-lead")?.state, "closed");
 });
 
 test("workflow fails when a stage synthesizer fails", async () => {
@@ -401,16 +481,12 @@ test("workflow fails when a stage synthesizer fails", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "synthesize",
-        members: [{ name: "failed-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "failed-lead", profile: failedLeaderProfile, assignment: undefined },
+        leader: { name: "failed-lead", profile: failedLeaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        strategy: "synthesize",
-        members: [{ name: "never-failed-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "never-failed-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "never-failed-lead", profile: leaderProfile },
       },
     ],
   });
@@ -423,7 +499,7 @@ test("workflow fails when a stage synthesizer fails", async () => {
   assert.equal(output.workflow.stages[0]?.state, "failed");
   assert.equal(output.workflow.stages[1]?.state, "idle");
   assert.equal(
-    orchestra.spawned.some((spawn) => spawn.name === "never-failed-worker"),
+    orchestra.spawned.some((spawn) => spawn.name === "never-failed-lead"),
     false,
   );
 });
@@ -441,16 +517,12 @@ test("workflow stops when a stage synthesizer blocks", async () => {
       {
         name: "collect",
         goal: "Collect source material.",
-        strategy: "synthesize",
-        members: [{ name: "blocked-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "blocked-lead", profile: blockedLeaderProfile, assignment: undefined },
+        leader: { name: "blocked-lead", profile: blockedLeaderProfile },
       },
       {
         name: "analyze",
         goal: "Analyze collected material.",
-        strategy: "synthesize",
-        members: [{ name: "never-worker", profile: workerProfile, assignment: undefined }],
-        leader: { name: "never-lead", profile: leaderProfile, assignment: undefined },
+        leader: { name: "never-lead", profile: leaderProfile },
       },
     ],
   });
@@ -464,7 +536,7 @@ test("workflow stops when a stage synthesizer blocks", async () => {
   assert.equal(output.workflow.stages[0]?.output?.status, "blocked");
   assert.equal(output.workflow.stages[1]?.state, "idle");
   assert.equal(
-    orchestra.spawned.some((spawn) => spawn.name === "never-worker"),
+    orchestra.spawned.some((spawn) => spawn.name === "never-lead"),
     false,
   );
 });
@@ -492,13 +564,22 @@ class FakeOrchestra implements OrchestraApi {
 
   createBus(options: { name: string | undefined }): Bus {
     const id = slugify(options.name ?? `bus-${this.buses.size + 1}`);
-    const bus: Bus = { id, name: options.name ?? id, messages: [] };
+    const bus: Bus = { id, name: options.name ?? id, state: "open", messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
 
   getBus(id: string): Bus | undefined {
     return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
+  }
+
+  closeBus(id: string): Bus | undefined {
+    const bus = this.getBus(id);
+    if (!bus) return undefined;
+    const closedBus: Bus = { ...bus, state: "closed" };
+    this.buses.set(bus.id, closedBus);
+    this.store.saveBus(closedBus);
+    return closedBus;
   }
 
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {

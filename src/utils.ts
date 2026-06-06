@@ -83,6 +83,10 @@ export function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function pluralize(noun: string, count: number): string {
+  return count === 1 ? noun : `${noun}s`;
+}
+
 export function toAgentRunResult(run: AgentRun): AgentRunResult {
   return {
     runId: run.id,

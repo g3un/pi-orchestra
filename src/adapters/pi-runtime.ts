@@ -232,6 +232,12 @@ export class PiAgentRuntime implements AgentRuntime {
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
         this.assertOpenRun(run);
+        const ledWorkgroup = this.findRunningLedWorkgroup(run.id);
+        if (ledWorkgroup) {
+          throw new Error(
+            `Agent ${run.id} leads running workgroup ${ledWorkgroup.id}; use workgroup action=finish before finish.`,
+          );
+        }
         const result: AgentResult = {
           status: params.status as AgentResultStatus,
           summary: params.summary,
@@ -305,9 +311,16 @@ export class PiAgentRuntime implements AgentRuntime {
     return run !== undefined && isRunningWithoutResult(run);
   }
 
+  private findRunningLedWorkgroup(runId: string) {
+    return this.store
+      .listWorkgroups()
+      .find((workgroup) => workgroup.leaderRunId === runId && workgroup.state === "running");
+  }
+
   private requireBus(id: string): Bus {
     const bus = this.store.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
+    if (bus.state === "closed") throw new Error(`Bus ${id} is closed.`);
     return bus;
   }
 
@@ -391,7 +404,9 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     task,
     "",
     "## Completion",
-    "- End by calling finish exactly once with status, summary, and useful data; never stop text-only.",
+    "- End with exactly one finalization path; never stop text-only.",
+    "- If you lead a running workgroup, use workgroup action=finish before calling finish for your own run.",
+    "- Otherwise call finish exactly once with status, summary, and useful data.",
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
     "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
   ].join("\n");

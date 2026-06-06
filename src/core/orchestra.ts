@@ -7,6 +7,7 @@ import type { AgentStore } from "./store.ts";
 export interface OrchestraApi {
   createBus(options: CreateBusOptions): Bus;
   getBus(id: string): Bus | undefined;
+  closeBus(id: string): Bus | undefined;
   publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage>;
 
   spawnAgent(profile: AgentProfile, task: string, busId: string, options: SpawnAgentOptions): Promise<AgentRun>;
@@ -54,7 +55,7 @@ export class Orchestra implements OrchestraApi {
 
   createBus(options: CreateBusOptions): Bus {
     const identity = this.createBusIdentity(options.name);
-    const bus: Bus = { ...identity, messages: [] };
+    const bus: Bus = { ...identity, state: "open", messages: [] };
     this.store.saveBus(bus);
     return bus;
   }
@@ -63,14 +64,29 @@ export class Orchestra implements OrchestraApi {
     return this.findBus(id);
   }
 
+  closeBus(id: string): Bus | undefined {
+    const bus = this.findBus(id);
+    if (!bus) return undefined;
+    const closedBus: Bus = { ...bus, state: "closed" };
+    this.store.saveBus(closedBus);
+    for (const subscription of this.store.listBusSubscriptions({
+      busId: bus.id,
+      subscriberId: undefined,
+      subscriberKind: undefined,
+    })) {
+      this.store.deleteBusSubscription(subscription.id);
+    }
+    return closedBus;
+  }
+
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
-    const bus = this.requireBus(id);
+    const bus = this.requireOpenBus(id);
     const busMessage = await this.runtime.publishBus(bus.id, message, from);
     return { bus: this.requireBus(bus.id), busMessage };
   }
 
   async spawnAgent(profile: AgentProfile, task: string, busId: string, options: SpawnAgentOptions): Promise<AgentRun> {
-    const bus = this.requireBus(busId);
+    const bus = this.requireOpenBus(busId);
     return await this.runtime.spawn(profile, task, bus.id, this.createRunIdentity(profile, options.name));
   }
 
@@ -98,6 +114,12 @@ export class Orchestra implements OrchestraApi {
   private requireBus(id: string): Bus {
     const bus = this.findBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
+    return bus;
+  }
+
+  private requireOpenBus(id: string): Bus {
+    const bus = this.requireBus(id);
+    if (bus.state === "closed") throw new Error(`Bus ${id} is closed.`);
     return bus;
   }
 

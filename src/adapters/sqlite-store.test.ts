@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,6 +7,7 @@ import { test } from "vitest";
 import type { AgentRun } from "../core/subagent.ts";
 import type { Bus, BusSubscription } from "../core/bus.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { createProjectSqliteAgentStore, getProjectSqliteStorePath, SqliteAgentStore } from "./sqlite-store.ts";
 
 test("project SQLite store creates .pi/orchestra and persists saved orchestration state", () => {
@@ -15,7 +16,7 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
     assert.equal(existsSync(join(cwd, ".pi", "orchestra")), true);
     assert.equal(existsSync(dbPath), true);
 
-    const bus: Bus = { id: "bus-1", name: "Bus 1", messages: [] };
+    const bus: Bus = { id: "bus-1", name: "Bus 1", state: "open", messages: [] };
     const busMessage = { id: "message-1", from: "main", message: "Persist this." };
     const savedRun = run({
       id: "agent-1",
@@ -24,12 +25,14 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
       result: { status: "success", summary: "Done.", data: { files: ["src/index.ts"] } },
     });
     const savedWorkflow = workflowRun({ id: "workflow-1", name: "Workflow 1" });
+    const savedWorkgroup = workgroupRun({ id: "workgroup-1", name: "Workgroup 1", busId: bus.id });
     const savedBusSubscription = busSubscription({ id: "subscription-1", busId: bus.id });
 
     store.saveBus(bus);
     store.addBusMessage(bus.id, busMessage);
     store.saveBusSubscription(savedBusSubscription);
     store.saveRun(savedRun);
+    store.saveWorkgroup(savedWorkgroup);
     store.saveWorkflow(savedWorkflow);
     store.dispose();
 
@@ -38,6 +41,7 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
       assert.deepEqual(reopened.getBus(bus.id), { ...bus, messages: [busMessage] });
       assert.deepEqual(reopened.getRun(savedRun.id), savedRun);
       assert.deepEqual(reopened.getBusSubscription(savedBusSubscription.id), savedBusSubscription);
+      assert.deepEqual(reopened.getWorkgroup(savedWorkgroup.id), savedWorkgroup);
       assert.deepEqual(reopened.getWorkflow(savedWorkflow.id), savedWorkflow);
       assert.deepEqual(reopened.listBuses(), [{ ...bus, messages: [busMessage] }]);
       assert.deepEqual(reopened.listRuns(), [savedRun]);
@@ -45,6 +49,7 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
         reopened.listBusSubscriptions({ busId: undefined, subscriberId: undefined, subscriberKind: undefined }),
         [savedBusSubscription],
       );
+      assert.deepEqual(reopened.listWorkgroups(), [savedWorkgroup]);
       assert.deepEqual(reopened.listWorkflows(), [savedWorkflow]);
     } finally {
       reopened.dispose();
@@ -70,7 +75,7 @@ test("SQLite store preserves insertion order when updating existing records", ()
 
 test("SQLite store appends and replaces bus messages by id", () => {
   withTempStore((store) => {
-    const bus: Bus = { id: "bus-1", name: "Bus 1", messages: [] };
+    const bus: Bus = { id: "bus-1", name: "Bus 1", state: "open", messages: [] };
     store.saveBus(bus);
 
     store.addBusMessage(bus.id, { id: "message-1", from: "main", message: "Initial." });
@@ -87,10 +92,15 @@ test("SQLite store appends and replaces bus messages by id", () => {
 test("SQLite store notifies matching subscribers until unsubscribed", () => {
   withTempStore((store) => {
     const observedRuns: AgentRun[] = [];
+    const observedWorkgroups: WorkgroupRun[] = [];
     const observedWorkflows: WorkflowRun[] = [];
     const unsubscribeRuns = store.subscribeRuns(
       (updatedRun) => observedRuns.push(updatedRun),
       (updatedRun) => updatedRun.id === "agent-1",
+    );
+    const unsubscribeWorkgroups = store.subscribeWorkgroups(
+      (updatedWorkgroup) => observedWorkgroups.push(updatedWorkgroup),
+      (updatedWorkgroup) => updatedWorkgroup.id === "workgroup-1",
     );
     const unsubscribeWorkflows = store.subscribeWorkflows(
       (updatedWorkflow) => observedWorkflows.push(updatedWorkflow),
@@ -101,17 +111,24 @@ test("SQLite store notifies matching subscribers until unsubscribed", () => {
     const ignoredRun = run({ id: "agent-2" });
     const savedWorkflow = workflowRun({ id: "workflow-1" });
     const ignoredWorkflow = workflowRun({ id: "workflow-2" });
+    const savedWorkgroup = workgroupRun({ id: "workgroup-1" });
+    const ignoredWorkgroup = workgroupRun({ id: "workgroup-2" });
     store.saveRun(savedRun);
     store.saveRun(ignoredRun);
+    store.saveWorkgroup(savedWorkgroup);
+    store.saveWorkgroup(ignoredWorkgroup);
     store.saveWorkflow(savedWorkflow);
     store.saveWorkflow(ignoredWorkflow);
 
     unsubscribeRuns();
+    unsubscribeWorkgroups();
     unsubscribeWorkflows();
     store.saveRun({ ...savedRun, state: "closed", result: savedRun.result });
+    store.saveWorkgroup({ ...savedWorkgroup, name: "updated" });
     store.saveWorkflow({ ...savedWorkflow, state: "success" });
 
     assert.deepEqual(observedRuns, [savedRun]);
+    assert.deepEqual(observedWorkgroups, [savedWorkgroup]);
     assert.deepEqual(observedWorkflows, [savedWorkflow]);
   });
 });
@@ -128,8 +145,8 @@ test("SQLite store rejects bus messages for missing buses", () => {
 test("SQLite store notifies bus message subscribers until unsubscribed", () => {
   withTempStore((store) => {
     const observed: string[] = [];
-    store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
-    store.saveBus({ id: "bus-2", name: "Bus 2", messages: [] });
+    store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+    store.saveBus({ id: "bus-2", name: "Bus 2", state: "open", messages: [] });
     const unsubscribe = store.subscribeBusMessages(
       (event) => observed.push(event.message.id),
       (event) => event.busId === "bus-1",
@@ -169,6 +186,47 @@ test("SQLite store saves, lists, and deletes bus subscriptions", () => {
 
     assert.equal(store.getBusSubscription("sub-1"), undefined);
   });
+});
+
+test("SQLite store rejects existing unversioned stores and tells the user to recreate the store", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
+  try {
+    mkdirSync(join(cwd, ".pi", "orchestra"), { recursive: true });
+    const dbPath = getProjectSqliteStorePath(cwd);
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+    `);
+    db.close();
+
+    assert.throws(
+      () => createProjectSqliteAgentStore(cwd),
+      /Unsupported pi-orchestra SQLite store schema version 0; expected 4\..*Delete .*store\.db and run the command again/,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("SQLite store rejects older schemas and tells the user to recreate the store", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
+  try {
+    createProjectSqliteAgentStore(cwd).dispose();
+
+    const db = new DatabaseSync(getProjectSqliteStorePath(cwd));
+    db.exec("PRAGMA user_version = 2");
+    db.close();
+
+    assert.throws(
+      () => createProjectSqliteAgentStore(cwd),
+      /Unsupported pi-orchestra SQLite store schema version 2; expected 4\..*Delete .*store\.db and run the command again/,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("SQLite store rejects a database written by a newer schema version", () => {
@@ -229,6 +287,21 @@ function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscript
     subscriberId: "agent-1",
     subscriberKind: "agent",
     deliveredMessageIds: [],
+    ...overrides,
+  };
+}
+
+function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  return {
+    id: "workgroup-1",
+    name: "workgroup-1",
+    busId: "bus-1",
+    goal: "Complete the workgroup.",
+    leaderRunId: null,
+    memberRunIds: ["member-1"],
+    state: "running",
+    result: null,
+    createdAtMs: 1_700_000_000_000,
     ...overrides,
   };
 }

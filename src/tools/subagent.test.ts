@@ -54,7 +54,7 @@ test("agent profile params require explicit tools", () => {
 test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
-  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
+  const bus: Bus = { id: "bus-1", name: "bus-1", state: "open", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
   const output = await tool.execute({
@@ -62,7 +62,7 @@ test("subagent spawn uses an existing bus and delegates to orchestra", async () 
     profile,
     task: "Inspect the code.",
     busId: bus.id,
-    name: undefined,
+    name: "agent-1",
   });
 
   assert.ok(output.run);
@@ -80,7 +80,8 @@ test("subagent spawn rejects missing buses", async () => {
   const tool = createSubagentTool({ orchestra });
 
   await assert.rejects(
-    () => tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: "missing", name: undefined }),
+    () =>
+      tool.execute({ action: "spawn", profile, task: "Inspect the code.", busId: "missing", name: "missing-agent" }),
     /Bus missing not found\./,
   );
 });
@@ -99,8 +100,8 @@ test("subagent status reads orchestra state", async () => {
   });
   orchestra.runs.set(successRun.id, successRun);
 
-  const output = await tool.execute({ action: "status", id: successRun.id, busId: undefined });
-  const missingOutput = await tool.execute({ action: "status", id: "missing", busId: undefined });
+  const output = await tool.execute({ action: "status", id: successRun.id });
+  const missingOutput = await tool.execute({ action: "status", id: "missing" });
 
   assert.equal(output.run, successRun);
   assert.equal(
@@ -129,7 +130,7 @@ test("subagent status formats blocked results", async () => {
   });
   orchestra.runs.set(blockedRun.id, blockedRun);
 
-  const output = await tool.execute({ action: "status", id: blockedRun.id, busId: undefined });
+  const output = await tool.execute({ action: "status", id: blockedRun.id });
 
   assert.equal(
     output.message,
@@ -143,12 +144,12 @@ test("subagent message delegates to orchestra", async () => {
   const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
-  const output = await tool.execute({ action: "message", id: existing.id, message: "Continue.", busId: undefined });
+  const output = await tool.execute({ action: "message", id: existing.id, message: "Continue." });
 
   assert.deepEqual(orchestra.messaged, { id: existing.id, message: "Continue." });
   assert.ok(output.run);
   assert.equal(output.run.state, "running");
-  assert.equal(orchestra.getRun(existing.id, { busId: undefined }), output.run);
+  assert.deepEqual(orchestra.getRun(existing.id, { busId: undefined }), output.run);
 });
 
 test("subagent close delegates to orchestra", async () => {
@@ -157,7 +158,7 @@ test("subagent close delegates to orchestra", async () => {
   const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
-  const output = await tool.execute({ action: "close", id: existing.id, busId: undefined });
+  const output = await tool.execute({ action: "close", id: existing.id });
 
   assert.deepEqual(orchestra.closedIds, [existing.id]);
   assert.ok(output.run);
@@ -169,7 +170,7 @@ test("subagent close handles missing runs", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createSubagentTool({ orchestra });
 
-  const output = await tool.execute({ action: "close", id: "missing", busId: undefined });
+  const output = await tool.execute({ action: "close", id: "missing" });
 
   assert.equal(output.run, undefined);
   assert.equal(output.message, "Closed subagent missing.");
@@ -185,13 +186,21 @@ class FakeOrchestra implements OrchestraApi {
 
   createBus(_options: { name: string | undefined }): Bus {
     const id = `bus-${this.buses.size + 1}`;
-    const bus: Bus = { id, name: id, messages: [] };
+    const bus: Bus = { id, name: id, state: "open", messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
 
   getBus(id: string): Bus | undefined {
     return this.buses.get(id);
+  }
+
+  closeBus(id: string): Bus | undefined {
+    const bus = this.buses.get(id);
+    if (!bus) return undefined;
+    const closedBus: Bus = { ...bus, state: "closed" };
+    this.buses.set(id, closedBus);
+    return closedBus;
   }
 
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {

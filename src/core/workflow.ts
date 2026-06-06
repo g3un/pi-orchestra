@@ -1,15 +1,18 @@
-import type { AgentResult, AgentResultStatus } from "./subagent.ts";
-import type { WorkgroupMember, WorkgroupStrategy } from "./workgroup.ts";
+import type { AgentResult, AgentResultStatus, AgentRun } from "./subagent.ts";
 
 export type WorkflowState = "idle" | "running" | "closed" | AgentResultStatus;
+
+export interface WorkflowStageAgentSpec {
+  profile: AgentRun["profile"];
+  /** Globally unique short run name. */
+  name: AgentRun["name"];
+}
 
 export interface WorkflowStageSpec {
   name: string;
   goal: string;
-  strategy: WorkgroupStrategy;
-  members: WorkgroupMember[];
-  /** Synthesizes the stage's worker output; must be specified explicitly. */
-  leader: WorkgroupMember;
+  /** Leads the stage and creates workgroup members as needed. */
+  leader: WorkflowStageAgentSpec;
 }
 
 export interface WorkflowStageOutput {
@@ -17,7 +20,7 @@ export interface WorkflowStageOutput {
   summary: string;
   data?: unknown;
   leaderRunId?: string;
-  workerResults: WorkflowRunResult[];
+  memberResults: WorkflowRunResult[];
 }
 
 export interface WorkflowRunResult {
@@ -30,11 +33,11 @@ export interface WorkflowRunResult {
 
 export interface WorkflowStageRun extends WorkflowStageSpec {
   state: WorkflowState;
-  phase?: "workers" | "leader";
+  phase?: "leader";
   /** Milliseconds since epoch when this stage started running. */
   startedAtMs: number;
   busId?: string;
-  workerRunIds: string[];
+  workgroupId?: string;
   leaderRunId?: string;
   output?: WorkflowStageOutput;
   error?: string;

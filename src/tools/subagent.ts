@@ -14,7 +14,7 @@ export interface SubagentSpawnInput {
   profile: AgentProfile;
   task: string;
   busId: string;
-  name: string | undefined;
+  name: string;
 }
 
 export type SubagentInput =
@@ -22,18 +22,15 @@ export type SubagentInput =
   | {
       action: "status";
       id: string;
-      busId: string | undefined;
     }
   | {
       action: "message";
       id: string;
       message: string;
-      busId: string | undefined;
     }
   | {
       action: "close";
       id: string;
-      busId: string | undefined;
     };
 
 export interface SubagentOutput {
@@ -51,7 +48,7 @@ export interface SubagentToolDeps {
 }
 
 export const SubagentRunNameParam = Type.String({
-  description: "Optional globally unique short run name.",
+  description: "Globally unique short run name.",
 });
 
 const AgentProfileToolsParam = Type.Array(Type.String(), {
@@ -93,6 +90,24 @@ const SubagentActionParams = Type.String({
   enum: ["spawn", "status", "message", "close"],
   description: "spawn creates; status inspects; message steers/restarts; close disposes by id/name.",
 });
+
+export const SubagentSpawnParams = Type.Object(
+  {
+    action: Type.String({
+      enum: ["spawn"],
+      description: "spawn creates a subagent.",
+    }),
+    profile: AgentProfileParams,
+    task: Type.String({
+      description: "Required for action=spawn. Task to delegate to the new subagent.",
+    }),
+    busId: Type.String({
+      description: "Required for action=spawn. Existing bus id/name.",
+    }),
+    name: SubagentRunNameParam,
+  },
+  { additionalProperties: false },
+);
 
 const SubagentToolParams = Type.Object(
   {
@@ -138,20 +153,20 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
       }
 
       if (input.action === "status") {
-        const run = orchestra.getRun(input.id, { busId: input.busId });
+        const run = orchestra.getRun(input.id, { busId: undefined });
         if (!run) return { message: formatMissingSubagentMessage(input.id) };
         return { run, message: formatRunMessage(run) };
       }
 
       if (input.action === "message") {
-        const run = await orchestra.messageAgent(input.id, input.message, { busId: input.busId });
+        const run = await orchestra.messageAgent(input.id, input.message, { busId: undefined });
         return {
           run,
           message: formatRunMessage(run, `Messaged subagent ${formatNamedEntityLabel(run)}; it is ${run.state}.`),
         };
       }
 
-      const run = await orchestra.closeAgent(input.id, { busId: input.busId });
+      const run = await orchestra.closeAgent(input.id, { busId: undefined });
       return {
         run,
         message: run
@@ -190,31 +205,46 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
 
 function toSubagentInput(params: RawSubagentParams): SubagentInput {
   if (params.action === "spawn") {
-    if (!params.profile) throw new Error("subagent action=spawn requires profile.");
-    if (!params.task) throw new Error("subagent action=spawn requires task.");
-    if (!params.busId) throw new Error("subagent action=spawn requires busId.");
-    return {
-      action: "spawn",
-      profile: toAgentProfile(params.profile),
+    return toSubagentSpawnInput({
+      action: params.action,
+      profile: params.profile,
       task: params.task,
       busId: params.busId,
       name: params.name,
-    };
+    });
   }
 
   if (params.action === "status") {
     if (!params.id) throw new Error("subagent action=status requires id.");
-    return { action: "status", id: params.id, busId: params.busId };
+    return { action: "status", id: params.id };
   }
 
   if (params.action === "message") {
     if (!params.id) throw new Error("subagent action=message requires id.");
     if (!params.message) throw new Error("subagent action=message requires message.");
-    return { action: "message", id: params.id, message: params.message, busId: params.busId };
+    return { action: "message", id: params.id, message: params.message };
   }
 
   if (!params.id) throw new Error("subagent action=close requires id.");
-  return { action: "close", id: params.id, busId: params.busId };
+  return { action: "close", id: params.id };
+}
+
+export function toSubagentSpawnInput(
+  params: RawSubagentSpawnParams,
+  label = "subagent action=spawn",
+): SubagentSpawnInput {
+  if (params.action !== "spawn") throw new Error(`${label} requires action=spawn.`);
+  if (!params.profile) throw new Error(`${label} requires profile.`);
+  if (!params.task) throw new Error(`${label} requires task.`);
+  if (!params.busId) throw new Error(`${label} requires busId.`);
+  if (!params.name) throw new Error(`${label} requires name.`);
+  return {
+    action: "spawn",
+    profile: toAgentProfile(params.profile),
+    task: params.task,
+    busId: params.busId,
+    name: params.name,
+  };
 }
 
 function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): SubagentInput {
@@ -262,6 +292,13 @@ export function withDefaultProfileModel(profile: AgentProfile, ctx: ExtensionCon
   };
 }
 
+export function withDefaultProfileModelInput<T extends { profile: AgentProfile }>(input: T, ctx: ExtensionContext): T {
+  return {
+    ...input,
+    profile: withDefaultProfileModel(input.profile, ctx),
+  };
+}
+
 function formatMissingSubagentMessage(id: string): string {
   return `Subagent ${id} not found.`;
 }
@@ -291,6 +328,14 @@ function formatResultData(data: unknown): string {
 function formatModelId(model: AgentProfileModel): string {
   return `${model.provider}/${model.id}`;
 }
+
+export type RawSubagentSpawnParams = {
+  action?: "spawn";
+  profile?: RawAgentProfileParams;
+  task?: string;
+  busId?: string;
+  name?: string;
+};
 
 type RawSubagentParams = {
   action: "spawn" | "status" | "message" | "close";

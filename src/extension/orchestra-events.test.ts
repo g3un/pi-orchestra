@@ -4,6 +4,7 @@ import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
 
 test("orchestra event controller emits standalone subagent finish events", () => {
@@ -65,7 +66,7 @@ test("orchestra event controller routes registered workgroup member finish event
   store.saveRun(firstRun);
   store.saveRun(secondRun);
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
-  controller.registerWorkgroup({ busId: "bus-1", strategy: "synthesize", runIds: [firstRun.id, secondRun.id] });
+  controller.registerWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [firstRun.id, secondRun.id] });
 
   store.saveRun({ ...firstRun, state: "blocked", result: { status: "blocked", summary: "Need input." } });
 
@@ -73,7 +74,6 @@ test("orchestra event controller routes registered workgroup member finish event
   const event = sent.batches[0]?.events[0];
   assert.equal(event?.type, "workgroup.member_finished");
   if (event?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
-  assert.equal(event.strategy, "synthesize");
   assert.equal(event.run.runId, firstRun.id);
   assert.deepEqual(event.pendingRunIds, [secondRun.id]);
   assert.match(sent.batches[0]?.content ?? "", /Pending workgroup run ids: second/);
@@ -82,26 +82,154 @@ test("orchestra event controller routes registered workgroup member finish event
 test("orchestra event controller routes workgroup finishes during launch before final registration", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
-  controller.beginWorkgroup("bus-1", "compete");
   const memberRun = run({ id: "fast", name: "fast", state: "running" });
+  const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+  controller.beginWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [memberRun.id] });
   store.saveRun(memberRun);
 
   store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Won." } });
-  controller.registerWorkgroup({ busId: "bus-1", strategy: "compete", runIds: [memberRun.id] });
+  controller.registerWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [memberRun.id] });
 
   assert.equal(sent.batches.length, 1);
   const event = sent.batches[0]?.events[0];
   assert.equal(event?.type, "workgroup.member_finished");
   if (event?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
-  assert.equal(event.strategy, "compete");
   assert.equal(event.run.runId, memberRun.id);
+});
+
+test("orchestra event controller routes agent-led workgroup finishes during launch to the leader", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const leaderRun = run({ id: "leader", name: "leader", busId: "bus-1", state: "running" });
+  const memberRun = run({ id: "fast", name: "fast", busId: "bus-1", state: "running" });
+  store.saveRun(leaderRun);
+  const controller = new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+  controller.beginWorkgroup({ busId: "bus-1", leaderRunId: leaderRun.id, runIds: [memberRun.id] });
+  store.saveRun(memberRun);
+
+  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Won." } });
+  controller.registerWorkgroup({ busId: "bus-1", leaderRunId: leaderRun.id, runIds: [memberRun.id] });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0]?.runId, "leader");
+  assert.equal(agentEvents[0]?.events[0]?.type, "workgroup.member_finished");
+});
+
+test("orchestra event controller routes persisted agent-led workgroup member finishes to the leader", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const leaderRun = run({ id: "leader", name: "leader", busId: "bus-1", state: "running" });
+  const memberRun = run({ id: "member", name: "member", busId: "bus-1", state: "running" });
+  store.saveRun(leaderRun);
+  store.saveRun(memberRun);
+  store.saveWorkgroup(workgroupRun({ leaderRunId: "leader", memberRunIds: [memberRun.id] }));
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Done." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0]?.runId, "leader");
+  assert.equal(agentEvents[0]?.events[0]?.type, "workgroup.member_finished");
+  assert.match(agentEvents[0]?.content ?? "", /Workgroup member finished/);
+});
+
+test("orchestra event controller falls back to main when an agent-led workgroup leader is inactive", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const leaderRun = run({
+    id: "leader",
+    name: "leader",
+    busId: "bus-1",
+    state: "success",
+    result: { status: "success", summary: "Done." },
+  });
+  const memberRun = run({ id: "member", name: "member", busId: "bus-1", state: "running" });
+  store.saveRun(leaderRun);
+  store.saveRun(memberRun);
+  store.saveWorkgroup(workgroupRun({ leaderRunId: "leader", memberRunIds: [memberRun.id] }));
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Late member done." } });
+
+  assert.equal(agentEvents.length, 0);
+  assert.equal(sent.batches.length, 1);
+  assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.member_finished");
+});
+
+test("orchestra event controller suppresses cancelled launch cleanup run finishes", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const memberRun = run({ id: "fast", name: "fast", state: "running" });
+  store.saveRun(memberRun);
+  const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+  controller.beginWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [memberRun.id] });
+
+  controller.cancelWorkgroupLaunch("bus-1", { suppressRunIds: [memberRun.id] });
+  store.saveRun({ ...memberRun, state: "closed", result: null });
+
+  assert.equal(sent.batches.length, 0);
+});
+
+test("orchestra event controller emits workgroup finished events on closed transition", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const workgroup = workgroupRun({ state: "running", result: null });
+  store.saveWorkgroup(workgroup);
+  new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+
+  store.saveWorkgroup({ ...workgroup, state: "closing", result: { status: "success", summary: "Almost done." } });
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Done." } });
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Saved again." } });
+
+  assert.equal(sent.batches.length, 1);
+  assert.deepEqual(sent.batches[0]?.events[0], {
+    type: "workgroup.finished",
+    workgroup: { ...workgroup, state: "closed", result: { status: "success", summary: "Done." } },
+  });
+  assert.match(sent.batches[0]?.content ?? "", /Workgroup finished/);
+});
+
+test("orchestra event controller suppresses member close events while workgroup is closing", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const memberRun = run({ id: "member", name: "member", busId: "bus-1", state: "running" });
+  const workgroup = workgroupRun({ state: "running", memberRunIds: [memberRun.id] });
+  store.saveRun(memberRun);
+  store.saveWorkgroup(workgroup);
+  new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+
+  store.saveWorkgroup({ ...workgroup, state: "closing", result: { status: "success", summary: "Done." } });
+  store.saveRun({ ...memberRun, state: "closed", result: null });
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Done." } });
+
+  assert.equal(sent.batches.length, 1);
+  assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
 });
 
 test("orchestra event controller emits subscribed main bus messages", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   store.saveBusSubscription({
     id: createBusSubscriptionId("bus-1", "main", "main"),
     busId: "bus-1",
@@ -132,7 +260,7 @@ test("orchestra event controller does not mark queued main bus messages delivere
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
   const subscriptionId = createBusSubscriptionId("bus-1", "main", "main");
-  store.saveBus({ id: "bus-1", name: "Bus 1", messages: [] });
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   store.saveBusSubscription({
     id: subscriptionId,
     busId: "bus-1",
@@ -157,19 +285,19 @@ test("orchestra event controller suppresses workflow-internal run finishes and e
   const sent = createEventSink();
   const workflow = workflowRun({ state: "running", stages: [{ ...stageRun(), busId: "workflow-bus" }] });
   store.saveWorkflow(workflow);
-  const workflowRunAgent = run({ id: "stage-worker", name: "stage-worker", busId: "workflow-bus", state: "running" });
+  const workflowRunAgent = run({ id: "stage-member", name: "stage-member", busId: "workflow-bus", state: "running" });
   store.saveRun(workflowRunAgent);
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
 
   store.saveRun({
     ...workflowRunAgent,
     state: "success",
-    result: { status: "success", summary: "Worker done." },
+    result: { status: "success", summary: "Member done." },
   });
   store.saveWorkflow({
     ...workflow,
     state: "success",
-    result: { status: "success", summary: "Workflow done.", workerResults: [] },
+    result: { status: "success", summary: "Workflow done.", memberResults: [] },
   });
 
   assert.equal(sent.batches.length, 1);
@@ -178,7 +306,7 @@ test("orchestra event controller suppresses workflow-internal run finishes and e
     workflow: {
       ...workflow,
       state: "success",
-      result: { status: "success", summary: "Workflow done.", workerResults: [] },
+      result: { status: "success", summary: "Workflow done.", memberResults: [] },
     },
   });
 });
@@ -213,6 +341,21 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   } as AgentRun;
 }
 
+function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  return {
+    id: "workgroup-1",
+    name: "workgroup-1",
+    busId: "bus-1",
+    goal: "Complete workgroup.",
+    leaderRunId: null,
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    createdAtMs: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: "workflow",
@@ -230,15 +373,11 @@ function stageRun() {
   return {
     name: "collect",
     goal: "Collect data.",
-    strategy: "synthesize" as const,
-    members: [],
     leader: {
       profile: { name: "leader", systemPrompt: "Lead.", tools: [], model: undefined },
-      name: undefined,
-      assignment: undefined,
+      name: "leader",
     },
     state: "idle" as const,
     startedAtMs: 1_700_000_000_000,
-    workerRunIds: [],
   };
 }

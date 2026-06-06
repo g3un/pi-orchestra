@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { slugify } from "../utils.ts";
-import { createWorkgroupTool, settleWorkgroupRuns, type WorkgroupToolDeps } from "./workgroup.ts";
+import { createWorkgroupTool, type WorkgroupOutput, type WorkgroupToolDeps } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
   name: "security",
@@ -28,32 +29,51 @@ const brokenProfile: AgentProfile = {
   model: undefined,
 };
 
-function workgroupDeps(orchestra: OrchestraApi): WorkgroupToolDeps {
+function workgroupDeps(orchestra: OrchestraApi & { store: InMemoryAgentStore }): WorkgroupToolDeps {
   return {
     orchestra,
+    store: orchestra.store,
     onWorkgroupLaunching: undefined,
     onWorkgroupLaunched: undefined,
     onWorkgroupLaunchFailed: undefined,
   };
 }
 
-test("workgroup launches members on an existing bus", async () => {
+test("workgroup creates an internal bus and launches members on it", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
-  const bus = orchestra.createBus({ name: "auth-work" });
 
-  const output = await tool.execute({
-    busId: bus.name,
+  const created = await tool.execute({
+    action: "create",
+    name: "auth-work-workgroup",
     goal: "Plan the auth refactor.",
-    strategy: "synthesize",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const bus = requireBus(orchestra, workgroup.busId);
+  const output = await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
     members: [
-      { name: "security-review", profile: securityProfile, assignment: "Identify auth security risks." },
-      { name: "backend-review", profile: backendProfile, assignment: "Assess API and data model changes." },
+      {
+        name: "security-review",
+        profile: securityProfile,
+        task: "Identify auth security risks.",
+      },
+      {
+        name: "backend-review",
+        profile: backendProfile,
+        task: "Assess API and data model changes.",
+      },
     ],
   });
 
+  assertMembersAdded(output);
   assert.equal(output.bus, bus);
   assert.equal(output.runs.length, 2);
+  assert.equal(output.workgroup.id, "auth-work-workgroup");
+  assert.equal(output.workgroup.leaderRunId, null);
+  assert.deepEqual(output.workgroup.memberRunIds, ["security-review", "backend-review"]);
+  assert.deepEqual(orchestra.store.getWorkgroup(output.workgroup.id), output.workgroup);
   assert.deepEqual(
     orchestra.spawned.map((spawn) => ({ profile: spawn.profile, busId: spawn.busId, name: spawn.options?.name })),
     [
@@ -61,16 +81,11 @@ test("workgroup launches members on an existing bus", async () => {
       { profile: backendProfile, busId: bus.id, name: "backend-review" },
     ],
   );
-  assert.match(orchestra.spawned[0]?.task ?? "", /Workgroup strategy: synthesize/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /<shared_goal>\nPlan the auth refactor\.\n<\/shared_goal>/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Identify auth security risks\./);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Use publish_bus for sibling context/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /finish\(status=blocked\)/);
-  assert.match(orchestra.spawned[0]?.task ?? "", /Synthesize guidelines/);
+  assert.equal(orchestra.spawned[0]?.task, "Identify auth security risks.");
   assert.equal(
     output.message,
     [
-      "Launched synthesize workgroup on bus auth-work with 2 run(s).",
+      "Added 2 members to workgroup auth-work-workgroup on bus auth-work-workgroup-bus.",
       "",
       "Runs:",
       "- security-review: running",
@@ -81,68 +96,87 @@ test("workgroup launches members on an existing bus", async () => {
   );
 });
 
-test("workgroup compete strategy guides members to share facts without herding", async () => {
+test("workgroup member task guides members to share useful context", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
-  const bus = orchestra.createBus({ name: "design-compete" });
-
-  await tool.execute({
-    busId: bus.id,
+  const created = await tool.execute({
+    action: "create",
+    name: "design-work-workgroup",
     goal: "Compare implementation options.",
-    strategy: "compete",
-    members: [{ name: "option-a", profile: backendProfile, assignment: undefined }],
   });
-
-  const task = orchestra.spawned[0]?.task ?? "";
-  assert.match(task, /publish_bus only facts, evidence, blockers, or useful constraints/);
-  assert.match(task, /Work independently; keep conclusions\/recommendations until finish/);
-});
-
-test("workgroup generates unique member names from duplicate profile names", async () => {
-  const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool(workgroupDeps(orchestra));
-  const bus = orchestra.createBus({ name: "backend-work" });
-
-  const output = await tool.execute({
-    busId: bus.id,
-    goal: "Review backend changes.",
-    strategy: "synthesize",
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
     members: [
-      { profile: backendProfile, name: undefined, assignment: undefined },
-      { profile: backendProfile, name: undefined, assignment: undefined },
+      {
+        name: "option-a",
+        profile: backendProfile,
+        task: "Compare implementation option A.",
+      },
     ],
   });
 
+  const task = orchestra.spawned[0]?.task ?? "";
+  assert.equal(task, "Compare implementation option A.");
+});
+
+test("workgroup uses explicit member names", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const created = await tool.execute({
+    action: "create",
+    name: "backend-work-workgroup",
+    goal: "Review backend changes.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const output = await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [
+      {
+        profile: backendProfile,
+        name: "backend-a",
+        task: "Review backend changes from one angle.",
+      },
+      {
+        profile: backendProfile,
+        name: "backend-b",
+        task: "Review backend changes from another angle.",
+      },
+    ],
+  });
+
+  assertMembersAdded(output);
   assert.deepEqual(
     output.runs.map((run) => run.name),
-    ["backend", "backend-2"],
+    ["backend-a", "backend-b"],
   );
   assert.deepEqual(
     orchestra.spawned.map((spawn) => spawn.options?.name),
-    ["backend", "backend-2"],
+    ["backend-a", "backend-b"],
   );
 });
 
-test("workgroup rejects missing buses", async () => {
+test("workgroup create does not require a pre-existing bus", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
 
-  await assert.rejects(
-    () =>
-      tool.execute({
-        busId: "missing",
-        goal: "Plan the auth refactor.",
-        strategy: "compete",
-        members: [{ profile: securityProfile, name: undefined, assignment: undefined }],
-      }),
-    /Bus missing not found\./,
-  );
+  const output = await tool.execute({
+    action: "create",
+    name: "new-workgroup",
+    goal: "Plan the auth refactor.",
+  });
+
+  assert.equal(output.action, "create");
+  if (output.action !== "create") throw new Error("Expected created workgroup output.");
+  assert.equal(output.workgroup.busId, "new-workgroup-bus");
+  assert.equal(orchestra.getBus(output.workgroup.busId)?.state, "open");
 });
 
 test("workgroup member name checks are global", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
-  const targetBus = orchestra.createBus({ name: "target-work" });
   const otherBus = orchestra.createBus({ name: "other-work" });
   orchestra.runs.set("security-review", {
     id: "security-review",
@@ -155,168 +189,175 @@ test("workgroup member name checks are global", async () => {
     result: null,
   });
 
+  const created = await tool.execute({
+    action: "create",
+    name: "target-work-workgroup",
+    goal: "Plan the auth refactor.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+
   await assert.rejects(
     () =>
       tool.execute({
-        busId: targetBus.id,
-        goal: "Plan the auth refactor.",
-        strategy: "compete",
-        members: [{ name: "security-review", profile: securityProfile, assignment: undefined }],
+        action: "add_members",
+        id: workgroup.id,
+        members: [
+          {
+            name: "security-review",
+            profile: securityProfile,
+            task: "Review security.",
+          },
+        ],
       }),
     /Workgroup member name "security-review" is already in use\./,
   );
 });
 
-test("workgroup compete settlement closes pending runs after first success", async () => {
+test("workgroup finish closes members and the bus and records final output", async () => {
   const orchestra = new FakeOrchestra();
-  const bus = orchestra.createBus({ name: "compete-work" });
-  const winner = run({
-    id: "winner",
-    name: "winner",
-    busId: bus.id,
-    state: "success",
-    result: { status: "success", summary: "Found input." },
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const created = await tool.execute({
+    action: "create",
+    name: "auth-work-workgroup",
+    goal: "Plan the auth refactor.",
   });
-  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
-  orchestra.runs.set(winner.id, winner);
-  orchestra.runs.set(pending.id, pending);
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [
+      {
+        name: "security-review",
+        profile: securityProfile,
+        task: "Review security.",
+      },
+      {
+        name: "backend-review",
+        profile: backendProfile,
+        task: "Review backend.",
+      },
+    ],
+  });
 
-  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [winner.id, pending.id], "compete");
+  const output = await tool.execute({
+    action: "finish",
+    id: requireCreatedWorkgroupId(created),
+    result: { status: "success", summary: "Auth refactor plan is ready.", data: { risk: "medium" } },
+  });
 
-  assert.equal(output.status, "success");
-  assert.equal(output.winner?.runId, winner.id);
-  assert.deepEqual(
-    output.workerResults.map((result) => result.runId),
-    [winner.id],
-  );
-  assert.deepEqual(orchestra.closedIds, [pending.id]);
-  assert.equal(orchestra.runs.get(pending.id)?.state, "closed");
+  assert.equal(output.action, "finish");
+  if (output.action !== "finish") throw new Error("Expected finish output.");
+  assert.equal(output.workgroup.state, "closed");
+  assert.deepEqual(output.workgroup.result, {
+    status: "success",
+    summary: "Auth refactor plan is ready.",
+    data: { risk: "medium" },
+  });
+  assert.equal("bus" in output, false);
+  assert.equal("message" in output, false);
+  assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
+  assert.deepEqual(orchestra.closedIds, ["security-review", "backend-review"]);
+  assert.equal(orchestra.runs.get("security-review")?.state, "closed");
+  assert.equal(orchestra.runs.get("backend-review")?.state, "closed");
 });
 
-test("workgroup compete settlement keeps waiting after blocked results until success", async () => {
+test("workgroup rejects adding members after finish", async () => {
   const orchestra = new FakeOrchestra();
-  const bus = orchestra.createBus({ name: "blocked-then-success" });
-  const blocked = run({
-    id: "blocked",
-    name: "blocked",
-    busId: bus.id,
-    state: "blocked",
-    result: { status: "blocked", summary: "Need input." },
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const created = await tool.execute({
+    action: "create",
+    name: "auth-work-workgroup",
+    goal: "Plan the auth refactor.",
   });
-  const winner = run({
-    id: "winner",
-    name: "winner",
-    busId: bus.id,
-    state: "success",
-    result: { status: "success", summary: "Solved." },
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "finish",
+    id: workgroup.id,
+    result: { status: "blocked", summary: "No useful path found." },
   });
-  const pending = run({ id: "pending", name: "pending", busId: bus.id, state: "running" });
-  orchestra.runs.set(blocked.id, blocked);
-  orchestra.runs.set(winner.id, winner);
-  orchestra.runs.set(pending.id, pending);
 
-  const output = await settleWorkgroupRuns(
-    orchestra,
-    orchestra.store,
-    bus.id,
-    [blocked.id, winner.id, pending.id],
-    "compete",
-  );
-
-  assert.equal(output.status, "success");
-  assert.equal(output.winner?.runId, winner.id);
-  assert.deepEqual(
-    output.completedResults.map((result) => result.runId),
-    [blocked.id, winner.id],
-  );
-  assert.deepEqual(
-    output.workerResults.map((result) => result.runId),
-    [winner.id],
-  );
-  assert.deepEqual(orchestra.closedIds, [pending.id]);
-});
-
-test("workgroup synthesize settlement waits for every run", async () => {
-  const orchestra = new FakeOrchestra();
-  const bus = orchestra.createBus({ name: "synthesize-work" });
-  const first = run({
-    id: "first",
-    name: "first",
-    busId: bus.id,
-    state: "success",
-    result: { status: "success", summary: "First." },
-  });
-  const second = run({
-    id: "second",
-    name: "second",
-    busId: bus.id,
-    state: "failed",
-    result: { status: "failed", summary: "Second." },
-  });
-  orchestra.runs.set(first.id, first);
-  orchestra.runs.set(second.id, second);
-
-  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [first.id, second.id], "synthesize");
-
-  assert.equal(output.status, "success");
-  assert.deepEqual(
-    output.workerResults.map((result) => result.runId),
-    [first.id, second.id],
-  );
-  assert.deepEqual(orchestra.closedIds, []);
-});
-
-test("workgroup synthesize settlement reports blocked when no run succeeds", async () => {
-  const orchestra = new FakeOrchestra();
-  const bus = orchestra.createBus({ name: "blocked-synthesize" });
-  const blocked = run({
-    id: "blocked",
-    name: "blocked",
-    busId: bus.id,
-    state: "blocked",
-    result: { status: "blocked", summary: "Need decision." },
-  });
-  const failed = run({
-    id: "failed",
-    name: "failed",
-    busId: bus.id,
-    state: "failed",
-    result: { status: "failed", summary: "Could not finish." },
-  });
-  orchestra.runs.set(blocked.id, blocked);
-  orchestra.runs.set(failed.id, failed);
-
-  const output = await settleWorkgroupRuns(orchestra, orchestra.store, bus.id, [blocked.id, failed.id], "synthesize");
-
-  assert.equal(output.status, "blocked");
-  assert.deepEqual(
-    output.workerResults.map((result) => result.runId),
-    [blocked.id, failed.id],
+  await assert.rejects(
+    () =>
+      tool.execute({
+        action: "add_members",
+        id: workgroup.id,
+        members: [
+          {
+            name: "late-review",
+            profile: securityProfile,
+            task: "Review security.",
+          },
+        ],
+      }),
+    /Workgroup auth-work-workgroup is closed\./,
   );
 });
 
 test("workgroup closes successfully spawned members when launch is incomplete", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createWorkgroupTool(workgroupDeps(orchestra));
-  const bus = orchestra.createBus({ name: "auth-work" });
+  const eventOrder: string[] = [];
+  orchestra.onClose = (id) => eventOrder.push(`close:${id}`);
+  const tool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    onWorkgroupLaunchFailed: () => eventOrder.push("launch_failed"),
+  });
+
+  const created = await tool.execute({
+    action: "create",
+    name: "auth-work-workgroup",
+    goal: "Plan the auth refactor.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
 
   await assert.rejects(
     () =>
       tool.execute({
-        busId: bus.id,
-        goal: "Plan the auth refactor.",
-        strategy: "synthesize",
+        action: "add_members",
+        id: workgroup.id,
         members: [
-          { name: "security-review", profile: securityProfile, assignment: undefined },
-          { name: "broken-review", profile: brokenProfile, assignment: undefined },
+          {
+            name: "security-review",
+            profile: securityProfile,
+            task: "Review security.",
+          },
+          {
+            name: "broken-review",
+            profile: brokenProfile,
+            task: "Trigger spawn failure.",
+          },
         ],
       }),
     /Failed to launch every workgroup member\./,
   );
 
+  assert.deepEqual(eventOrder, ["launch_failed", "close:security-review"]);
   assert.deepEqual(orchestra.closedIds, ["security-review"]);
   assert.equal(orchestra.runs.get("security-review")?.state, "closed");
 });
+
+function requireCreatedWorkgroupId(output: WorkgroupOutput): string {
+  return requireCreatedWorkgroup(output).id;
+}
+
+function requireCreatedWorkgroup(output: WorkgroupOutput): WorkgroupRun {
+  assert.equal(output.action, "create");
+  if (output.action !== "create") throw new Error("Expected created workgroup output.");
+  return output.workgroup;
+}
+
+function requireBus(orchestra: FakeOrchestra, id: string): Bus {
+  const bus = orchestra.getBus(id);
+  assert.ok(bus);
+  return bus;
+}
+
+function assertMembersAdded(
+  output: WorkgroupOutput,
+): asserts output is Extract<WorkgroupOutput, { action: "add_members" }> {
+  assert.equal(output.action, "add_members");
+}
 
 class FakeOrchestra implements OrchestraApi {
   store = new InMemoryAgentStore();
@@ -324,16 +365,25 @@ class FakeOrchestra implements OrchestraApi {
   runs = new SyncedRunMap(this.store);
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; options: { name: string | undefined } }> = [];
   closedIds: string[] = [];
+  onClose: ((id: string) => void) | undefined;
 
   createBus(options: { name: string | undefined }): Bus {
     const id = options.name ?? `bus-${this.buses.size + 1}`;
-    const bus: Bus = { id, name: options.name ?? id, messages: [] };
+    const bus: Bus = { id, name: options.name ?? id, state: "open", messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
 
   getBus(id: string): Bus | undefined {
     return this.buses.get(id) ?? [...this.buses.values()].find((bus) => bus.name === id);
+  }
+
+  closeBus(id: string): Bus | undefined {
+    const bus = this.getBus(id);
+    if (!bus) return undefined;
+    const closedBus: Bus = { ...bus, state: "closed" };
+    this.buses.set(bus.id, closedBus);
+    return closedBus;
   }
 
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
@@ -389,6 +439,7 @@ class FakeOrchestra implements OrchestraApi {
 
   async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
     this.closedIds.push(id);
+    this.onClose?.(id);
     const run = this.runs.get(id);
     if (!run) return undefined;
 
@@ -407,19 +458,4 @@ class SyncedRunMap extends Map<string, AgentRun> {
     this.store.saveRun(value);
     return super.set(key, value);
   }
-}
-
-function run(overrides: Partial<AgentRun>): AgentRun {
-  const id = overrides.id ?? "agent-1";
-  return {
-    id,
-    name: overrides.name ?? id,
-    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
-    task: "Inspect the code.",
-    busId: "bus-1",
-    state: "running",
-    ...overrides,
-    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
-    result: overrides.result ?? null,
-  } as AgentRun;
 }

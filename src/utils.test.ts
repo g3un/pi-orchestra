@@ -69,9 +69,9 @@ test("workflow lookup helpers resolve by id or name", () => {
   const workflow = workflowRun({ id: "research-flow", name: "Research Flow" });
   store.saveWorkflow(workflow);
 
-  assert.equal(findWorkflow(store, workflow.id), workflow);
-  assert.equal(findWorkflow(store, workflow.name), workflow);
-  assert.equal(requireWorkflow(store, workflow.id), workflow);
+  assert.deepEqual(findWorkflow(store, workflow.id), workflow);
+  assert.deepEqual(findWorkflow(store, workflow.name), workflow);
+  assert.deepEqual(requireWorkflow(store, workflow.id), workflow);
   assert.throws(() => requireWorkflow(store, "missing"), /Workflow missing not found\./);
 });
 

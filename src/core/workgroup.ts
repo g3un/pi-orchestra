@@ -1,12 +1,40 @@
-import type { AgentProfile } from "./subagent.ts";
+import { createEntityIdentity } from "../utils.ts";
+import type { AgentResult, AgentRun } from "./subagent.ts";
 
-export const WORKGROUP_STRATEGY_VALUES = ["compete", "synthesize"] as const;
-export type WorkgroupStrategy = (typeof WORKGROUP_STRATEGY_VALUES)[number];
+export type WorkgroupState = "running" | "closing" | "closed";
 
-export interface WorkgroupMember {
-  profile: AgentProfile;
-  /** Globally unique short run name. If undefined, one is generated from the profile name. */
+export interface WorkgroupRun {
+  id: string;
+  name: string;
+  busId: string;
+  goal: string;
+  /** The leader subagent run id, or null when main owns the workgroup. */
+  leaderRunId: AgentRun["id"] | null;
+  memberRunIds: Array<AgentRun["id"]>;
+  state: WorkgroupState;
+  result: AgentResult | null;
+  createdAtMs: number;
+}
+
+export interface CreateWorkgroupRunOptions {
   name: string | undefined;
-  /** Member-specific assignment or focus within the workgroup goal. */
-  assignment: string | undefined;
+  autoNameSeed: string;
+  existingWorkgroups: WorkgroupRun[];
+  busId: string;
+  goal: string;
+  leaderRunId: AgentRun["id"] | null;
+}
+
+export function createWorkgroupRun(options: CreateWorkgroupRunOptions): WorkgroupRun {
+  const identity = createEntityIdentity(options.name, options.autoNameSeed, options.existingWorkgroups, "Workgroup");
+  return {
+    ...identity,
+    busId: options.busId,
+    goal: options.goal,
+    leaderRunId: options.leaderRunId,
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    createdAtMs: Date.now(),
+  };
 }

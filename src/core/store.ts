@@ -1,6 +1,7 @@
 import type { AgentRun } from "./subagent.ts";
 import type { Bus, BusMessage, BusMessageEvent, BusSubscription, ListBusSubscriptionsOptions } from "./bus.ts";
 import type { WorkflowRun } from "./workflow.ts";
+import type { WorkgroupRun } from "./workgroup.ts";
 
 export interface AgentStore {
   saveRun(run: AgentRun): void;
@@ -22,6 +23,14 @@ export interface AgentStore {
   getBusSubscription(id: string): BusSubscription | undefined;
   listBusSubscriptions(options: ListBusSubscriptionsOptions): BusSubscription[];
   deleteBusSubscription(id: string): void;
+
+  saveWorkgroup(workgroup: WorkgroupRun): void;
+  getWorkgroup(id: string): WorkgroupRun | undefined;
+  listWorkgroups(): WorkgroupRun[];
+  subscribeWorkgroups(
+    listener: (workgroup: WorkgroupRun) => void,
+    filter: ((workgroup: WorkgroupRun) => boolean) | undefined,
+  ): () => void;
 
   saveWorkflow(workflow: WorkflowRun): void;
   getWorkflow(id: string): WorkflowRun | undefined;

@@ -93,6 +93,7 @@ export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
       }
 
       if (input.action === "subscribe") {
+        if (bus.state === "closed") throw new Error(`Bus ${input.name} is closed.`);
         const subscription = subscribeMainToBus(store, bus);
         return { bus, subscription, message: `Subscribed main to bus ${formatBusLabel(bus)} for new messages.` };
       }
@@ -184,9 +185,12 @@ function formatBusStatus(
   store: AgentStore,
   headline = `Bus ${formatBusLabel(bus)} has ${bus.messages.length} message(s).`,
 ): string {
-  if (bus.messages.length === 0) return headline;
+  const statusHeadline = `${headline}\nState: ${bus.state}`;
+  if (bus.messages.length === 0) return statusHeadline;
 
-  return [headline, "", "Messages:", ...bus.messages.map((message) => formatBusMessage(message, store))].join("\n");
+  return [statusHeadline, "", "Messages:", ...bus.messages.map((message) => formatBusMessage(message, store))].join(
+    "\n",
+  );
 }
 
 function formatBusMessage(message: BusMessage, store: AgentStore): string {

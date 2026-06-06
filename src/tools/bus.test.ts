@@ -15,8 +15,8 @@ test("bus create allocates a standalone bus through orchestra", async () => {
   assert.ok(output.bus);
   assert.equal(output.bus.id, "bus-1");
   assert.deepEqual(output.bus.messages, []);
-  assert.equal(orchestra.getBus(output.bus.id), output.bus);
-  assert.equal(output.message, "Created bus bus-1.");
+  assert.deepEqual(orchestra.getBus(output.bus.id), output.bus);
+  assert.equal(output.message, "Created bus bus-1.\nState: open");
 });
 
 test("bus status returns stored bus messages", async () => {
@@ -26,6 +26,7 @@ test("bus status returns stored bus messages", async () => {
   const bus: Bus = {
     id: "bus-1",
     name: "bus-1",
+    state: "open",
     messages: [
       { id: "message-1", from: "main", message: "Initial context." },
       { id: "message-2", from: "agent-1", message: "Agent context." },
@@ -42,6 +43,7 @@ test("bus status returns stored bus messages", async () => {
     output.message,
     [
       "Bus bus-1 has 2 message(s).",
+      "State: open",
       "",
       "Messages:",
       "- message-1 from main:",
@@ -57,7 +59,7 @@ test("bus status returns stored bus messages", async () => {
 test("bus publish delegates with the bus name", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createBusTool({ orchestra, store: new InMemoryAgentStore() });
-  const bus: Bus = { id: "shared-context", name: "Shared Context", messages: [] };
+  const bus: Bus = { id: "shared-context", name: "Shared Context", state: "open", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
   const output = await tool.execute({ action: "publish", name: bus.name, message: "New constraint.", from: "main" });
@@ -71,7 +73,7 @@ test("bus publish delegates with the bus name", async () => {
   assert.deepEqual(orchestra.getBus(bus.id)?.messages, [{ id: "message-1", message: "New constraint.", from: "main" }]);
   assert.equal(
     output.message,
-    "Published message to bus Shared Context.\n\nMessages:\n- message-1 from main:\nNew constraint.",
+    "Published message to bus Shared Context.\nState: open\n\nMessages:\n- message-1 from main:\nNew constraint.",
   );
 });
 
@@ -79,7 +81,7 @@ test("bus publish preserves an explicit sender", async () => {
   const orchestra = new FakeOrchestra();
   const store = new InMemoryAgentStore();
   const tool = createBusTool({ orchestra, store });
-  const bus: Bus = { id: "bus-1", name: "bus-1", messages: [] };
+  const bus: Bus = { id: "bus-1", name: "bus-1", state: "open", messages: [] };
   orchestra.buses.set(bus.id, bus);
   store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
 
@@ -93,7 +95,7 @@ test("bus publish preserves an explicit sender", async () => {
   assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
   assert.equal(
     output.message,
-    "Published message to bus bus-1.\n\nMessages:\n- message-1 from Researcher A:\nPeer context.",
+    "Published message to bus bus-1.\nState: open\n\nMessages:\n- message-1 from Researcher A:\nPeer context.",
   );
 });
 
@@ -104,6 +106,7 @@ test("bus subscribe and unsubscribe manage the main bus subscription", async () 
   const bus: Bus = {
     id: "bus-1",
     name: "bus-1",
+    state: "open",
     messages: [{ id: "message-1", from: "agent-1", message: "Existing context." }],
   };
   orchestra.buses.set(bus.id, bus);
@@ -133,13 +136,21 @@ class FakeOrchestra implements OrchestraApi {
 
   createBus(_options: { name: string | undefined }): Bus {
     const id = `bus-${this.buses.size + 1}`;
-    const bus: Bus = { id, name: id, messages: [] };
+    const bus: Bus = { id, name: id, state: "open", messages: [] };
     this.buses.set(bus.id, bus);
     return bus;
   }
 
   getBus(id: string): Bus | undefined {
     return this.findBus(id);
+  }
+
+  closeBus(id: string): Bus | undefined {
+    const bus = this.findBus(id);
+    if (!bus) return undefined;
+    const closedBus: Bus = { ...bus, state: "closed" };
+    this.buses.set(bus.id, closedBus);
+    return closedBus;
   }
 
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {

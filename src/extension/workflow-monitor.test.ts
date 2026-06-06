@@ -4,6 +4,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun, WorkflowStageRun } from "../core/workflow.ts";
+import type { WorkgroupRun } from "../core/workgroup.ts";
 import { buildWorkflowMonitorLines, WorkflowMonitorController } from "./workflow-monitor.ts";
 
 const WORKFLOW_STARTED_AT_MS = 1_700_000_000_000;
@@ -16,6 +17,7 @@ test("workflow monitor renders the current stage progress", () => {
   store.saveRun(
     run({ id: "critic", name: "critic", state: "success", result: { status: "success", summary: "Done." } }),
   );
+  store.saveWorkgroup(workgroupRun({ memberRunIds: ["collector", "critic"] }));
   store.saveWorkflow(
     workflowRun({
       id: "research-flow",
@@ -23,9 +25,8 @@ test("workflow monitor renders the current stage progress", () => {
       stages: [
         stageRun({
           name: "collect",
-          phase: "workers",
           busId: "bus-1",
-          workerRunIds: ["collector", "critic"],
+          workgroupId: "workgroup-1",
         }),
         stageRun({ name: "analyze" }),
       ],
@@ -43,12 +44,13 @@ test("workflow monitor counts the stage synthesizer while synthesizing", () => {
     run({ id: "collector", name: "collector", state: "success", result: { status: "success", summary: "Done." } }),
   );
   store.saveRun(run({ id: "collect-leader", name: "collect-leader", state: "running" }));
+  store.saveWorkgroup(workgroupRun({ memberRunIds: ["collector"], leaderRunId: "collect-leader" }));
   store.saveWorkflow(
     workflowRun({
       stages: [
         stageRun({
           phase: "leader",
-          workerRunIds: ["collector"],
+          workgroupId: "workgroup-1",
           leaderRunId: "collect-leader",
         }),
       ],
@@ -62,7 +64,7 @@ test("workflow monitor counts the stage synthesizer while synthesizing", () => {
 
 test("workflow monitor controller updates the widget and clears it when workflows finish", () => {
   const store = new InMemoryAgentStore();
-  const workflow = workflowRun({ stages: [stageRun({ phase: "workers", busId: "bus-1" })] });
+  const workflow = workflowRun({ stages: [stageRun({ phase: "leader" })] });
   store.saveWorkflow(workflow);
   const widgets: Array<string[] | undefined> = [];
   const statuses: Array<string | undefined> = [];
@@ -139,19 +141,6 @@ function stageRun(overrides: Partial<WorkflowStageRun> = {}): WorkflowStageRun {
   return {
     name: "collect",
     goal: "Collect evidence.",
-    strategy: "synthesize",
-    members: [
-      {
-        profile: {
-          name: "researcher",
-          systemPrompt: "Research.",
-          tools: [],
-          model: undefined,
-        },
-        name: undefined,
-        assignment: undefined,
-      },
-    ],
     leader: {
       profile: {
         name: "leader",
@@ -159,12 +148,25 @@ function stageRun(overrides: Partial<WorkflowStageRun> = {}): WorkflowStageRun {
         tools: [],
         model: undefined,
       },
-      name: undefined,
-      assignment: undefined,
+      name: "leader",
     },
     state: "idle",
     startedAtMs: STAGE_STARTED_AT_MS,
-    workerRunIds: [],
+    ...overrides,
+  };
+}
+
+function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  return {
+    id: "workgroup-1",
+    name: "workgroup-1",
+    busId: "bus-1",
+    goal: "Complete the workgroup.",
+    leaderRunId: null,
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    createdAtMs: STAGE_STARTED_AT_MS,
     ...overrides,
   };
 }
