@@ -36,6 +36,7 @@
 ## Commits
 
 - Do not create commits unless the user explicitly asks
+- When code changes are included, bump the package version in `package.json` before committing
 - One logical change per commit
 - Use Conventional Commits, such as `feat(tool): add subagent tool`
 - Avoid overly granular scopes unless they clarify ownership or impact
