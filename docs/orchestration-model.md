@@ -78,7 +78,9 @@ Workflow flow:
 
 1. `workflow create` creates a private workflow bus and spawns the flow leader.
 2. The flow leader uses `workflow spawn_workgroup` with `workflowId` to create
-   the next child workgroup only when the current evidence shows it is useful.
+   the next child workgroup when current evidence shows it is useful, or several
+   child workgroups in parallel when the goal has independent tracks whose
+   outputs do not depend on one another.
 3. Each child workgroup gets its own private bus and its own workgroup leader.
 4. The workgroup leader uses `workgroup add_members` and `workgroup finish` to
    coordinate members and produce the group output.
@@ -94,7 +96,8 @@ owner of the workflow result and is the only actor that should call
 main, is the only actor that should call `workflow action=cancel`. The flow
 leader should not cancel its own workflow; if it cannot proceed, it should finish
 with `blocked` or `failed` and let the parent decide whether any broader cleanup
-is needed.
+is needed. Parallel child workgroups are a planning choice for independent
+tracks, not a requirement to create every possible group up front.
 
 Closing a workflow moves it through `closing`, closes every child workgroup,
 closes all child buses, closes the workflow bus, closes child group leaders and

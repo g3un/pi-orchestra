@@ -237,6 +237,7 @@ export function defineWorkflowPiTool(
     promptGuidelines: [
       "Use workflow create with one flow leader.",
       "The flow leader uses workflow spawn_workgroup and workflow finish.",
+      "Spawn multiple child workgroups in parallel only for independent tracks.",
       "Give child workgroup leaders the workgroup tool.",
       "Only the supervising parent uses workflow cancel.",
     ],
@@ -606,7 +607,8 @@ function buildFlowLeaderTask(workflow: WorkflowRun, leaderTask: string): string 
     "Assigned task:",
     leaderTask,
     "Do not create all groups up front unless the goal clearly requires parallel independent tracks.",
-    "Use one workgroup when one focused group is enough; create another only when the previous result shows it is useful.",
+    "Spawn multiple child workgroups in parallel only when their outputs do not depend on one another.",
+    "Otherwise, use one workgroup when one focused group is enough; create another only when the previous result shows it is useful.",
     "",
     "Workflow goal:",
     workflow.goal,

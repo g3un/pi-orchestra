@@ -18,9 +18,11 @@ Do not delegate trivial tasks that you can finish faster yourself.
   workgroup leader should finish the workgroup result.
 - Use `workflow` for adaptive multi-step goals. A flow leader creates child
   workgroups with `workflow spawn_workgroup`, uses each `workgroup.finished`
-  result to decide the next group, then calls `workflow finish`. Only the flow
-  leader should finish the workflow result; only its supervising parent/main
-  should cancel the workflow.
+  result to decide the next group, then calls `workflow finish`. It may run
+  multiple child workgroups in parallel when the goal has independent tracks;
+  otherwise prefer adaptive one-at-a-time spawning. Only the flow leader should
+  finish the workflow result; only its supervising parent/main should cancel the
+  workflow.
 - Use `bus` for standalone subagent shared context. Buses are reference context,
   not a blocking queue or decision channel.
 
@@ -100,10 +102,15 @@ any inspection/search tools it needs.
 
 The flow leader should:
 
-1. Call `workflow spawn_workgroup` with `workflowId` for the next useful child group.
-2. Give each child group leader the `workgroup` tool.
-3. Wait for `workgroup.finished`, then decide whether another group is needed.
-4. Call `workflow finish` exactly once with the final status, summary, and data.
+1. Decide whether the next work is dependent or independent.
+2. Call `workflow spawn_workgroup` with `workflowId` for one next useful child
+   group when the previous result should shape the next step; spawn multiple
+   child workgroups in parallel only when their outputs do not depend on one
+   another.
+3. Give each child group leader the `workgroup` tool.
+4. Consume `workgroup.finished` events as they arrive, then decide whether
+   another group is needed or the final answer is ready.
+5. Call `workflow finish` exactly once with the final status, summary, and data.
    The flow leader owns this finish call; main or a parent scope should wait for
    `workflow.finished` rather than finishing for it.
 
@@ -114,6 +121,8 @@ The flow leader should:
 - Reuse the same standalone bus only for agents working on the same delegated
   work item.
 - Do not wait on or poll buses; use `bus status` only to inspect shared messages.
+- Do not create all workflow workgroups up front unless the goal has clearly
+  independent parallel tracks.
 - Do not finish a scope you do not own: subagents finish themselves, workgroup
   leaders finish workgroups, and flow leaders finish workflows.
 - Do not rely on bus messages for leader-only decisions or urgent escalation;

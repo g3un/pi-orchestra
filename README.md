@@ -50,7 +50,9 @@ complementary research, reviews, or follow-ups before producing one result.
 A workflow is led by one flow leader subagent. The flow leader creates child
 workgroups with `workflow spawn_workgroup`, reviews each `workgroup.finished`
 result, and decides whether to create another workgroup or call `workflow finish`.
-Each child workgroup has its own private bus and workgroup leader.
+It may run multiple child workgroups in parallel when the goal has independent
+tracks; otherwise it should prefer adaptive one-at-a-time spawning. Each child
+workgroup has its own private bus and workgroup leader.
 
 Use workflows for adaptive multi-step goals where the next group should depend on
 previous group outputs. Workflow lifecycle state mirrors workgroups
