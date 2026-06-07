@@ -18,7 +18,9 @@ test("registered Pi tools execute a bus workflow through the extension boundary"
     const created = await executeTool(busTool, { action: "create", name: "Release Plan" }, ctx);
     const createdDetails = created.details as BusOutput;
 
-    assert.equal(createdDetails.bus?.id, "release-plan");
+    assert.ok(createdDetails.bus);
+    assertUuid7(createdDetails.bus.id);
+    assert.equal(createdDetails.bus.name, "Release Plan");
     assert.match(firstText(created), /Created bus Release Plan\./);
 
     const published = await executeTool(
@@ -61,6 +63,10 @@ test("extension keeps orchestration state isolated per cwd", async () => {
     disposeContext(handlers, secondCwd);
   }
 });
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+}
 
 function registerExtensionTools(): { tools: ToolDefinition[]; handlers: Record<string, EventHandler[]> } {
   const tools: ToolDefinition[] = [];

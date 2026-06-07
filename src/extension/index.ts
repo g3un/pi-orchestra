@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
 import { createProjectSqliteAgentStore } from "../adapters/sqlite-store.ts";
 import { Orchestra } from "../core/orchestra.ts";
@@ -53,10 +53,12 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   if (existing) return existing;
 
   const store = createProjectSqliteAgentStore(ctx.cwd);
+  let childCustomTools: ToolDefinition[] = [];
   const runtime = new PiAgentRuntime({
     store,
     cwd: ctx.cwd,
     resolveModel: (model) => resolveModel(ctx, model),
+    resolveCustomTools: () => childCustomTools,
   });
   const orchestra = new Orchestra({ runtime, store });
   const orchestraEvents = new OrchestraEventController({
@@ -70,8 +72,8 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   const workgroupTool = createWorkgroupTool({
     orchestra,
     store,
-    onWorkgroupLaunching: ({ bus, workgroup, runIds }) =>
-      orchestraEvents.beginWorkgroup({ busId: bus.id, leaderRunId: workgroup.leaderRunId, runIds }),
+    onWorkgroupLaunching: ({ bus, workgroup, runIds, runNames }) =>
+      orchestraEvents.beginWorkgroup({ busId: bus.id, leaderRunId: workgroup.leaderRunId, runIds, runNames }),
     onWorkgroupLaunched: ({ bus, workgroup, output }) =>
       orchestraEvents.registerWorkgroup({
         busId: bus.id,
@@ -94,8 +96,20 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
       store.dispose();
     },
   };
+  childCustomTools = defineBundlePiTools(bundle);
   bundles.set(ctx.cwd, bundle);
   return bundle;
+}
+
+function defineBundlePiTools(bundle: ToolBundle): ToolDefinition[] {
+  return [
+    defineSubagentPiTool(() => bundle.subagentTool),
+    defineWorkgroupPiTool(() => bundle.workgroupTool),
+    defineWorkflowPiTool(() => bundle.workflowTool, {
+      onWorkflowInput: (ctx) => bundle.workflowMonitor.show(ctx),
+      onWorkflowOutput: (ctx) => bundle.workflowMonitor.show(ctx),
+    }),
+  ];
 }
 
 function sendOrchestraEvents(pi: ExtensionAPI, events: OrchestraMainEvent[], content: string): void {

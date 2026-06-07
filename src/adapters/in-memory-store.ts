@@ -18,10 +18,14 @@ import { notifySubscribers, subscribeStore, type StoreSubscription } from "./sto
  */
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
+  private readonly runIdByName = new Map<string, string>();
   private readonly buses = new Map<string, Bus>();
+  private readonly busIdByName = new Map<string, string>();
   private readonly busSubscriptionsById = new Map<string, BusSubscription>();
   private readonly workgroups = new Map<string, WorkgroupRun>();
+  private readonly workgroupIdByName = new Map<string, string>();
   private readonly workflows = new Map<string, WorkflowRun>();
+  private readonly workflowIdByName = new Map<string, string>();
   private readonly runSubscriptions = new Set<StoreSubscription<AgentRun>>();
   private readonly busMessageSubscriptions = new Set<StoreSubscription<BusMessageEvent>>();
   private readonly workgroupSubscriptions = new Set<StoreSubscription<WorkgroupRun>>();
@@ -29,12 +33,16 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveRun(run: AgentRun): void {
     const savedRun = snapshot(run);
-    this.runs.set(run.id, savedRun);
+    saveNamedEntity(this.runs, this.runIdByName, savedRun);
     notifySubscribers(this.runSubscriptions, snapshot(savedRun));
   }
 
   getRun(id: string): AgentRun | undefined {
     return snapshotOrUndefined(this.runs.get(id));
+  }
+
+  getRunByName(name: string): AgentRun | undefined {
+    return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name));
   }
 
   listRuns(): AgentRun[] {
@@ -46,11 +54,15 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   saveBus(bus: Bus): void {
-    this.buses.set(bus.id, snapshot(bus));
+    saveNamedEntity(this.buses, this.busIdByName, snapshot(bus));
   }
 
   getBus(id: string): Bus | undefined {
     return snapshotOrUndefined(this.buses.get(id));
+  }
+
+  getBusByName(name: string): Bus | undefined {
+    return snapshotOrUndefined(getNamedEntity(this.buses, this.busIdByName, name));
   }
 
   listBuses(): Bus[] {
@@ -102,12 +114,16 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveWorkgroup(workgroup: WorkgroupRun): void {
     const savedWorkgroup = snapshot(workgroup);
-    this.workgroups.set(workgroup.id, savedWorkgroup);
+    saveNamedEntity(this.workgroups, this.workgroupIdByName, savedWorkgroup);
     notifySubscribers(this.workgroupSubscriptions, snapshot(savedWorkgroup));
   }
 
   getWorkgroup(id: string): WorkgroupRun | undefined {
     return snapshotOrUndefined(this.workgroups.get(id));
+  }
+
+  getWorkgroupByName(name: string): WorkgroupRun | undefined {
+    return snapshotOrUndefined(getNamedEntity(this.workgroups, this.workgroupIdByName, name));
   }
 
   listWorkgroups(): WorkgroupRun[] {
@@ -123,12 +139,16 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveWorkflow(workflow: WorkflowRun): void {
     const savedWorkflow = snapshot(workflow);
-    this.workflows.set(workflow.id, savedWorkflow);
+    saveNamedEntity(this.workflows, this.workflowIdByName, savedWorkflow);
     notifySubscribers(this.workflowSubscriptions, snapshot(savedWorkflow));
   }
 
   getWorkflow(id: string): WorkflowRun | undefined {
     return snapshotOrUndefined(this.workflows.get(id));
+  }
+
+  getWorkflowByName(name: string): WorkflowRun | undefined {
+    return snapshotOrUndefined(getNamedEntity(this.workflows, this.workflowIdByName, name));
   }
 
   listWorkflows(): WorkflowRun[] {
@@ -141,6 +161,34 @@ export class InMemoryAgentStore implements AgentStore {
   ): () => void {
     return subscribeStore(this.workflowSubscriptions, listener, filter);
   }
+}
+
+interface NamedEntity {
+  id: string;
+  name: string;
+}
+
+function saveNamedEntity<T extends NamedEntity>(
+  entities: Map<string, T>,
+  idByName: Map<string, string>,
+  entity: T,
+): void {
+  const previous = entities.get(entity.id);
+  if (previous && idByName.get(previous.name) === entity.id) idByName.delete(previous.name);
+  entities.set(entity.id, entity);
+  const existingIdForName = idByName.get(entity.name);
+  if (!existingIdForName || existingIdForName === entity.id) idByName.set(entity.name, entity.id);
+}
+
+function getNamedEntity<T extends NamedEntity>(
+  entities: Map<string, T>,
+  idByName: Map<string, string>,
+  name: string,
+): T | undefined {
+  const id = idByName.get(name);
+  const indexed = id ? entities.get(id) : undefined;
+  if (indexed?.name === name) return indexed;
+  return [...entities.values()].find((entity) => entity.name === name);
 }
 
 function snapshot<T>(value: T): T {

@@ -119,12 +119,12 @@ export class Orchestra implements OrchestraApi {
 
   private requireOpenBus(id: string): Bus {
     const bus = this.requireBus(id);
-    if (bus.state === "closed") throw new Error(`Bus ${id} is closed.`);
+    if (bus.state === "closed") throw new Error(`Bus ${bus.name} is closed.`);
     return bus;
   }
 
   private findBus(id: string): Bus | undefined {
-    return this.store.getBus(id) ?? this.store.listBuses().find((bus) => bus.name === id);
+    return this.store.getBus(id) ?? this.store.getBusByName(id);
   }
 
   private requireRun(id: string, options: RunLookupOptions): AgentRun {
@@ -138,7 +138,8 @@ export class Orchestra implements OrchestraApi {
     const runById = this.store.getRun(id);
     if (runById && (!bus || runById.busId === bus.id)) return runById;
 
-    return this.store.listRuns().find((run) => run.name === id && (!bus || run.busId === bus.id));
+    const runByName = this.store.getRunByName(id);
+    return runByName && (!bus || runByName.busId === bus.id) ? runByName : undefined;
   }
 
   private createBusIdentity(name: string | undefined) {

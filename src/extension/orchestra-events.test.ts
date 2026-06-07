@@ -58,7 +58,7 @@ test("orchestra event controller emits only active to finished run transitions",
   );
 });
 
-test("orchestra event controller routes registered workgroup member finish events with pending run ids", () => {
+test("orchestra event controller routes registered workgroup member finish events with pending run names", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
   const firstRun = run({ id: "first", name: "first", busId: "bus-1", state: "running" });
@@ -76,7 +76,7 @@ test("orchestra event controller routes registered workgroup member finish event
   if (event?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
   assert.equal(event.run.runId, firstRun.id);
   assert.deepEqual(event.pendingRunIds, [secondRun.id]);
-  assert.match(sent.batches[0]?.content ?? "", /Pending workgroup run ids: second/);
+  assert.match(sent.batches[0]?.content ?? "", /Pending workgroup runs: second/);
 });
 
 test("orchestra event controller routes workgroup finishes during launch before final registration", () => {
@@ -95,6 +95,30 @@ test("orchestra event controller routes workgroup finishes during launch before 
   assert.equal(event?.type, "workgroup.member_finished");
   if (event?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
   assert.equal(event.run.runId, memberRun.id);
+});
+
+test("orchestra event controller resolves launching workgroup members by declared names only", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const memberRun = run({ id: "member-id", name: "member", busId: "bus-1", state: "running" });
+  const unrelatedRun = run({ id: "other-id", name: "other", busId: "bus-1", state: "running" });
+  const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
+  controller.beginWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [], runNames: [memberRun.name] });
+  store.saveRun(unrelatedRun);
+  store.saveRun(memberRun);
+
+  store.saveRun({ ...unrelatedRun, state: "success", result: { status: "success", summary: "Other done." } });
+  store.saveRun({ ...memberRun, state: "success", result: { status: "success", summary: "Member done." } });
+  controller.registerWorkgroup({ busId: "bus-1", leaderRunId: null, runIds: [memberRun.id] });
+
+  assert.deepEqual(
+    sent.batches.map((batch) => batch.events[0]?.type),
+    ["subagent.finished", "workgroup.member_finished"],
+  );
+  const workgroupEvent = sent.batches[1]?.events[0];
+  assert.equal(workgroupEvent?.type, "workgroup.member_finished");
+  if (workgroupEvent?.type !== "workgroup.member_finished") throw new Error("Expected workgroup event.");
+  assert.equal(workgroupEvent.run.runId, memberRun.id);
 });
 
 test("orchestra event controller routes agent-led workgroup finishes during launch to the leader", () => {
@@ -249,7 +273,7 @@ test("orchestra event controller emits subscribed main bus messages", () => {
     busId: "bus-1",
     message: { id: "message-1", from: "agent-1", message: "Shared fact." },
   });
-  assert.match(sent.batches[0]?.content ?? "", /Bus message on bus-1 from Researcher A/);
+  assert.match(sent.batches[0]?.content ?? "", /Bus message on Bus 1 from Researcher A/);
   assert.doesNotMatch(sent.batches[0]?.content ?? "", /from agent-1/);
   assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "main", "main"))?.deliveredMessageIds, [
     "message-1",

@@ -49,18 +49,20 @@ test("tools coordinate buses, subagents, messages, and completion events through
     action: "spawn",
     profile: reviewerProfile,
     task: "Review the proposed changes.",
-    busId: "review-work",
+    busId: "Review Work",
     name: "reviewer-b",
   });
 
-  assert.equal(createdBus.bus?.id, "review-work");
-  assert.equal(firstSpawn.run?.busId, "review-work");
+  assert.ok(createdBus.bus);
+  assertUuid7(createdBus.bus.id);
+  assert.equal(createdBus.bus.name, "Review Work");
+  assert.equal(firstSpawn.run?.busId, createdBus.bus.id);
   assert.equal(secondSpawn.run?.name, "reviewer-b");
   assert.deepEqual(
     runtime.spawned.map((spawn) => ({ name: spawn.options.name, busId: spawn.busId })),
     [
-      { name: "researcher-a", busId: "review-work" },
-      { name: "reviewer-b", busId: "review-work" },
+      { name: "researcher-a", busId: createdBus.bus.id },
+      { name: "reviewer-b", busId: createdBus.bus.id },
     ],
   );
 
@@ -68,7 +70,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
 
   assert.equal(eventBatches[0]?.[0]?.type, "subagent.finished");
   assert.equal(
-    eventBatches[0]?.[0]?.type === "subagent.finished" ? eventBatches[0][0].run.runId : undefined,
+    eventBatches[0]?.[0]?.type === "subagent.finished" ? eventBatches[0][0].run.name : undefined,
     "reviewer-b",
   );
 
@@ -81,9 +83,9 @@ test("tools coordinate buses, subagents, messages, and completion events through
 
   assert.equal(published.busMessage?.id, "message-1");
   assert.deepEqual(runtime.published, [
-    { busId: "review-work", message: "Also check strict-mode behavior.", from: "main" },
+    { busId: createdBus.bus.id, message: "Also check strict-mode behavior.", from: "main" },
   ]);
-  assert.deepEqual(store.getBus("review-work")?.messages, [
+  assert.deepEqual(store.getBus(createdBus.bus.id)?.messages, [
     { id: "message-1", message: "Also check strict-mode behavior.", from: "main" },
   ]);
 
@@ -95,7 +97,9 @@ test("tools coordinate buses, subagents, messages, and completion events through
 
   assert.equal(messaged.run?.state, "running");
   assert.equal(messaged.run?.result, null);
-  assert.deepEqual(runtime.messaged, [{ id: "reviewer-b", message: "Re-check with the new strict-mode constraint." }]);
+  assert.deepEqual(runtime.messaged, [
+    { id: secondSpawn.run?.id, message: "Re-check with the new strict-mode constraint." },
+  ]);
 
   runtime.completeRun("researcher-a", { status: "blocked", summary: "Need a product decision." });
   runtime.completeRun("reviewer-b", successResult("Strict mode looks safe."));
@@ -103,7 +107,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
   assert.deepEqual(
     eventBatches
       .slice(1)
-      .flatMap((events) => events.map((event) => (event.type === "subagent.finished" ? event.run.runId : event.type))),
+      .flatMap((events) => events.map((event) => (event.type === "subagent.finished" ? event.run.name : event.type))),
     ["researcher-a", "reviewer-b"],
   );
 });
@@ -171,17 +175,21 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   assert.equal(started.action, "create");
   assert.equal(createdWorkgroup.action, "spawn_workgroup");
   assert.equal(completed.action, "status");
-  assert.equal(started.workflow.id, "release-flow");
-  assert.equal(createdWorkgroup.workgroup.leaderRunId, "collect-leader");
+  assertUuid7(started.workflow.id);
+  assert.equal(started.workflow.name, "release-flow");
+  assert.equal(store.getRun(createdWorkgroup.workgroup.leaderRunId ?? "")?.name, "collect-leader");
   assert.equal(completed.workflow.state, "closed");
   assert.equal(completed.workflow.result?.status, "success");
-  assert.equal(completed.workflow.leaderRunId, "flow-leader");
-  assert.deepEqual(completed.workflow.workgroupIds, ["collect"]);
+  assert.equal(store.getRun(completed.workflow.leaderRunId ?? "")?.name, "flow-leader");
   assert.deepEqual(
-    store.listBuses().map((bus) => ({ id: bus.id, state: bus.state })),
+    completed.workflow.workgroupIds.map((workgroupId) => store.getWorkgroup(workgroupId)?.name),
+    ["collect"],
+  );
+  assert.deepEqual(
+    store.listBuses().map((bus) => ({ name: bus.name, state: bus.state })),
     [
-      { id: "release-flow-flow-bus", state: "closed" },
-      { id: "release-flow-collect-bus", state: "closed" },
+      { name: "release-flow-flow-bus", state: "closed" },
+      { name: "release-flow-collect-bus", state: "closed" },
     ],
   );
   assert.deepEqual(
@@ -194,15 +202,19 @@ test("workflow runs end-to-end through real tools, orchestra, store, and runtime
   assert.match(collectLeaderTask, /Completed workflow workgroups before this one/);
 });
 
-async function waitForWorkflow(store: InMemoryAgentStore, id: string): Promise<void> {
+async function waitForWorkflow(store: InMemoryAgentStore, name: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt++) {
-    const workflow = store.getWorkflow(id);
+    const workflow = store.listWorkflows().find((current) => current.name === name);
     if (workflow && isTerminalAgentState(workflow.state)) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  const workflow = store.getWorkflow(id);
+  const workflow = store.listWorkflows().find((current) => current.name === name);
   assert.ok(workflow && isTerminalAgentState(workflow.state));
+}
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 }
 
 function successResult(summary: string): AgentResult {

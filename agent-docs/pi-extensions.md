@@ -54,7 +54,7 @@ defineTool({
   promptGuidelines: [
     // bullets injected into the system prompt
     "Create a bus first; spawn subscribes the subagent to busId.",
-    "Use returned run id/name for status, message, or close.",
+    "Use returned run name for status, message, or close.",
   ],
   parameters: SubagentToolParams, // Typebox schema
   executionMode: "parallel", // or "sequential"; omit for the default

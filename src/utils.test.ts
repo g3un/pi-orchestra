@@ -8,7 +8,6 @@ import {
   createEntityIdentity,
   findWorkflow,
   formatError,
-  formatNamedEntityLabel,
   indent,
   isTerminalAgentState,
   normalizeEntityName,
@@ -24,15 +23,15 @@ test("slugify and normalizeEntityName validate stable short names", () => {
   assert.throws(() => normalizeEntityName("x".repeat(65), "Agent"), /Agent name must be 64 characters or fewer\./);
 });
 
-test("createEntityIdentity accepts unique requested names and rejects duplicates", () => {
+test("createEntityIdentity accepts unique requested names, assigns UUIDv7 ids, and rejects duplicates", () => {
   const existing = [{ id: "reviewer", name: "Reviewer" }];
 
-  assert.deepEqual(createEntityIdentity("Security Lead", "agent", existing, "Agent"), {
-    id: "security-lead",
-    name: "Security Lead",
-  });
+  const identity = createEntityIdentity("Security Lead", "agent", existing, "Agent");
+  assertUuid7(identity.id);
+  assert.equal(identity.name, "Security Lead");
+  assert.notEqual(identity.id, "security-lead");
   assert.throws(() => createEntityIdentity("Reviewer", "agent", existing, "Agent"), /already in use/);
-  assert.throws(() => createEntityIdentity("!!!", "agent", existing, "Agent"), /must contain letters or numbers/);
+  assert.throws(() => createEntityIdentity("reviewer", "agent", existing, "Agent"), /already in use/);
 });
 
 test("createEntityIdentity generates collision-free names from auto seeds", () => {
@@ -41,15 +40,12 @@ test("createEntityIdentity generates collision-free names from auto seeds", () =
     { id: "researcher-2", name: "researcher-2" },
   ];
 
-  assert.deepEqual(createEntityIdentity(undefined, "Researcher", existing, "Agent"), {
-    id: "researcher-3",
-    name: "researcher-3",
-  });
+  const identity = createEntityIdentity(undefined, "Researcher", existing, "Agent");
+  assertUuid7(identity.id);
+  assert.equal(identity.name, "researcher-3");
 });
 
-test("format helpers handle names, indentation, and unknown errors", () => {
-  assert.equal(formatNamedEntityLabel({ id: "agent-1", name: "Reviewer" }), "Reviewer (agent-1)");
-  assert.equal(formatNamedEntityLabel({ id: "agent-1", name: "agent-1" }), "agent-1");
+test("format helpers handle indentation and unknown errors", () => {
   assert.equal(indent("one\ntwo", "> "), "> one\n> two");
   assert.equal(formatError(new Error("Boom")), "Boom");
   assert.equal(formatError("plain"), "plain");
@@ -71,6 +67,7 @@ test("workflow lookup helpers resolve by id or name", () => {
   assert.deepEqual(findWorkflow(store, workflow.id), workflow);
   assert.deepEqual(findWorkflow(store, workflow.name), workflow);
   assert.deepEqual(requireWorkflow(store, workflow.id), workflow);
+  assert.deepEqual(requireWorkflow(store, workflow.name), workflow);
   assert.throws(() => requireWorkflow(store, "missing"), /Workflow missing not found\./);
 });
 
@@ -113,6 +110,10 @@ test("closeAgentRuns closes unique run ids and tolerates close failures", async 
 
   assert.deepEqual(closedIds, ["agent-1", "broken", "agent-2"]);
 });
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+}
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   const id = overrides.id ?? "agent-1";

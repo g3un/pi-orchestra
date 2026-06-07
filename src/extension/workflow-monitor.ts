@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
-import { isAgentRunFinished, isTerminalAgentState, pluralize } from "../utils.ts";
+import { isAgentRunFinished, isTerminalAgentState, pluralize, resolveRunName } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
 const MAX_MONITORED_WORKFLOWS = 2;
@@ -129,7 +129,7 @@ function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
 function formatLeaderLabel(store: AgentStore, workflow: WorkflowRun): string {
   if (!workflow.leaderRunId) return "pending";
   const leaderRun = store.getRun(workflow.leaderRunId);
-  return `${leaderRun?.name ?? workflow.leaderRunId}: ${leaderRun?.state ?? "unknown"}`;
+  return `${resolveRunName(store, workflow.leaderRunId)}: ${leaderRun?.state ?? "unknown"}`;
 }
 
 function calculateWorkgroupProgress(store: AgentStore, workflow: WorkflowRun): { completed: number; total: number } {

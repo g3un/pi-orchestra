@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeEach, test, vi } from "vitest";
 import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
@@ -30,7 +31,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   const session = queueSession();
   const resolvedModel = model({ provider: "mock-provider", id: "mock-model" });
   const resolveModel = vi.fn(async () => resolvedModel);
-  const runtime = new PiAgentRuntime({ store, cwd: "/workspace", resolveModel });
+  const runtime = new PiAgentRuntime({ store, cwd: "/workspace", resolveModel, resolveCustomTools: undefined });
 
   const run = await runtime.spawn(
     {
@@ -88,10 +89,39 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
   assert.deepEqual(session.promptCalls[0]?.options, { expandPromptTemplates: false });
 });
 
+test("pi runtime registers requested profile custom tools in child sessions", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  queueSession();
+  const busTool = toolDefinition("bus");
+  const workflowTool = toolDefinition("workflow");
+  const workgroupTool = toolDefinition("workgroup");
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: undefined,
+    resolveCustomTools: () => [busTool, workflowTool, workgroupTool],
+  });
+
+  await runtime.spawn(
+    { name: "flow-leader", systemPrompt: "Lead the workflow.", tools: ["bus", "workflow", "read"], model: undefined },
+    "Lead the work.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+
+  const options = lastCreateAgentSessionOptions();
+  assert.deepEqual(options.tools, ["workflow", "read", "finish", "publish_bus"]);
+  assert.deepEqual(
+    options.customTools.map((tool) => tool.name),
+    ["workflow", "finish", "publish_bus"],
+  );
+});
+
 test("pi runtime rejects profiles without explicit tools", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
 
   await assert.rejects(
     () =>
@@ -119,7 +149,7 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
     ],
   });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
 
   await runtime.spawn(
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
@@ -146,7 +176,7 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const firstSession = queueSession();
   const secondSession = queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
   const firstRun = await runtime.spawn(
     { name: "first", systemPrompt: "Do first task.", tools: ["read", "bash"], model: undefined },
     "First task.",
@@ -189,7 +219,7 @@ test("pi runtime publishes bus messages to active subscribers rather than run bu
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   store.saveBus({ id: "bus-2", name: "Bus 2", state: "open", messages: [] });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
   const run = await runtime.spawn(
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
@@ -215,7 +245,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
   const run = await runtime.spawn(
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
@@ -249,7 +279,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
   assert.equal(session.disposed, true);
   await assert.rejects(
     () => finishTool.execute("tool-call-3", { status: "success", summary: "Too late." }),
-    /Agent agent-1 is closed\./,
+    /Agent Agent 1 is closed\./,
   );
 });
 
@@ -257,7 +287,7 @@ test("pi runtime finish requires running workgroup leaders to finish the workgro
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
   const run = await runtime.spawn(
     { name: "leader", systemPrompt: "Lead the group.", tools: ["workgroup"], model: undefined },
     "Lead the workgroup.",
@@ -269,7 +299,7 @@ test("pi runtime finish requires running workgroup leaders to finish the workgro
 
   await assert.rejects(
     () => finishTool.execute("tool-call-1", { status: "success", summary: "Too early." }),
-    /Agent leader-1 leads running workgroup workgroup-1; use workgroup action=finish before finish\./,
+    /Agent Leader 1 leads running workgroup workgroup-1; use workgroup action=finish before finish\./,
   );
 
   store.saveWorkgroup(
@@ -285,7 +315,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
   const run = await runtime.spawn(
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
@@ -325,7 +355,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
       });
     }),
   );
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined });
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
 
   await runtime.spawn(
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
@@ -351,7 +381,12 @@ test("pi runtime marks a run failed when the session ends without finish", async
 test("pi runtime rejects unresolved profile models before creating a session", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
-  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: async () => undefined });
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: async () => undefined,
+    resolveCustomTools: undefined,
+  });
 
   await assert.rejects(
     () =>
@@ -471,6 +506,16 @@ function customTool(name: string): CapturedTool {
   const tool = lastCreateAgentSessionOptions().customTools.find((current) => current.name === name);
   assert.ok(tool);
   return tool;
+}
+
+function toolDefinition(name: string): ToolDefinition {
+  return {
+    name,
+    label: name,
+    description: `${name} tool`,
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => ({ content: [{ type: "text" as const, text: `${name} called.` }] }),
+  } as unknown as ToolDefinition;
 }
 
 function model(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {

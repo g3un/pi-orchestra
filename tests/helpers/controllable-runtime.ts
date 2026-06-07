@@ -118,12 +118,14 @@ export class ControllableRuntime implements AgentRuntime {
   }
 
   private requireRun(id: string): AgentRun {
-    const run = this.store.getRun(id);
+    const run = this.store.getRun(id) ?? this.store.getRunByName(id);
     if (!run) throw new Error(`Agent ${id} not found.`);
     return run;
   }
 
   private requireBus(id: string): void {
-    if (!this.store.getBus(id)) throw new Error(`Bus ${id} not found.`);
+    if (!this.store.getBus(id) && !this.store.getBusByName(id)) {
+      throw new Error(`Bus ${id} not found.`);
+    }
   }
 }

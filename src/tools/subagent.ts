@@ -7,7 +7,6 @@ import {
   createAgentProfileFromPreset,
   type AgentProfilePreset,
 } from "../profiles/presets.ts";
-import { formatNamedEntityLabel } from "../utils.ts";
 
 export interface SubagentSpawnInput {
   action: "spawn";
@@ -48,12 +47,11 @@ export interface SubagentToolDeps {
 }
 
 export const SubagentRunNameParam = Type.String({
-  description: "Globally unique short run name.",
+  description: "Globally unique readable run name.",
 });
 
 const AgentProfileToolsParam = Type.Array(Type.String(), {
-  description:
-    "Explicit tool allowlist for the subagent. Use [] for no work tools; finish and publish_bus are added automatically.",
+  description: "Tool allowlist. finish/publish_bus are added automatically; do not include bus.",
 });
 
 const AgentProfileModelParam = Type.Optional(
@@ -67,7 +65,7 @@ export const AgentProfileParams = Type.Object(
     preset: Type.Optional(
       Type.String({
         enum: [...AGENT_PROFILE_PRESET_VALUES],
-        description: "Reusable profile preset. Use this instead of writing a full systemPrompt when one fits.",
+        description: "Reusable profile preset.",
       }),
     ),
     name: Type.Optional(
@@ -81,14 +79,13 @@ export const AgentProfileParams = Type.Object(
   },
   {
     additionalProperties: false,
-    description:
-      "Required for action=spawn. Set preset plus tools/name/model overrides, or omit preset and provide name/systemPrompt/tools for a custom profile.",
+    description: "Required for spawn. Use preset, or provide custom name/systemPrompt/tools.",
   },
 );
 
 const SubagentActionParams = Type.String({
   enum: ["spawn", "status", "message", "close"],
-  description: "spawn creates; status inspects; message steers/restarts; close disposes by id/name.",
+  description: "spawn creates; status inspects; message steers; close disposes.",
 });
 
 export const SubagentSpawnParams = Type.Object(
@@ -99,10 +96,10 @@ export const SubagentSpawnParams = Type.Object(
     }),
     profile: AgentProfileParams,
     task: Type.String({
-      description: "Required for action=spawn. Task to delegate to the new subagent.",
+      description: "Required for spawn. Delegated task.",
     }),
     busId: Type.String({
-      description: "Required for action=spawn. Existing bus id/name.",
+      description: "Required for spawn. Existing bus name.",
     }),
     name: SubagentRunNameParam,
   },
@@ -115,23 +112,23 @@ const SubagentToolParams = Type.Object(
     profile: Type.Optional(AgentProfileParams),
     task: Type.Optional(
       Type.String({
-        description: "Required for action=spawn. Task to delegate to the new subagent.",
+        description: "Required for spawn. Delegated task.",
       }),
     ),
     busId: Type.Optional(
       Type.String({
-        description: "Required for action=spawn. Existing bus id/name.",
+        description: "Required for spawn. Existing bus name.",
       }),
     ),
     name: Type.Optional(SubagentRunNameParam),
     id: Type.Optional(
       Type.String({
-        description: "Required for status/message/close. Subagent run id/name.",
+        description: "Required for status/message/close. Subagent run name.",
       }),
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=message. Instruction to send to the subagent.",
+        description: "Required for message. Instruction to send.",
       }),
     ),
   },
@@ -162,7 +159,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
         const run = await orchestra.messageAgent(input.id, input.message, { busId: undefined });
         return {
           run,
-          message: formatRunMessage(run, `Messaged subagent ${formatNamedEntityLabel(run)}; it is ${run.state}.`),
+          message: formatRunMessage(run, `Messaged subagent ${run.name}; it is ${run.state}.`),
         };
       }
 
@@ -170,7 +167,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
       return {
         run,
         message: run
-          ? formatRunMessage(run, `Closed subagent ${formatNamedEntityLabel(run)}.`)
+          ? formatRunMessage(run, `Closed subagent ${run.name}.`)
           : formatClosedMissingSubagentMessage(input.id),
       };
     },
@@ -181,13 +178,11 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
   return defineTool({
     name: "subagent",
     label: "Subagent",
-    description: "Create and manage isolated subagents.",
-    promptSnippet: "Spawn a subagent on an existing bus, then status/message/close it later.",
+    description: "Spawn and manage subagents.",
+    promptSnippet: "Spawn, inspect, message, or close named subagents.",
     promptGuidelines: [
-      "Create a bus first; spawn subscribes the subagent to busId.",
-      "Attach cooperating subagents to the same bus.",
-      "Prefer profile.preset with explicit tools when a built-in profile fits; use custom systemPrompt only for one-off roles.",
-      "Use returned run id/name for status, message, or close.",
+      "Use subagent spawn on an existing bus; related agents can share a bus.",
+      "Use subagent status/message/close with the returned run name.",
     ],
     parameters: SubagentToolParams,
     executionMode: "parallel",
@@ -307,10 +302,7 @@ function formatClosedMissingSubagentMessage(id: string): string {
   return `Closed subagent ${id}.`;
 }
 
-function formatRunMessage(
-  run: AgentRun,
-  headline = `Subagent ${formatNamedEntityLabel(run)} is ${run.state}.`,
-): string {
+function formatRunMessage(run: AgentRun, headline = `Subagent ${run.name} is ${run.state}.`): string {
   if (run.result === null) return headline;
 
   const parts = [headline, "", `Result: ${run.result.status}`, run.result.summary];

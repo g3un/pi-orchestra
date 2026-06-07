@@ -1,6 +1,8 @@
 # Orchestration Model
 
-pi-orchestra builds delegation in four layers:
+pi-orchestra builds delegation in four layers. Persisted entities use opaque
+UUIDv7 `id` values for sortable uniqueness and readable unique `name` values for
+tool prompts and user-visible output.
 
 1. **Bus** — shared context channel.
 2. **Subagent** — isolated child agent subscribed to a bus.
@@ -9,8 +11,9 @@ pi-orchestra builds delegation in four layers:
 
 ## Bus
 
-A `Bus` is the coordination scope for related work. It has an `id`, `name`, `state`, and
-ordered `messages`. New buses start `open`; finishing a workgroup closes its bus and removes bus subscriptions.
+A `Bus` is the coordination scope for related work. It has an `id`, `name`,
+`state`, and ordered `messages`. New buses start `open`; finishing a workgroup
+closes its bus and removes bus subscriptions.
 
 Bus messages are peer reference context only:
 
@@ -54,7 +57,7 @@ Ownership is scoped. The effective owner of a workgroup result is its leader: th
 Main receives finish events instead of blocking on completion calls:
 
 - Standalone subagent completions arrive as `subagent.finished` events.
-- Workgroup member completions arrive as `workgroup.member_finished` events with pending run ids while the workgroup is running.
+- Workgroup member completions arrive as `workgroup.member_finished` events while the workgroup is running; formatted event text shows pending run names.
 - The workgroup leader decides whether one result is enough, members should be closed, more members should be spawned, active members should be steered, or more context should be published.
 - The leader ends the group with `workgroup action=finish`, providing `status`, `summary`, and optional `data`. Finishing moves the workgroup through `closing` to `closed`, closes all member runs, closes the bus, suppresses cleanup-only member finish events, and emits `workgroup.finished` with the final output.
 

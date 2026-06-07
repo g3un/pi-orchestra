@@ -66,7 +66,9 @@ Profile options:
   `model`.
 - `tools`: always inject an explicit allowlist from the tools available to the
   main agent. Include only tools the child needs, including installed extension
-  tool names for research/browser work. Use `[]` for supplied-context-only roles.
+  tool names for research/browser work. Do not include `bus`; child agents get
+  `publish_bus` automatically for shared context. Use `[]` for
+  supplied-context-only roles.
 - `model`: omit unless the task needs a specific provider/model.
 
 ## Patterns
@@ -74,7 +76,7 @@ Profile options:
 ### Single specialist
 
 1. `bus create` with a short name.
-2. `subagent spawn` with the bus id/name, specialist profile, and focused task.
+2. `subagent spawn` with the bus name, specialist profile, and focused task.
 3. Incorporate the finish event. Use `subagent message` only for meaningful new
    guidance; avoid micromanagement.
 

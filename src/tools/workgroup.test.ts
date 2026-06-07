@@ -70,7 +70,8 @@ test("workgroup creates an internal bus and launches members on it", async () =>
   assertMembersAdded(output);
   assert.equal(output.bus, bus);
   assert.equal(output.runs.length, 2);
-  assert.equal(output.workgroup.id, "auth-work-workgroup");
+  assertUuid7(output.workgroup.id);
+  assert.equal(output.workgroup.name, "auth-work-workgroup");
   assert.equal(output.workgroup.leaderRunId, null);
   assert.deepEqual(output.workgroup.memberRunIds, ["security-review", "backend-review"]);
   assert.deepEqual(orchestra.store.getWorkgroup(output.workgroup.id), output.workgroup);
@@ -336,6 +337,10 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
   assert.deepEqual(orchestra.closedIds, ["security-review"]);
   assert.equal(orchestra.runs.get("security-review")?.state, "closed");
 });
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+}
 
 function requireCreatedWorkgroupId(output: WorkgroupOutput): string {
   return requireCreatedWorkgroup(output).id;

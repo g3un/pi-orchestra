@@ -6,11 +6,13 @@ import type { WorkgroupRun } from "./workgroup.ts";
 export interface AgentStore {
   saveRun(run: AgentRun): void;
   getRun(id: string): AgentRun | undefined;
+  getRunByName(name: string): AgentRun | undefined;
   listRuns(): AgentRun[];
   subscribeRuns(listener: (run: AgentRun) => void, filter: ((run: AgentRun) => boolean) | undefined): () => void;
 
   saveBus(bus: Bus): void;
   getBus(id: string): Bus | undefined;
+  getBusByName(name: string): Bus | undefined;
   listBuses(): Bus[];
   /** Add or replace a bus message by id. */
   addBusMessage(busId: string, message: BusMessage): void;
@@ -26,6 +28,7 @@ export interface AgentStore {
 
   saveWorkgroup(workgroup: WorkgroupRun): void;
   getWorkgroup(id: string): WorkgroupRun | undefined;
+  getWorkgroupByName(name: string): WorkgroupRun | undefined;
   listWorkgroups(): WorkgroupRun[];
   subscribeWorkgroups(
     listener: (workgroup: WorkgroupRun) => void,
@@ -34,6 +37,7 @@ export interface AgentStore {
 
   saveWorkflow(workflow: WorkflowRun): void;
   getWorkflow(id: string): WorkflowRun | undefined;
+  getWorkflowByName(name: string): WorkflowRun | undefined;
   listWorkflows(): WorkflowRun[];
   subscribeWorkflows(
     listener: (workflow: WorkflowRun) => void,

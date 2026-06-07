@@ -10,14 +10,7 @@ import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import { createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
-import {
-  closeAgentRuns,
-  formatError,
-  formatNamedEntityLabel,
-  normalizeEntityName,
-  pluralize,
-  slugify,
-} from "../utils.ts";
+import { closeAgentRuns, formatError, normalizeEntityName, pluralize, resolveRunName } from "../utils.ts";
 import {
   AgentProfileParams,
   spawnSubagent,
@@ -94,6 +87,7 @@ export interface WorkgroupLaunchEvent {
   workgroup: WorkgroupRun;
   bus: Bus;
   runIds: string[];
+  runNames: string[];
 }
 
 export interface WorkgroupLaunchedEvent extends WorkgroupLaunchEvent {
@@ -114,8 +108,7 @@ export interface WorkgroupToolDeps {
 
 const WorkgroupActionParams = Type.String({
   enum: ["create", "add_members", "finish", "status"],
-  description:
-    "create stores a workgroup; add_members spawns member subagents; finish records the leader-owned final output and closes the workgroup; status inspects a workgroup.",
+  description: "create/add_members/finish/status a workgroup.",
 });
 
 const WorkgroupToolParams = Type.Object(
@@ -123,17 +116,17 @@ const WorkgroupToolParams = Type.Object(
     action: WorkgroupActionParams,
     name: Type.Optional(
       Type.String({
-        description: "Required for action=create. Unique workgroup name.",
+        description: "Required for create. Unique workgroup name.",
       }),
     ),
     id: Type.Optional(
       Type.String({
-        description: "Required for action=add_members/finish/status. Workgroup id/name.",
+        description: "Required for add_members/finish/status. Workgroup name.",
       }),
     ),
     goal: Type.Optional(
       Type.String({
-        description: "Required for action=create. Shared workgroup goal.",
+        description: "Required for create. Shared goal.",
       }),
     ),
     members: Type.Optional(
@@ -148,12 +141,11 @@ const WorkgroupToolParams = Type.Object(
           },
           {
             additionalProperties: false,
-            description:
-              "Required for action=add_members. Member subagent to spawn; workgroup fills runtime fields automatically.",
+            description: "Required for add_members. Member profile/task/name.",
           },
         ),
         {
-          description: "Required for action=add_members. Member subagents to spawn.",
+          description: "Required for add_members. Member subagents.",
           minItems: 1,
         },
       ),
@@ -161,17 +153,17 @@ const WorkgroupToolParams = Type.Object(
     status: Type.Optional(
       Type.String({
         enum: [...AGENT_RESULT_STATUS_VALUES],
-        description: "Required for action=finish. Final workgroup result status.",
+        description: "Required for finish. Result status.",
       }),
     ),
     summary: Type.Optional(
       Type.String({
-        description: "Required for action=finish. Concise final workgroup summary for main or the workflow leader.",
+        description: "Required for finish. Concise summary.",
       }),
     ),
     data: Type.Optional(
       Type.Unknown({
-        description: "Optional structured final workgroup output for action=finish.",
+        description: "Optional finish data.",
       }),
     ),
   },
@@ -237,7 +229,7 @@ export function createWorkgroupTool({
       }
 
       if (input.action === "finish") {
-        if (workgroup.state !== "running") throw new Error(`Workgroup ${input.id} is ${workgroup.state}.`);
+        if (workgroup.state !== "running") throw new Error(`Workgroup ${workgroup.name} is ${workgroup.state}.`);
         const closedWorkgroup = await closeWorkgroupRun(orchestra, store, workgroup, {
           includeLeader: false,
           result: input.result,
@@ -248,13 +240,13 @@ export function createWorkgroupTool({
         };
       }
 
-      if (workgroup.state !== "running") throw new Error(`Workgroup ${input.id} is ${workgroup.state}.`);
+      if (workgroup.state !== "running") throw new Error(`Workgroup ${workgroup.name} is ${workgroup.state}.`);
       if (input.members.length === 0) throw new Error("workgroup action=add_members requires members.");
 
       const members = prepareMembers(input.members, orchestra.listRuns({ busId: undefined }), bus);
-      const runIds = members.map((member) => slugify(member.name));
 
-      onWorkgroupLaunching?.({ input, workgroup, bus, runIds });
+      const runNames = members.map((member) => member.name);
+      onWorkgroupLaunching?.({ input, workgroup, bus, runIds: [], runNames });
       let launchFailedNotified = false;
       try {
         const spawnResults = await Promise.allSettled(
@@ -267,11 +259,13 @@ export function createWorkgroupTool({
         const successes = collectSpawnSuccesses(spawnResults);
         const failures = collectSpawnFailures(members, spawnResults);
         if (failures.length > 0) {
+          const runIds = successes.map((success) => success.run.id);
           onWorkgroupLaunchFailed?.({
             input,
             workgroup,
             bus,
             runIds,
+            runNames,
             error: new Error("Failed to launch every workgroup member."),
           });
           launchFailedNotified = true;
@@ -294,10 +288,17 @@ export function createWorkgroupTool({
           runs,
           message: formatWorkgroupMembersAddedMessage(bus, updatedWorkgroup, runs),
         };
-        onWorkgroupLaunched?.({ input, workgroup: updatedWorkgroup, bus, runIds, output });
+        onWorkgroupLaunched?.({
+          input,
+          workgroup: updatedWorkgroup,
+          bus,
+          runIds: runs.map((run) => run.id),
+          runNames,
+          output,
+        });
         return output;
       } catch (error) {
-        if (!launchFailedNotified) onWorkgroupLaunchFailed?.({ input, workgroup, bus, runIds, error });
+        if (!launchFailedNotified) onWorkgroupLaunchFailed?.({ input, workgroup, bus, runIds: [], runNames, error });
         throw error;
       }
     },
@@ -344,17 +345,12 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
   return defineTool({
     name: "workgroup",
     label: "Workgroup",
-    description: "Create a workgroup on a private bus, add member subagents, and finish it with final output.",
-    promptSnippet: "Create a workgroup, add members when useful, then finish it with final output.",
+    description: "Coordinate a led subagent workgroup.",
+    promptSnippet: "Create a workgroup, add members, then finish it.",
     promptGuidelines: [
-      "Use workgroup action=create to store the group goal; it creates a private coordination bus automatically.",
-      "Use workgroup action=add_members whenever the group needs more member subagents; members are not fixed at creation time.",
-      "Each member input provides profile, task, and name only; workgroup fills runtime action and private bus fields automatically.",
-      "Use workgroup action=finish exactly once when the workgroup has enough output; finish closes the workgroup bus and all member subagents and sends a workgroup.finished event.",
-      "Only the workgroup leader should call workgroup action=finish; parent scopes should consume workgroup.finished rather than finishing for the leader.",
-      "The leader decides whether to run competing alternatives, complementary research, reviews, or follow-ups before finishing.",
-      "Prefer profile.preset with explicit tools when a built-in member profile fits; use custom systemPrompt only for one-off roles.",
-      "publish_bus is peer-reference context, not a leader-request channel.",
+      "Use workgroup create first; it creates the private bus.",
+      "Use workgroup add_members with member profile/task/name only.",
+      "Only the workgroup leader calls workgroup finish.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",
@@ -428,7 +424,7 @@ function withDefaultModelsForSubagentSpawns(
 }
 
 function findWorkgroup(store: AgentStore, id: string): WorkgroupRun | undefined {
-  return store.getWorkgroup(id) ?? store.listWorkgroups().find((workgroup) => workgroup.name === id);
+  return store.getWorkgroup(id) ?? store.getWorkgroupByName(id);
 }
 
 function collectWorkgroupMemberRuns(store: AgentStore, workgroup: WorkgroupRun): AgentRun[] {
@@ -447,14 +443,11 @@ function prepareMembers(members: WorkgroupMemberInput[], existingRuns: AgentRun[
 
   return members.map((member) => {
     const name = normalizeEntityName(member.name, "Workgroup member");
-    const id = slugify(name);
-    if (!id) throw new Error(`Workgroup member name "${name}" must contain letters or numbers.`);
-    if (reservedNames.has(name) || reservedNames.has(id)) {
+    if (reservedNames.has(name)) {
       throw new Error(`Workgroup member name "${name}" is already in use.`);
     }
 
     reservedNames.add(name);
-    reservedNames.add(id);
     return { action: "spawn", ...member, busId: bus.id, name };
   });
 }
@@ -490,9 +483,9 @@ function formatLaunchFailure(
       const success = successes[index];
       const cleanupResult = cleanupResults[index];
       if (cleanupResult?.status === "rejected") {
-        parts.push(`- ${formatNamedEntityLabel(success.run)}: failed to close (${formatError(cleanupResult.reason)})`);
+        parts.push(`- ${success.run.name}: failed to close (${formatError(cleanupResult.reason)})`);
       } else {
-        parts.push(`- ${formatNamedEntityLabel(success.run)}: closed`);
+        parts.push(`- ${success.run.name}: closed`);
       }
     }
   }
@@ -507,7 +500,7 @@ function formatWorkgroupOutputMessage(output: WorkgroupOutput): string {
 
 function formatWorkgroupFinishedMessage(workgroup: WorkgroupRun): string {
   return [
-    `Finished workgroup ${formatNamedEntityLabel(workgroup)} with ${workgroup.result?.status ?? "unknown"}.`,
+    `Finished workgroup ${workgroup.name} with ${workgroup.result?.status ?? "unknown"}.`,
     "",
     `Summary: ${workgroup.result?.summary ?? "None."}`,
     "",
@@ -517,10 +510,10 @@ function formatWorkgroupFinishedMessage(workgroup: WorkgroupRun): string {
 
 function formatWorkgroupMembersAddedMessage(bus: Bus, workgroup: WorkgroupRun, runs: AgentRun[]): string {
   return [
-    `Added ${runs.length} ${pluralize("member", runs.length)} to workgroup ${formatNamedEntityLabel(workgroup)} on bus ${formatNamedEntityLabel(bus)}.`,
+    `Added ${runs.length} ${pluralize("member", runs.length)} to workgroup ${workgroup.name} on bus ${bus.name}.`,
     "",
     "Runs:",
-    ...runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`),
+    ...runs.map((run) => `- ${run.name}: ${run.state}`),
     "",
     "Pi-orchestra will deliver workgroup.member_finished events as members finish.",
   ].join("\n");
@@ -529,16 +522,21 @@ function formatWorkgroupMembersAddedMessage(bus: Bus, workgroup: WorkgroupRun, r
 function formatWorkgroupStatusMessage(store: AgentStore, workgroup: WorkgroupRun, bus: Bus): string {
   const runs = collectWorkgroupMemberRuns(store, workgroup);
   return [
-    `Workgroup ${formatNamedEntityLabel(workgroup)} on bus ${formatNamedEntityLabel(bus)}.`,
+    `Workgroup ${workgroup.name} on bus ${bus.name}.`,
     "",
     `Goal: ${workgroup.goal}`,
     `State: ${workgroup.state}`,
     `Result: ${workgroup.result ? `${workgroup.result.status} — ${workgroup.result.summary}` : "none"}`,
-    `Leader run id: ${workgroup.leaderRunId ?? "main"}`,
+    `Leader: ${formatWorkgroupLeaderName(store, workgroup)}`,
     "",
     `Members (${runs.length}):`,
-    ...(runs.length > 0 ? runs.map((run) => `- ${formatNamedEntityLabel(run)}: ${run.state}`) : ["- none"]),
+    ...(runs.length > 0 ? runs.map((run) => `- ${run.name}: ${run.state}`) : ["- none"]),
   ].join("\n");
+}
+
+function formatWorkgroupLeaderName(store: AgentStore, workgroup: WorkgroupRun): string {
+  if (!workgroup.leaderRunId) return "main";
+  return resolveRunName(store, workgroup.leaderRunId);
 }
 
 function formatWorkgroupNotFound(id: string): string {

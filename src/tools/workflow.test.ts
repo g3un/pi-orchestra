@@ -50,7 +50,7 @@ test("workflow creates a flow leader on a private workflow bus", async () => {
   assert.equal(store.getBus(output.workflow.busId)?.state, "open");
   assert.equal(store.getRun("flow-lead")?.state, "running");
   const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "flow-lead")?.task ?? "";
-  assert.match(leaderTask, /Workflow id\/name for workflowId: research-flow/);
+  assert.match(leaderTask, /Workflow name for workflowId: research-flow/);
   assert.match(leaderTask, /workflow action=spawn_workgroup/);
   assert.match(leaderTask, /workflow action=finish/);
 });
@@ -70,8 +70,9 @@ test("flow leader creates led workgroups that reuse workgroup lifecycle", async 
   });
 
   assert.equal(output.action, "spawn_workgroup");
-  assert.equal(output.workflow.workgroupIds[0], "collect");
-  assert.equal(output.workgroup.id, "collect");
+  assert.equal(output.workflow.workgroupIds[0], output.workgroup.id);
+  assertUuid7(output.workgroup.id);
+  assert.equal(output.workgroup.name, "collect");
   assert.equal(output.workgroup.leaderRunId, "collect-lead");
   assert.equal(output.workgroup.state, "running");
   assert.equal(output.bus.id, "research-flow-collect-bus");
@@ -107,8 +108,9 @@ test("workflow spawn_workgroup accepts workflow names as workflowId", async () =
   });
 
   assert.equal(output.action, "spawn_workgroup");
-  assert.equal(output.workflow.id, "research-flow");
-  assert.equal(output.workgroup.id, "collect");
+  assertUuid7(output.workflow.id);
+  assert.equal(output.workflow.name, "Research Flow");
+  assert.equal(output.workgroup.name, "collect");
 });
 
 test("later workflow workgroups receive previous workgroup outputs", async () => {
@@ -123,7 +125,7 @@ test("later workflow workgroups receive previous workgroup outputs", async () =>
     goal: "Collect evidence.",
     leader: { name: "collect-lead", profile: hangingGroupLeaderProfile, task: "Lead evidence collection." },
   });
-  const collectWorkgroup = store.getWorkgroup("collect");
+  const collectWorkgroup = findWorkgroupByName(store, "collect");
   assert.ok(collectWorkgroup);
   store.saveWorkgroup({
     ...collectWorkgroup,
@@ -140,7 +142,7 @@ test("later workflow workgroups receive previous workgroup outputs", async () =>
   });
 
   const analyzeTask = orchestra.spawned.find((spawn) => spawn.name === "analyze-lead")?.task ?? "";
-  assert.match(analyzeTask, /<workgroup_output name="collect" id="collect">/);
+  assert.match(analyzeTask, /<workgroup_output name="collect">/);
   assert.match(analyzeTask, /Collected API facts\./);
   assert.match(analyzeTask, /src\/core\/workgroup\.ts/);
 });
@@ -159,7 +161,7 @@ test("workflow finish closes child workgroups, buses, group leaders, members, an
   });
   const memberRun = run({ id: "collector", name: "collector", busId: "research-flow-collect-bus" });
   orchestra.runs.set(memberRun.id, memberRun);
-  const workgroup = store.getWorkgroup("collect");
+  const workgroup = findWorkgroupByName(store, "collect");
   assert.ok(workgroup);
   store.saveWorkgroup({
     ...workgroup,
@@ -177,8 +179,11 @@ test("workflow finish closes child workgroups, buses, group leaders, members, an
   assert.equal(workflow.state, "closed");
   assert.equal(workflow.result?.status, "success");
   assert.deepEqual(workflow.result?.data, { decision: "ship" });
-  assert.deepEqual(workflow.workgroupIds, ["collect"]);
-  assert.equal(store.getWorkgroup("collect")?.state, "closed");
+  assert.deepEqual(
+    workflow.workgroupIds.map((workgroupId) => store.getWorkgroup(workgroupId)?.name),
+    ["collect"],
+  );
+  assert.equal(findWorkgroupByName(store, "collect")?.state, "closed");
   assert.equal(store.getBus("research-flow-flow-bus")?.state, "closed");
   assert.equal(store.getBus("research-flow-collect-bus")?.state, "closed");
   assert.equal(orchestra.runs.get("flow-lead")?.state, "closed");
@@ -205,7 +210,7 @@ test("workflow cancel closes active workflow resources with a cancellation resul
   assert.equal(output.workflow.state, "closed");
   assert.equal(output.workflow.result?.status, "blocked");
   assert.equal(output.workflow.result?.summary, "Workflow cancelled.");
-  assert.equal(store.getWorkgroup("collect")?.state, "closed");
+  assert.equal(findWorkgroupByName(store, "collect")?.state, "closed");
   assert.equal(store.getBus("research-flow-flow-bus")?.state, "closed");
   assert.equal(store.getBus("research-flow-collect-bus")?.state, "closed");
   assert.equal(orchestra.runs.get("flow-lead")?.state, "closed");
@@ -323,8 +328,8 @@ test("workflow marks start failure when the flow leader cannot spawn", async () 
     /Spawn failed\./,
   );
 
-  assert.equal(store.getWorkflow("broken-flow")?.state, "closed");
-  assert.equal(store.getWorkflow("broken-flow")?.result?.status, "failed");
+  assert.equal(findWorkflowByName(store, "broken-flow")?.state, "closed");
+  assert.equal(findWorkflowByName(store, "broken-flow")?.result?.status, "failed");
   assert.equal(store.getBus("broken-flow-flow-bus")?.state, "closed");
 });
 
@@ -451,15 +456,27 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   } as AgentRun;
 }
 
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+}
+
+function findWorkflowByName(store: InMemoryAgentStore, name: string): ReturnType<InMemoryAgentStore["getWorkflow"]> {
+  return store.listWorkflows().find((workflow) => workflow.name === name);
+}
+
+function findWorkgroupByName(store: InMemoryAgentStore, name: string): ReturnType<InMemoryAgentStore["getWorkgroup"]> {
+  return store.listWorkgroups().find((workgroup) => workgroup.name === name);
+}
+
 async function waitForWorkflow(
   store: InMemoryAgentStore,
-  id: string,
+  name: string,
 ): Promise<NonNullable<ReturnType<InMemoryAgentStore["getWorkflow"]>>> {
   await eventually(() => {
-    const workflow = store.getWorkflow(id);
+    const workflow = findWorkflowByName(store, name);
     return workflow !== undefined && isTerminalAgentState(workflow.state);
   });
-  const workflow = store.getWorkflow(id);
+  const workflow = findWorkflowByName(store, name);
   assert.ok(workflow);
   return workflow;
 }

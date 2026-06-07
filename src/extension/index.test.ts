@@ -36,7 +36,7 @@ test("bus parameters use an OpenAI-compatible root object schema without wait ac
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
   assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish", "subscribe", "unsubscribe"]);
-  assert.match(parameters.properties.action?.description ?? "", /completion is delivered/);
+  assert.match(parameters.properties.action?.description ?? "", /Manage shared buses/);
   assert.match(parameters.properties.name?.description ?? "", /status\/publish/);
   assert.equal(parameters.properties.id, undefined);
   assert.match(parameters.properties.message?.description ?? "", /Shared context/);
@@ -56,11 +56,11 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.ok(parameters.properties);
   assert.deepEqual(parameters.properties.action?.enum, ["spawn", "status", "message", "close"]);
   assert.match(parameters.properties.action?.description ?? "", /spawn creates/);
-  assert.match(parameters.properties.task?.description ?? "", /Required for action=spawn/);
-  assert.match(parameters.properties.busId?.description ?? "", /bus id\/name/);
-  assert.match(parameters.properties.name?.description ?? "", /short run name/);
-  assert.match(parameters.properties.id?.description ?? "", /run id\/name/);
-  assert.match(parameters.properties.message?.description ?? "", /Required for action=message/);
+  assert.match(parameters.properties.task?.description ?? "", /Required for spawn/);
+  assert.match(parameters.properties.busId?.description ?? "", /bus name/);
+  assert.match(parameters.properties.name?.description ?? "", /readable run name/);
+  assert.match(parameters.properties.id?.description ?? "", /run name/);
+  assert.match(parameters.properties.message?.description ?? "", /Required for message/);
 });
 
 test("workgroup parameters use an OpenAI-compatible root object schema", () => {
@@ -74,7 +74,7 @@ test("workgroup parameters use an OpenAI-compatible root object schema", () => {
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
   assert.equal(parameters.properties.busId, undefined);
-  assert.match(parameters.properties.goal?.description ?? "", /Shared workgroup goal/);
+  assert.match(parameters.properties.goal?.description ?? "", /Shared goal/);
   assert.equal(parameters.properties.strategy, undefined);
   assert.match(parameters.properties.members?.description ?? "", /subagents/);
   assert.ok(parameters.properties.members?.items?.properties);
@@ -99,7 +99,7 @@ test("workflow parameters use an OpenAI-compatible root object schema without wa
   assert.match(parameters.properties.action?.description ?? "", /spawn_workgroup/);
   assert.equal(parameters.properties.id, undefined);
   assert.match(parameters.properties.workflowId?.description ?? "", /spawn_workgroup\/finish\/status\/cancel/);
-  assert.match(parameters.properties.goal?.description ?? "", /create and spawn_workgroup/);
+  assert.match(parameters.properties.goal?.description ?? "", /create\/spawn_workgroup/);
   assert.equal(parameters.properties.stages, undefined);
   assert.ok(parameters.properties.leader);
   assert.equal(parameters.properties.timeoutMs, undefined);
@@ -125,8 +125,11 @@ test("extension backs tools with a project-local SQLite store", async () => {
     assert.equal(existsSync(getProjectSqliteStorePath(cwd)), true);
     const store = createProjectSqliteAgentStore(cwd);
     try {
-      assert.deepEqual(store.getBus("persistent-bus"), {
-        id: "persistent-bus",
+      const persistedBus = store.listBuses().find((current) => current.name === "Persistent Bus");
+      assert.ok(persistedBus);
+      assertUuid7(persistedBus.id);
+      assert.deepEqual(persistedBus, {
+        id: persistedBus.id,
         name: "Persistent Bus",
         state: "open",
         messages: [],
@@ -139,6 +142,10 @@ test("extension backs tools with a project-local SQLite store", async () => {
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+}
 
 function registerExtension(): {
   registeredTools: ToolDefinition[];

@@ -39,10 +39,14 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
     const reopened = createProjectSqliteAgentStore(cwd);
     try {
       assert.deepEqual(reopened.getBus(bus.id), { ...bus, messages: [busMessage] });
+      assert.deepEqual(reopened.getBusByName(bus.name), { ...bus, messages: [busMessage] });
       assert.deepEqual(reopened.getRun(savedRun.id), savedRun);
+      assert.deepEqual(reopened.getRunByName(savedRun.name), savedRun);
       assert.deepEqual(reopened.getBusSubscription(savedBusSubscription.id), savedBusSubscription);
       assert.deepEqual(reopened.getWorkgroup(savedWorkgroup.id), savedWorkgroup);
+      assert.deepEqual(reopened.getWorkgroupByName(savedWorkgroup.name), savedWorkgroup);
       assert.deepEqual(reopened.getWorkflow(savedWorkflow.id), savedWorkflow);
+      assert.deepEqual(reopened.getWorkflowByName(savedWorkflow.name), savedWorkflow);
       assert.deepEqual(reopened.listBuses(), [{ ...bus, messages: [busMessage] }]);
       assert.deepEqual(reopened.listRuns(), [savedRun]);
       assert.deepEqual(
@@ -204,7 +208,7 @@ test("SQLite store rejects existing unversioned stores and tells the user to rec
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 0; expected 5\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 0; expected 6\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -222,7 +226,7 @@ test("SQLite store rejects older schemas and tells the user to recreate the stor
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 2; expected 5\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 2; expected 6\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });

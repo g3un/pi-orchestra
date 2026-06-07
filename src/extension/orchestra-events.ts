@@ -3,7 +3,7 @@ import type { AgentRun, AgentRunResult } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun, WorkgroupState } from "../core/workgroup.ts";
-import { formatNamedEntityLabel, isAgentRunActive, toAgentRunResult } from "../utils.ts";
+import { isAgentRunActive, resolveBusName, resolveRunName, toAgentRunResult } from "../utils.ts";
 
 export const ORCHESTRA_EVENT_CUSTOM_TYPE = "pi-orchestra.event";
 
@@ -37,6 +37,7 @@ export interface WorkgroupLaunchRegistration {
   busId: string;
   leaderRunId: string | null;
   runIds: string[];
+  runNames?: string[];
 }
 
 export type WorkgroupRegistration = WorkgroupLaunchRegistration;
@@ -57,6 +58,7 @@ interface LaunchingWorkgroup {
   finishedRunIds: Set<string>;
   leaderRunId: string | null;
   runIds: Set<string>;
+  runNames: Set<string>;
 }
 
 interface BusMessageDelivery {
@@ -65,7 +67,9 @@ interface BusMessageDelivery {
 }
 
 interface FormatOrchestraEventsOptions {
-  formatBusMessageFrom: ((from: string) => string) | undefined;
+  formatBusMessageFrom?: (from: string) => string;
+  formatBusName?: (busId: string) => string;
+  formatRunName?: (runId: string) => string;
 }
 
 export class OrchestraEventController {
@@ -78,6 +82,8 @@ export class OrchestraEventController {
   private readonly workflowIndexes = new Map<string, { busId: string; workgroupIds: string[] }>();
   private readonly workflowIdByWorkgroupId = new Map<string, string>();
   private readonly workflowIdByBusId = new Map<string, string>();
+  private readonly workgroupMemberRunIndexes = new Map<string, string[]>();
+  private readonly workgroupIdByMemberRunId = new Map<string, string>();
   private readonly workgroupStates = new Map<string, WorkgroupState>();
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
@@ -103,7 +109,7 @@ export class OrchestraEventController {
     }
     for (const workgroup of this.store.listWorkgroups()) {
       this.workgroupStates.set(workgroup.id, workgroup.state);
-      this.indexWorkflowWorkgroupBus(workgroup);
+      this.indexWorkgroup(workgroup);
     }
 
     this.unsubscribeRuns = this.store.subscribeRuns((run) => this.handleRunSaved(run), undefined);
@@ -126,6 +132,7 @@ export class OrchestraEventController {
       finishedRunIds: new Set(),
       leaderRunId: registration.leaderRunId,
       runIds: new Set(registration.runIds),
+      runNames: new Set(registration.runNames ?? []),
     });
   }
 
@@ -166,16 +173,16 @@ export class OrchestraEventController {
 
     const events = [...this.queuedEvents];
     const busMessageDeliveries = [...this.queuedBusMessageDeliveries];
-    this.sendEvents(
-      events,
-      formatOrchestraEvents(events, { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
-    );
+    this.sendEvents(events, formatOrchestraEvents(events, this.createFormatOptions()));
     this.queuedEvents.splice(0, events.length);
     this.queuedBusMessageDeliveries.splice(0, busMessageDeliveries.length);
     for (const delivery of busMessageDeliveries) this.markBusMessageDelivered(delivery);
   }
 
   private handleRunSaved(run: AgentRun): void {
+    const launchingWorkgroup = this.launchingWorkgroupsByBusId.get(run.busId);
+    if (launchingWorkgroup?.runNames.has(run.name)) launchingWorkgroup.runIds.add(run.id);
+
     const wasFinished = this.runFinished.get(run.id) ?? false;
     const isFinished = isAgentFinishRun(run);
     this.runFinished.set(run.id, isFinished);
@@ -201,8 +208,7 @@ export class OrchestraEventController {
       return;
     }
 
-    const launchingWorkgroup = this.launchingWorkgroupsByBusId.get(run.busId);
-    if (launchingWorkgroup) {
+    if (launchingWorkgroup?.runIds.has(run.id)) {
       launchingWorkgroup.finishedRunIds.add(run.id);
       const event = {
         type: "workgroup.member_finished" as const,
@@ -264,7 +270,7 @@ export class OrchestraEventController {
   private handleWorkgroupSaved(workgroup: WorkgroupRun): void {
     const previousState = this.workgroupStates.get(workgroup.id);
     this.workgroupStates.set(workgroup.id, workgroup.state);
-    this.indexWorkflowWorkgroupBus(workgroup);
+    this.indexWorkgroup(workgroup);
 
     if (workgroup.state !== "closed" || previousState === "closed") return;
 
@@ -286,11 +292,7 @@ export class OrchestraEventController {
     const leaderRun = this.store.getRun(leaderRunId);
     if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents(
-      leaderRunId,
-      [event],
-      formatOrchestraEvents([event], { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
-    );
+    this.sendAgentEvents(leaderRunId, [event], formatOrchestraEvents([event], this.createFormatOptions()));
     return true;
   }
 
@@ -302,16 +304,13 @@ export class OrchestraEventController {
     const leaderRun = this.store.getRun(workflow.leaderRunId);
     if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents(
-      leaderRun.id,
-      [event],
-      formatOrchestraEvents([event], { formatBusMessageFrom: (from) => this.formatBusMessageFrom(from) }),
-    );
+    this.sendAgentEvents(leaderRun.id, [event], formatOrchestraEvents([event], this.createFormatOptions()));
     return true;
   }
 
   private findWorkgroupForMemberRun(runId: string) {
-    return this.store.listWorkgroups().find((workgroup) => workgroup.memberRunIds.includes(runId));
+    const workgroupId = this.workgroupIdByMemberRunId.get(runId);
+    return workgroupId ? this.store.getWorkgroup(workgroupId) : undefined;
   }
 
   private findWorkflowForWorkgroup(workgroupId: string): WorkflowRun | undefined {
@@ -347,16 +346,24 @@ export class OrchestraEventController {
     }
   }
 
-  private indexWorkflowWorkgroupBus(workgroup: WorkgroupRun): void {
+  private indexWorkgroup(workgroup: WorkgroupRun): void {
+    const previousMemberRunIds = this.workgroupMemberRunIndexes.get(workgroup.id) ?? [];
+    for (const runId of previousMemberRunIds) {
+      if (this.workgroupIdByMemberRunId.get(runId) === workgroup.id) this.workgroupIdByMemberRunId.delete(runId);
+    }
+
+    this.workgroupMemberRunIndexes.set(workgroup.id, [...workgroup.memberRunIds]);
+    for (const runId of workgroup.memberRunIds) this.workgroupIdByMemberRunId.set(runId, workgroup.id);
+
     const workflowId = this.workflowIdByWorkgroupId.get(workgroup.id);
     if (workflowId) this.workflowIdByBusId.set(workgroup.busId, workflowId);
   }
 
   private getPendingWorkgroupRunIds(busId: string, runIds: Set<string>): string[] {
-    return this.store
-      .listRuns()
-      .filter((run) => run.busId === busId && runIds.has(run.id) && isAgentRunActive(run))
-      .map((run) => run.id);
+    return [...runIds].filter((runId) => {
+      const run = this.store.getRun(runId);
+      return run !== undefined && run.busId === busId && isAgentRunActive(run);
+    });
   }
 
   private hasQueuedBusMessageDelivery(subscriptionId: string, messageId: string): boolean {
@@ -365,9 +372,25 @@ export class OrchestraEventController {
     );
   }
 
+  private createFormatOptions(): FormatOrchestraEventsOptions {
+    return {
+      formatBusMessageFrom: (from) => this.formatBusMessageFrom(from),
+      formatBusName: (busId) => this.formatBusName(busId),
+      formatRunName: (runId) => this.formatRunName(runId),
+    };
+  }
+
   private formatBusMessageFrom(from: string): string {
     if (from === "main") return from;
-    return this.store.getRun(from)?.name ?? from;
+    return this.formatRunName(from);
+  }
+
+  private formatBusName(busId: string): string {
+    return resolveBusName(this.store, busId);
+  }
+
+  private formatRunName(runId: string): string {
+    return resolveRunName(this.store, runId);
   }
 
   private markBusMessageDelivered(delivery: BusMessageDelivery): void {
@@ -398,14 +421,15 @@ function formatOrchestraEvent(event: OrchestraMainEvent, options: FormatOrchestr
   if (event.type === "workgroup.finished") return formatWorkgroupFinishedEvent(event.workgroup);
   if (event.type === "bus.message") return formatBusMessageEvent(event, options);
 
-  const runLabel = event.run.name === event.run.runId ? event.run.runId : `${event.run.name} (${event.run.runId})`;
+  const busName = options?.formatBusName?.(event.busId) ?? event.busId;
+  const runLabel = event.run.name;
   const lines =
     event.type === "workgroup.member_finished"
       ? [
-          `- Workgroup member finished on bus ${event.busId}: ${runLabel} ${formatRunFinishedState(event.run)}.`,
-          `  Pending workgroup run ids: ${event.pendingRunIds.length > 0 ? event.pendingRunIds.join(", ") : "none"}`,
+          `- Workgroup member finished on bus ${busName}: ${runLabel} ${formatRunFinishedState(event.run)}.`,
+          `  Pending workgroup runs: ${formatPendingRunNames(event.pendingRunIds, options)}`,
         ]
-      : [`- Subagent finished on bus ${event.busId}: ${runLabel} ${formatRunFinishedState(event.run)}.`];
+      : [`- Subagent finished on bus ${busName}: ${runLabel} ${formatRunFinishedState(event.run)}.`];
 
   lines.push(...formatRunResultLines(event.run));
   return lines.join("\n");
@@ -416,11 +440,17 @@ function formatBusMessageEvent(
   options: FormatOrchestraEventsOptions | undefined,
 ): string {
   const from = options?.formatBusMessageFrom?.(event.message.from) ?? event.message.from;
-  return [`- Bus message on ${event.busId} from ${from}:`, event.message.message].join("\n");
+  const busName = options?.formatBusName?.(event.busId) ?? event.busId;
+  return [`- Bus message on ${busName} from ${from}:`, event.message.message].join("\n");
+}
+
+function formatPendingRunNames(runIds: string[], options: FormatOrchestraEventsOptions | undefined): string {
+  if (runIds.length === 0) return "none";
+  return runIds.map((runId) => options?.formatRunName?.(runId) ?? runId).join(", ");
 }
 
 function formatWorkgroupFinishedEvent(workgroup: WorkgroupRun): string {
-  const lines = [`- Workgroup finished: ${formatNamedEntityLabel(workgroup)} is ${workgroup.state}.`];
+  const lines = [`- Workgroup finished: ${workgroup.name} is ${workgroup.state}.`];
   if (workgroup.result) {
     lines.push(`  Result: ${workgroup.result.status}`, `  Summary: ${workgroup.result.summary}`);
     if (workgroup.result.data !== undefined) lines.push(`  Data: ${JSON.stringify(workgroup.result.data)}`);
@@ -429,7 +459,7 @@ function formatWorkgroupFinishedEvent(workgroup: WorkgroupRun): string {
 }
 
 function formatWorkflowFinishedEvent(workflow: WorkflowRun): string {
-  const lines = [`- Workflow finished: ${formatNamedEntityLabel(workflow)} is ${workflow.state}.`];
+  const lines = [`- Workflow finished: ${workflow.name} is ${workflow.state}.`];
   if (workflow.result) {
     lines.push(`  Result: ${workflow.result.status}`, `  Summary: ${workflow.result.summary}`);
   }

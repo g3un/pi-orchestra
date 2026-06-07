@@ -1,3 +1,4 @@
+import { v7 as uuid7 } from "uuid";
 import type { OrchestraApi } from "./core/orchestra.ts";
 import type { AgentRun, AgentRunResult } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
@@ -31,33 +32,46 @@ export function createEntityIdentity(
 ): NamedEntity {
   if (requestedName !== undefined) {
     const name = normalizeEntityName(requestedName, entityLabel);
-    const id = slugify(name);
-    if (!id) throw new Error(`${entityLabel} name "${name}" must contain letters or numbers.`);
-    if (existingEntities.some((entity) => entity.id === id || entity.name === name)) {
+    if (hasEntityNameConflict(name, existingEntities))
       throw new Error(`${entityLabel} name "${name}" is already in use.`);
-    }
-    return { id, name };
+    return { id: createUuid7(), name };
   }
 
   const base = slugify(autoSeed) || entityLabel.toLowerCase();
   for (let index = 1; ; index++) {
-    const id = index === 1 ? base : `${base}-${index}`;
-    if (!existingEntities.some((entity) => entity.id === id || entity.name === id)) return { id, name: id };
+    const name = index === 1 ? base : `${base}-${index}`;
+    if (!hasEntityNameConflict(name, existingEntities)) return { id: createUuid7(), name };
   }
 }
 
-export function formatNamedEntityLabel(entity: NamedEntity): string {
-  return entity.name === entity.id ? entity.id : `${entity.name} (${entity.id})`;
+export function createUuid7(): string {
+  return uuid7();
+}
+
+function hasEntityNameConflict(name: string, existingEntities: NamedEntity[]): boolean {
+  return existingEntities.some((entity) => entity.name === name || entity.id === name);
 }
 
 export function findWorkflow(store: AgentStore, id: string): WorkflowRun | undefined {
-  return store.getWorkflow(id) ?? store.listWorkflows().find((workflow) => workflow.name === id);
+  return store.getWorkflow(id) ?? store.getWorkflowByName(id);
 }
 
 export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
-  const workflow = store.getWorkflow(id);
+  const workflow = findWorkflow(store, id);
   if (!workflow) throw new Error(`Workflow ${id} not found.`);
   return workflow;
+}
+
+export function resolveBusName(store: AgentStore, busId: string): string {
+  return store.getBus(busId)?.name ?? busId;
+}
+
+export function resolveRunName(store: AgentStore, runId: string): string {
+  return store.getRun(runId)?.name ?? runId;
+}
+
+export function resolveWorkgroupName(store: AgentStore, workgroupId: string): string {
+  return store.getWorkgroup(workgroupId)?.name ?? workgroupId;
 }
 
 export type LifecycleState = AgentRun["state"] | WorkflowRun["state"];

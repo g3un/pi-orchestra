@@ -9,6 +9,7 @@ import {
 } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
+import { resolveRunName } from "../utils.ts";
 
 export type BusInput =
   | {
@@ -53,8 +54,7 @@ export interface BusToolDeps {
 
 const BusActionParams = Type.String({
   enum: ["create", "status", "publish", "subscribe", "unsubscribe"],
-  description:
-    "create/status/publish/subscribe/unsubscribe shared context buses; completion is delivered through pi-orchestra events.",
+  description: "Manage shared buses: create/status/publish/subscribe/unsubscribe.",
 });
 
 const BusToolParams = Type.Object(
@@ -62,13 +62,12 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     name: Type.Optional(
       Type.String({
-        description:
-          "Optional for action=create; required for action=status/publish. Use the short bus name, not a bus id.",
+        description: "Bus name. Optional for create; required for status/publish/subscribe/unsubscribe.",
       }),
     ),
     message: Type.Optional(
       Type.String({
-        description: "Required for action=publish. Shared context for subscribed agents.",
+        description: "Required for publish. Shared context message.",
       }),
     ),
   },
@@ -118,13 +117,11 @@ export function defineBusPiTool(resolveTool: (ctx: ExtensionContext) => BusTool)
   return defineTool({
     name: "bus",
     label: "Bus",
-    description: "Create, inspect, and publish to work buses.",
-    promptSnippet: "Use one bus per delegated work item; spawn related subagents or workgroups on it.",
+    description: "Manage shared context buses.",
+    promptSnippet: "Create, inspect, publish, or subscribe to buses.",
     promptGuidelines: [
-      "Use bus create before spawning related subagents or workgroups; reuse it for that work item.",
-      "Use bus publish with the bus name, not a bus id, to send shared context to subscribed agents; bus status shows published messages.",
-      "Use bus subscribe when main needs live bus messages; it starts from new messages after subscription. Unsubscribe when tracking is no longer useful.",
-      "Do not wait on buses; pi-orchestra delivers subagent and workgroup finish events automatically.",
+      "Use bus for main-owned shared context; child agents use publish_bus instead.",
+      "Use bus names for lookup; finish events arrive separately.",
     ],
     parameters: BusToolParams,
     executionMode: "sequential",
@@ -194,12 +191,12 @@ function formatBusStatus(
 }
 
 function formatBusMessage(message: BusMessage, store: AgentStore): string {
-  return [`- ${message.id} from ${formatBusMessageFrom(message.from, store)}:`, message.message].join("\n");
+  return [`- from ${formatBusMessageFrom(message.from, store)}:`, message.message].join("\n");
 }
 
 function formatBusMessageFrom(from: string, store: AgentStore): string {
   if (from === "main") return from;
-  return store.getRun(from)?.name ?? from;
+  return resolveRunName(store, from);
 }
 
 function formatBusLabel(bus: Bus): string {

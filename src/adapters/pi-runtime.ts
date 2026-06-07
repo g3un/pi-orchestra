@@ -26,11 +26,13 @@ import {
 import { formatBusMessages } from "../core/bus-format.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
+import { resolveBusName, resolveRunName } from "../utils.ts";
 
 export interface PiAgentRuntimeOptions {
   store: AgentStore;
   cwd: string | undefined;
   resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
+  resolveCustomTools: (() => ToolDefinition[]) | undefined;
 }
 
 interface RuntimeEntry {
@@ -50,16 +52,20 @@ const PublishBusParams = Type.Object({
   message: Type.String(),
 });
 
+const BLOCKED_CHILD_PROFILE_TOOL_NAMES = new Set(["bus"]);
+
 export class PiAgentRuntime implements AgentRuntime {
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly store: AgentStore;
   private readonly cwd: string;
   private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
+  private readonly resolveCustomTools: NonNullable<PiAgentRuntimeOptions["resolveCustomTools"]>;
 
   constructor(options: PiAgentRuntimeOptions) {
     this.store = options.store;
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
+    this.resolveCustomTools = options.resolveCustomTools ?? (() => []);
   }
 
   async spawn(
@@ -70,7 +76,7 @@ export class PiAgentRuntime implements AgentRuntime {
   ): Promise<AgentRun> {
     this.requireBus(busId);
 
-    const baseTools = requireProfileTools(profile);
+    const baseTools = filterChildProfileTools(requireProfileTools(profile));
     const model = await this.resolveProfileModel(profile);
     const sessionManager = SessionManager.create(this.cwd, getProjectOrchestraSessionDir(this.cwd));
     const sessionFile = sessionManager.getSessionFile();
@@ -88,12 +94,13 @@ export class PiAgentRuntime implements AgentRuntime {
     };
 
     const childTools = this.createChildTools(run.id);
+    const customTools = this.selectCustomTools(baseTools, childTools);
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
     const { session } = await createAgentSession({
       cwd: this.cwd,
       model,
       tools: activeTools,
-      customTools: childTools,
+      customTools,
       sessionManager,
     });
 
@@ -222,6 +229,12 @@ export class PiAgentRuntime implements AgentRuntime {
     }
   }
 
+  private selectCustomTools(profileToolNames: string[], childTools: ToolDefinition[]): ToolDefinition[] {
+    const requestedProfileToolNames = new Set(profileToolNames);
+    const requestedCustomTools = this.resolveCustomTools().filter((tool) => requestedProfileToolNames.has(tool.name));
+    return dedupeToolsByName([...requestedCustomTools, ...childTools]);
+  }
+
   private createChildTools(runId: string): ToolDefinition[] {
     const finishAgent = {
       name: "finish",
@@ -235,7 +248,7 @@ export class PiAgentRuntime implements AgentRuntime {
         const ledScope = this.findRunningLedScope(run.id);
         if (ledScope) {
           throw new Error(
-            `Agent ${run.id} leads running ${ledScope.type} ${ledScope.id}; use ${ledScope.type} action=finish before finish.`,
+            `Agent ${run.name} leads running ${ledScope.type} ${ledScope.name}; use ${ledScope.type} action=finish before finish.`,
           );
         }
         const result: AgentResult = {
@@ -275,7 +288,7 @@ export class PiAgentRuntime implements AgentRuntime {
           content: [
             {
               type: "text" as const,
-              text: `Published message ${busMessage.id} to bus ${run.busId}.`,
+              text: `Published message to bus ${this.formatBusName(run.busId)}.`,
             },
           ],
           details: busMessage,
@@ -299,7 +312,7 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   private assertOpenRun(run: AgentRun): void {
-    if (run.state === "closed") throw new Error(`Agent ${run.id} is closed.`);
+    if (run.state === "closed") throw new Error(`Agent ${run.name} is closed.`);
   }
 
   private isClosed(id: string): boolean {
@@ -311,22 +324,22 @@ export class PiAgentRuntime implements AgentRuntime {
     return run !== undefined && isRunningWithoutResult(run);
   }
 
-  private findRunningLedScope(runId: string): { type: "workgroup" | "workflow"; id: string } | undefined {
+  private findRunningLedScope(runId: string): { type: "workgroup" | "workflow"; name: string } | undefined {
     const workgroup = this.store
       .listWorkgroups()
       .find((current) => current.leaderRunId === runId && current.state === "running");
-    if (workgroup) return { type: "workgroup", id: workgroup.id };
+    if (workgroup) return { type: "workgroup", name: workgroup.name };
 
     const workflow = this.store
       .listWorkflows()
       .find((current) => current.leaderRunId === runId && current.state === "running");
-    return workflow ? { type: "workflow", id: workflow.id } : undefined;
+    return workflow ? { type: "workflow", name: workflow.name } : undefined;
   }
 
   private requireBus(id: string): Bus {
     const bus = this.store.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
-    if (bus.state === "closed") throw new Error(`Bus ${id} is closed.`);
+    if (bus.state === "closed") throw new Error(`Bus ${bus.name} is closed.`);
     return bus;
   }
 
@@ -373,7 +386,11 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private formatBusMessageFrom(from: string): string {
     if (from === "main") return from;
-    return this.store.getRun(from)?.name ?? from;
+    return resolveRunName(this.store, from);
+  }
+
+  private formatBusName(busId: string): string {
+    return resolveBusName(this.store, busId);
   }
 
   private deleteAgentBusSubscriptions(runId: string): void {
@@ -422,6 +439,16 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
 function requireProfileTools(profile: AgentProfile): string[] {
   if (!Array.isArray(profile.tools)) throw new Error(`Profile "${profile.name}" must specify tools.`);
   return profile.tools;
+}
+
+function filterChildProfileTools(toolNames: string[]): string[] {
+  return toolNames.filter((toolName) => !BLOCKED_CHILD_PROFILE_TOOL_NAMES.has(toolName));
+}
+
+function dedupeToolsByName(tools: ToolDefinition[]): ToolDefinition[] {
+  const toolsByName = new Map<string, ToolDefinition>();
+  for (const tool of tools) toolsByName.set(tool.name, tool);
+  return [...toolsByName.values()];
 }
 
 function createAgentBusSubscription(runId: string, busId: string): BusSubscription {

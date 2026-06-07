@@ -46,9 +46,9 @@ test("bus status returns stored bus messages", async () => {
       "State: open",
       "",
       "Messages:",
-      "- message-1 from main:",
+      "- from main:",
       "Initial context.",
-      "- message-2 from Researcher A:",
+      "- from Researcher A:",
       "Agent context.",
     ].join("\n"),
   );
@@ -73,7 +73,7 @@ test("bus publish delegates with the bus name", async () => {
   assert.deepEqual(orchestra.getBus(bus.id)?.messages, [{ id: "message-1", message: "New constraint.", from: "main" }]);
   assert.equal(
     output.message,
-    "Published message to bus Shared Context.\nState: open\n\nMessages:\n- message-1 from main:\nNew constraint.",
+    "Published message to bus Shared Context.\nState: open\n\nMessages:\n- from main:\nNew constraint.",
   );
 });
 
@@ -95,7 +95,7 @@ test("bus publish preserves an explicit sender", async () => {
   assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
   assert.equal(
     output.message,
-    "Published message to bus bus-1.\nState: open\n\nMessages:\n- message-1 from Researcher A:\nPeer context.",
+    "Published message to bus bus-1.\nState: open\n\nMessages:\n- from Researcher A:\nPeer context.",
   );
 });
 

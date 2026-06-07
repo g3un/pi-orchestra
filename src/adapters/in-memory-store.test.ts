@@ -20,6 +20,7 @@ test("store saves runs in insertion order and notifies matching subscribers", ()
   store.saveRun(second);
 
   assert.deepEqual(store.getRun(first.id), first);
+  assert.deepEqual(store.getRunByName(first.name), first);
   assert.notEqual(store.getRun(first.id), first);
   assert.deepEqual(store.listRuns(), [first, second]);
   assert.deepEqual(observed, [first]);
@@ -99,6 +100,7 @@ test("store appends and replaces bus messages by id", () => {
     { id: "message-2", from: "agent", message: "Follow-up." },
   ];
   assert.deepEqual(store.listBuses(), [{ ...bus, messages: expectedMessages }]);
+  assert.deepEqual(store.getBusByName(bus.name)?.messages, expectedMessages);
   assert.deepEqual(store.getBus(bus.id)?.messages, expectedMessages);
 });
 
@@ -173,6 +175,8 @@ test("store saves workgroups and notifies workgroup subscribers until unsubscrib
   store.saveWorkgroup(renamed);
 
   assert.deepEqual(store.getWorkgroup(workgroup.id), renamed);
+  assert.equal(store.getWorkgroupByName(workgroup.name), undefined);
+  assert.deepEqual(store.getWorkgroupByName(renamed.name), renamed);
   assert.deepEqual(store.listWorkgroups(), [renamed]);
   assert.deepEqual(observed, [workgroup, expanded]);
 });
@@ -194,6 +198,7 @@ test("store saves workflows and notifies workflow subscribers until unsubscribed
   store.saveWorkflow(closed);
 
   assert.deepEqual(store.getWorkflow(workflow.id), closed);
+  assert.deepEqual(store.getWorkflowByName(workflow.name), closed);
   assert.deepEqual(store.listWorkflows(), [closed]);
   assert.deepEqual(observed, [workflow, closing]);
 });

@@ -22,7 +22,7 @@ test("orchestra creates buses in the store", () => {
   const bus = orchestra.createBus({ name: undefined });
 
   assert.deepEqual(store.getBus(bus.id), bus);
-  assert.equal(bus.id, "bus");
+  assertUuid7(bus.id);
   assert.equal(bus.name, "bus");
   assert.equal(bus.state, "open");
   assert.deepEqual(bus.messages, []);
@@ -49,10 +49,10 @@ test("orchestra closes buses, clears subscriptions, and rejects new work", async
     store.listBusSubscriptions({ busId: bus.id, subscriberId: undefined, subscriberKind: undefined }),
     [],
   );
-  await assert.rejects(() => orchestra.publishBus(bus.id, "Too late.", "main"), /Bus close-me is closed\./);
+  await assert.rejects(() => orchestra.publishBus(bus.id, "Too late.", "main"), /Bus Close Me is closed\./);
   await assert.rejects(
     () => orchestra.spawnAgent(profile, "Too late.", bus.id, { name: "late-agent" }),
-    /Bus close-me is closed\./,
+    /Bus Close Me is closed\./,
   );
 });
 
@@ -64,10 +64,10 @@ test("orchestra accepts short names for buses and agent runs", async () => {
   const bus = orchestra.createBus({ name: "Frontend Audit" });
   const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.name, { name: "Reviewer A" });
 
-  assert.equal(bus.id, "frontend-audit");
+  assertUuid7(bus.id);
   assert.equal(bus.name, "Frontend Audit");
   assert.deepEqual(orchestra.getBus(bus.name), bus);
-  assert.equal(run.id, "reviewer-a");
+  assertUuid7(run.id);
   assert.equal(run.name, "Reviewer A");
   assert.deepEqual(orchestra.getRun(run.name, { busId: undefined }), run);
 });
@@ -85,11 +85,11 @@ test("orchestra keeps agent run names globally unique", async () => {
     name: undefined,
   });
 
-  assert.equal(namedRun.id, "reviewer");
+  assertUuid7(namedRun.id);
   assert.equal(namedRun.name, "Reviewer");
-  assert.equal(firstAutoRun.id, "researcher");
+  assertUuid7(firstAutoRun.id);
   assert.equal(firstAutoRun.name, "researcher");
-  assert.equal(secondAutoRun.id, "researcher-2");
+  assertUuid7(secondAutoRun.id);
   assert.equal(secondAutoRun.name, "researcher-2");
   assert.deepEqual(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
   await assert.rejects(
@@ -236,6 +236,10 @@ class FakeRuntime implements AgentRuntime {
     this.store.saveRun(closedRun);
     return closedRun;
   }
+}
+
+function assertUuid7(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {
