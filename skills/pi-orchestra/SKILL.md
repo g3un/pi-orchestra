@@ -76,6 +76,15 @@ Profile options:
   supplied-context-only roles.
 - `model`: omit unless the task needs a specific provider/model.
 
+## Detailed call examples
+
+Read the reference that matches the primitive you are about to use:
+
+- `references/subagent.md` for standalone bus + subagent calls.
+- `references/workgroup.md` for workgroup create/add_members/finish/cancel calls.
+- `references/workflow.md` for workflow create/spawn_workgroup/finish/cancel calls,
+  including leader run names vs profile names.
+
 ## Patterns
 
 ### Single specialist

@@ -47,7 +47,7 @@ export interface SubagentToolDeps {
 }
 
 export const SubagentRunNameParam = Type.String({
-  description: "Globally unique readable run name.",
+  description: "Unique readable name for this agent run.",
 });
 
 const AgentProfileToolsParam = Type.Array(Type.String(), {
@@ -69,7 +69,9 @@ export const AgentProfileParams = Type.Object(
       }),
     ),
     name: Type.Optional(
-      Type.String({ description: "Optional preset role/name override; required when preset is omitted." }),
+      Type.String({
+        description: "Readable role/profile name. Optional preset override; required when preset is omitted.",
+      }),
     ),
     systemPrompt: Type.Optional(
       Type.String({ description: "Required when preset is omitted. Do not include with preset profiles." }),
