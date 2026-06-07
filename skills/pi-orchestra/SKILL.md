@@ -42,6 +42,9 @@ Do not delegate trivial tasks that you can finish faster yourself.
      running and the final `workgroup.finished` output.
    - For workflows, wait for `workflow.finished` or use `workflow status` only
      when you need progress.
+7. If the main session was lost, a completion event was missed, or you need to
+   debug a child run, read `references/debugging.md` for the persisted store and
+   session transcript recovery workflow.
 
 ## Briefing child agents
 
