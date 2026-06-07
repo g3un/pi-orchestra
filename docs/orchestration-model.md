@@ -52,7 +52,7 @@ the run has been disposed.
 
 A workgroup is a set of subagents spawned on a private coordination bus for one shared goal. `workgroup create` creates that bus internally; callers do not create a bus first. Each member is an `AgentRun` with its own task. Persisted workgroup runs keep the bus id, keep the leader as a subagent run id when an agent created the group, or `null` when main created it, keep members as subagent run ids, and record workgroup `state` plus final `result`.
 
-Ownership is scoped. The effective owner of a workgroup result is its leader: the leader receives member completion events and is the only actor that should call `workgroup action=finish`. A parent scope observes the final `workgroup.finished` output; it should not finish the child group for the leader. If the parent needs to abort a scope, that is a higher-level cancellation/cleanup decision, not a child finish.
+Ownership is scoped. The effective owner of a workgroup result is its leader: the leader receives member completion events and is the only actor that should call `workgroup action=finish`. A parent scope observes the final `workgroup.finished` output; it should not finish the child group for the leader. If the parent needs to abort a scope, use `workgroup action=cancel` as a higher-level cleanup action.
 
 Main receives finish events instead of blocking on completion calls:
 
@@ -60,6 +60,8 @@ Main receives finish events instead of blocking on completion calls:
 - Workgroup member completions arrive as `workgroup.member_finished` events while the workgroup is running; formatted event text shows pending run names.
 - The workgroup leader decides whether one result is enough, members should be closed, more members should be spawned, active members should be steered, or more context should be published.
 - The leader ends the group with `workgroup action=finish`, providing `status`, `summary`, and optional `data`. Finishing moves the workgroup through `closing` to `closed`, closes all member runs, closes the bus, suppresses cleanup-only member finish events, and emits `workgroup.finished` with the final output.
+
+A supervising parent may use `workgroup action=cancel` to abort an unfinished group. `cancel` applies a default result `{ status: "blocked", summary: "Workgroup cancelled." }` when no result exists, then moves the workgroup through `closing` to `closed`, closes all member runs (and the leader if one is present), closes the bus, and emits `workgroup.finished`.
 
 ## Workflow
 

@@ -39,8 +39,8 @@ create` creates the bus internally. A leader can add member subagents as needed,
 receive `workgroup.member_finished` events, then call `workgroup finish` with the
 canonical group output. Finishing closes member runs and the workgroup bus. The
 workgroup leader is the effective owner of the workgroup result; parent scopes
-consume `workgroup.finished` and should not finish the group on the leader's
-behalf.
+consume `workgroup.finished`. Use `workgroup cancel` to abort a workgroup from a
+supervising scope; this closes members, the leader if present, and the bus.
 
 Use workgroups when a leader should coordinate competing alternatives,
 complementary research, reviews, or follow-ups before producing one result.

@@ -40,6 +40,10 @@ export type WorkgroupInput =
       result: AgentResult;
     }
   | {
+      action: "cancel";
+      id: string;
+    }
+  | {
       action: "status";
       id: string;
     };
@@ -62,6 +66,12 @@ export type WorkgroupOutput =
   | {
       action: "finish";
       workgroup: WorkgroupRun;
+    }
+  | {
+      action: "cancel";
+      workgroup: WorkgroupRun;
+      alreadyClosed: boolean;
+      message: string;
     }
   | {
       action: "status";
@@ -107,8 +117,8 @@ export interface WorkgroupToolDeps {
 }
 
 const WorkgroupActionParams = Type.String({
-  enum: ["create", "add_members", "finish", "status"],
-  description: "create/add_members/finish/status a workgroup.",
+  enum: ["create", "add_members", "finish", "cancel", "status"],
+  description: "create/add_members/finish/cancel/status a workgroup.",
 });
 
 const WorkgroupToolParams = Type.Object(
@@ -121,7 +131,7 @@ const WorkgroupToolParams = Type.Object(
     ),
     id: Type.Optional(
       Type.String({
-        description: "Required for add_members/finish/status. Workgroup name.",
+        description: "Required for add_members/finish/cancel/status. Workgroup name.",
       }),
     ),
     goal: Type.Optional(
@@ -180,6 +190,13 @@ interface SpawnFailure {
   error: unknown;
 }
 
+interface WorkgroupCancellation {
+  workgroup: WorkgroupRun;
+  alreadyClosed: boolean;
+}
+
+const WORKGROUP_CANCELLED_SUMMARY = "Workgroup cancelled.";
+
 export function createWorkgroupTool({
   orchestra,
   store,
@@ -237,6 +254,15 @@ export function createWorkgroupTool({
         return {
           action: "finish",
           workgroup: closedWorkgroup,
+        };
+      }
+
+      if (input.action === "cancel") {
+        const cancellation = await cancelWorkgroup(orchestra, store, workgroup);
+        return {
+          action: "cancel",
+          ...cancellation,
+          message: formatWorkgroupCancelMessage(cancellation),
         };
       }
 
@@ -341,6 +367,24 @@ export async function closeWorkgroupRun(
   return closedWorkgroup;
 }
 
+async function cancelWorkgroup(
+  orchestra: OrchestraApi,
+  store: AgentStore,
+  workgroup: WorkgroupRun,
+): Promise<WorkgroupCancellation> {
+  const latestWorkgroup = store.getWorkgroup(workgroup.id) ?? workgroup;
+  const alreadyClosed = latestWorkgroup.state === "closed";
+  const result: AgentResult = latestWorkgroup.result ?? {
+    status: "blocked",
+    summary: WORKGROUP_CANCELLED_SUMMARY,
+  };
+  const closedWorkgroup = await closeWorkgroupRun(orchestra, store, latestWorkgroup, {
+    includeLeader: true,
+    result,
+  });
+  return { workgroup: closedWorkgroup, alreadyClosed };
+}
+
 export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => WorkgroupTool) {
   return defineTool({
     name: "workgroup",
@@ -351,6 +395,7 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
       "Use workgroup create first; it creates the private bus.",
       "Use workgroup add_members with member profile/task/name only.",
       "Only the workgroup leader calls workgroup finish.",
+      "Use workgroup cancel from a supervising parent scope to abort a workgroup and dispose all resources.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",
@@ -391,6 +436,11 @@ function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
     const result: AgentResult = { status: params.status, summary: params.summary };
     if (params.data !== undefined) result.data = params.data;
     return { action: "finish", id: params.id, result };
+  }
+
+  if (params.action === "cancel") {
+    if (!params.id) throw new Error("workgroup action=cancel requires id.");
+    return { action: "cancel", id: params.id };
   }
 
   if (!params.id) throw new Error("workgroup action=status requires id.");
@@ -494,18 +544,38 @@ function formatLaunchFailure(
 }
 
 function formatWorkgroupOutputMessage(output: WorkgroupOutput): string {
-  if (output.action === "finish") return formatWorkgroupFinishedMessage(output.workgroup);
+  if (output.action === "finish") return formatWorkgroupTerminalMessage("Finished", output.workgroup);
+  if (output.action === "cancel") return output.message;
   return output.message;
 }
 
-function formatWorkgroupFinishedMessage(workgroup: WorkgroupRun): string {
+function formatWorkgroupTerminalMessage(verb: string, workgroup: WorkgroupRun): string {
   return [
-    `Finished workgroup ${workgroup.name} with ${workgroup.result?.status ?? "unknown"}.`,
+    `${verb} workgroup ${workgroup.name}.`,
     "",
-    `Summary: ${workgroup.result?.summary ?? "None."}`,
+    ...formatWorkgroupResultLines(workgroup),
     "",
     "Pi-orchestra recorded the final output and will deliver any applicable workgroup.finished event.",
   ].join("\n");
+}
+
+function formatWorkgroupCancelMessage(cancellation: WorkgroupCancellation): string {
+  const { workgroup } = cancellation;
+  if (cancellation.alreadyClosed) {
+    return [
+      `Workgroup ${workgroup.name} was already closed.`,
+      "",
+      ...formatWorkgroupResultLines(workgroup),
+      "",
+      "No cancellation was needed; existing result was preserved.",
+    ].join("\n");
+  }
+
+  return formatWorkgroupTerminalMessage("Cancelled", workgroup);
+}
+
+function formatWorkgroupResultLines(workgroup: WorkgroupRun): string[] {
+  return [`Status: ${workgroup.result?.status ?? "unknown"}`, `Summary: ${workgroup.result?.summary ?? "None."}`];
 }
 
 function formatWorkgroupMembersAddedMessage(bus: Bus, workgroup: WorkgroupRun, runs: AgentRun[]): string {
@@ -544,7 +614,7 @@ function formatWorkgroupNotFound(id: string): string {
 }
 
 type RawWorkgroupParams = {
-  action: "create" | "add_members" | "finish" | "status";
+  action: "create" | "add_members" | "finish" | "cancel" | "status";
   name?: string;
   id?: string;
   goal?: string;

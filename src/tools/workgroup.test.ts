@@ -263,6 +263,155 @@ test("workgroup finish closes members and the bus and records final output", asy
   assert.equal(orchestra.runs.get("backend-review")?.state, "closed");
 });
 
+test("workgroup cancel disposes members, bus, and leader", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const created = await tool.execute({
+    action: "create",
+    name: "blocked-work-workgroup",
+    goal: "Cancel the group when blocked.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const added = await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [
+      {
+        name: "security-review",
+        profile: securityProfile,
+        task: "Review security.",
+      },
+      {
+        name: "backend-review",
+        profile: backendProfile,
+        task: "Review backend.",
+      },
+    ],
+  });
+  assertMembersAdded(added);
+
+  orchestra.runs.set("workgroup-lead", {
+    id: "workgroup-lead",
+    name: "workgroup-lead",
+    profile: securityProfile,
+    task: "Lead the group.",
+    busId: workgroup.busId,
+    sessionFile: ".pi/orchestra/sessions/workgroup-lead.jsonl",
+    state: "running",
+    result: null,
+  });
+  orchestra.store.saveWorkgroup({ ...added.workgroup, leaderRunId: "workgroup-lead" });
+
+  const output = await tool.execute({ action: "cancel", id: workgroup.id });
+
+  assert.equal(output.action, "cancel");
+  if (output.action !== "cancel") throw new Error("Expected cancel output.");
+  assert.equal(output.alreadyClosed, false);
+  assert.equal(output.workgroup.state, "closed");
+  assert.deepEqual(output.workgroup.result, {
+    status: "blocked",
+    summary: "Workgroup cancelled.",
+  });
+  assert.equal(
+    output.message,
+    [
+      "Cancelled workgroup blocked-work-workgroup.",
+      "",
+      "Status: blocked",
+      "Summary: Workgroup cancelled.",
+      "",
+      "Pi-orchestra recorded the final output and will deliver any applicable workgroup.finished event.",
+    ].join("\n"),
+  );
+  assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
+  assert.deepEqual(orchestra.closedIds, ["security-review", "backend-review", "workgroup-lead"]);
+  assert.equal(orchestra.runs.get("security-review")?.state, "closed");
+  assert.equal(orchestra.runs.get("backend-review")?.state, "closed");
+  assert.equal(orchestra.runs.get("workgroup-lead")?.state, "closed");
+});
+
+test("workgroup cancel completes cleanup for closing workgroups", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const created = await tool.execute({
+    action: "create",
+    name: "cleanup-work-workgroup",
+    goal: "Resume cleanup for a closing group.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const added = await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [
+      {
+        name: "cleanup-review",
+        profile: securityProfile,
+        task: "Review cleanup.",
+      },
+    ],
+  });
+  assertMembersAdded(added);
+
+  orchestra.runs.set("cleanup-lead", {
+    id: "cleanup-lead",
+    name: "cleanup-lead",
+    profile: securityProfile,
+    task: "Lead cleanup.",
+    busId: workgroup.busId,
+    sessionFile: ".pi/orchestra/sessions/cleanup-lead.jsonl",
+    state: "running",
+    result: null,
+  });
+  orchestra.store.saveWorkgroup({ ...added.workgroup, leaderRunId: "cleanup-lead", state: "closing" });
+
+  const output = await tool.execute({ action: "cancel", id: workgroup.id });
+
+  assert.equal(output.action, "cancel");
+  if (output.action !== "cancel") throw new Error("Expected cancel output.");
+  assert.equal(output.alreadyClosed, false);
+  assert.equal(output.workgroup.state, "closed");
+  assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
+  assert.deepEqual(orchestra.closedIds, ["cleanup-review", "cleanup-lead"]);
+});
+
+test("workgroup cancel preserves already finished results", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const created = await tool.execute({
+    action: "create",
+    name: "finished-work-workgroup",
+    goal: "Finish before cancellation is requested.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "finish",
+    id: workgroup.id,
+    result: { status: "success", summary: "Workgroup already completed." },
+  });
+
+  const output = await tool.execute({ action: "cancel", id: workgroup.id });
+
+  assert.equal(output.action, "cancel");
+  if (output.action !== "cancel") throw new Error("Expected cancel output.");
+  assert.equal(output.alreadyClosed, true);
+  assert.deepEqual(output.workgroup.result, { status: "success", summary: "Workgroup already completed." });
+  assert.equal(
+    output.message,
+    [
+      "Workgroup finished-work-workgroup was already closed.",
+      "",
+      "Status: success",
+      "Summary: Workgroup already completed.",
+      "",
+      "No cancellation was needed; existing result was preserved.",
+    ].join("\n"),
+  );
+  assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
+});
+
 test("workgroup rejects adding members after finish", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
