@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
-import { isAgentRunFinished, isTerminalAgentState, pluralize, resolveRunName } from "../utils.ts";
+import { isAgentRunFinished, isTerminalAgentState, pluralize } from "../utils.ts";
 
 const WIDGET_KEY = "pi-orchestra.workflow-monitor";
 const MAX_MONITORED_WORKFLOWS = 2;
@@ -114,11 +114,12 @@ function appendWorkflowLines(lines: string[], store: AgentStore, workflow: Workf
   if (lines.length >= MAX_WIDGET_LINES) return;
 
   const workflowLabel = `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}]`;
-  const leaderLabel = formatLeaderLabel(store, workflow);
-  const workgroupProgress = calculateWorkgroupProgress(store, workflow);
-  const runProgress = calculateRunProgress(store, workflow);
+  const workgroupActivity = calculateWorkgroupActivity(store, workflow);
+  const agentActivity = calculateAgentActivity(store, workflow);
   lines.push(
-    `${workflowLabel} | leader ${leaderLabel} | workgroups (${workgroupProgress.completed}/${workgroupProgress.total}) | runs (${runProgress.completed}/${runProgress.total})`,
+    workflowLabel,
+    `  groups active ${workgroupActivity.active}, done ${workgroupActivity.done}`,
+    `  agents active ${agentActivity.active}, done ${agentActivity.done}`,
   );
 }
 
@@ -126,26 +127,19 @@ function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
   return store.listWorkflows().filter((workflow) => !isTerminalAgentState(workflow.state));
 }
 
-function formatLeaderLabel(store: AgentStore, workflow: WorkflowRun): string {
-  if (!workflow.leaderRunId) return "pending";
-  const leaderRun = store.getRun(workflow.leaderRunId);
-  return `${resolveRunName(store, workflow.leaderRunId)}: ${leaderRun?.state ?? "unknown"}`;
-}
-
-function calculateWorkgroupProgress(store: AgentStore, workflow: WorkflowRun): { completed: number; total: number } {
+function calculateWorkgroupActivity(store: AgentStore, workflow: WorkflowRun): { active: number; done: number } {
   const workgroups = workflow.workgroupIds.flatMap((workgroupId) => {
     const workgroup = store.getWorkgroup(workgroupId);
     return workgroup ? [workgroup] : [];
   });
-  return {
-    completed: workgroups.filter((workgroup) => workgroup.state === "closed").length,
-    total: workgroups.length,
-  };
+  const done = workgroups.filter((workgroup) => workgroup.state === "closed").length;
+  return { active: workgroups.length - done, done };
 }
 
-function calculateRunProgress(store: AgentStore, workflow: WorkflowRun): { completed: number; total: number } {
+function calculateAgentActivity(store: AgentStore, workflow: WorkflowRun): { active: number; done: number } {
   const runs = collectWorkflowRuns(store, workflow);
-  return { completed: runs.filter(isAgentRunFinished).length, total: runs.length };
+  const done = runs.filter(isAgentRunFinished).length;
+  return { active: runs.length - done, done };
 }
 
 function collectWorkflowRuns(store: AgentStore, workflow: WorkflowRun): AgentRun[] {

@@ -10,7 +10,7 @@ import { buildWorkflowMonitorLines, WorkflowMonitorController } from "./workflow
 const WORKFLOW_STARTED_AT_MS = 1_700_000_000_000;
 const MONITOR_NOW_MS = WORKFLOW_STARTED_AT_MS + 10_000;
 
-test("workflow monitor renders flow leader, workgroup, and run progress", () => {
+test("workflow monitor renders workflow, group activity, and agent activity", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
   store.saveRun(run({ id: "group-leader", name: "group-leader", state: "running" }));
@@ -29,7 +29,9 @@ test("workflow monitor renders flow leader, workgroup, and run progress", () => 
   );
 
   assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
-    "Research Flow [10s] | leader flow-leader: running | workgroups (0/1) | runs (1/4)",
+    "Research Flow [10s]",
+    "  groups active 1, done 0",
+    "  agents active 3, done 1",
   ]);
 });
 
@@ -43,7 +45,9 @@ test("workflow monitor counts closed workgroups", () => {
   store.saveWorkflow(workflowRun({ leaderRunId: "flow-leader", workgroupIds: ["workgroup-1"] }));
 
   assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
-    "workflow [10s] | leader flow-leader: running | workgroups (1/1) | runs (1/2)",
+    "workflow [10s]",
+    "  groups active 0, done 1",
+    "  agents active 1, done 1",
   ]);
 });
 
@@ -58,11 +62,11 @@ test("workflow monitor controller updates the widget and clears it when workflow
   const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
 
   assert.equal(monitor.show(ctx), true);
-  assert.equal(widgets[0]?.[0], "workflow [10s] | leader flow-leader: running | workgroups (0/0) | runs (0/1)");
+  assert.deepEqual(widgets[0], ["workflow [10s]", "  groups active 0, done 0", "  agents active 1, done 0"]);
   assert.deepEqual(statuses, []);
 
   store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
-  assert.equal(widgets.at(-1)?.at(-1), "workflow [10s] | leader flow-leader: running | workgroups (0/0) | runs (0/1)");
+  assert.deepEqual(widgets.at(-1), ["workflow [10s]", "  groups active 0, done 0", "  agents active 1, done 0"]);
 
   store.saveWorkflow({ ...workflow, state: "closed" });
 
