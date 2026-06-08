@@ -58,7 +58,7 @@ test("subagent parameters use an OpenAI-compatible root object schema", () => {
   assert.match(parameters.properties.action?.description ?? "", /spawn creates/);
   assert.match(parameters.properties.task?.description ?? "", /Required for spawn/);
   assert.match(parameters.properties.busId?.description ?? "", /bus name/);
-  assert.match(parameters.properties.name?.description ?? "", /readable run name/);
+  assert.match(parameters.properties.name?.description ?? "", /readable name/);
   assert.match(parameters.properties.id?.description ?? "", /run name/);
   assert.match(parameters.properties.message?.description ?? "", /Required for message/);
 });
