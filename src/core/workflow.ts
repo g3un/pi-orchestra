@@ -13,6 +13,8 @@ export interface WorkflowRun {
   leaderRunId: AgentRun["id"] | null;
   /** Workgroups created by the flow leader in creation order. */
   workgroupIds: string[];
+  /** One-line current status authored by the flow leader for monitors. */
+  statusLine: string | null;
   result: AgentResult | null;
   error?: string;
 }

@@ -47,10 +47,12 @@ test("workflow creates a flow leader on a private workflow bus", async () => {
   assert.equal(output.workflow.busId, "research-flow-flow-bus");
   assert.equal(output.workflow.leaderRunId, "flow-lead");
   assert.deepEqual(output.workflow.workgroupIds, []);
+  assert.equal(output.workflow.statusLine, null);
   assert.equal(store.getBus(output.workflow.busId)?.state, "open");
   assert.equal(store.getRun("flow-lead")?.state, "running");
   const leaderTask = orchestra.spawned.find((spawn) => spawn.name === "flow-lead")?.task ?? "";
   assert.match(leaderTask, /Workflow name for workflowId: research-flow/);
+  assert.match(leaderTask, /workflow action=update_status/);
   assert.match(leaderTask, /workflow action=spawn_workgroup/);
   assert.match(leaderTask, /workflow action=finish/);
 });
@@ -229,6 +231,27 @@ test("workflow status returns latest adaptive workflow by name", async () => {
   assert.equal(output.workflow.state, "running");
   assert.equal(output.workflow.leaderRunId, "flow-lead");
   assert.deepEqual(output.workflow.workgroupIds, []);
+});
+
+test("workflow update_status records the flow leader monitor line", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+
+  const output = await workflowTool.execute({
+    action: "update_status",
+    workflowId: "research-flow",
+    statusLine: "Collecting codebase evidence.",
+  });
+
+  assert.equal(output.action, "update_status");
+  assert.equal(output.workflow.statusLine, "Collecting codebase evidence.");
+  assert.equal(findWorkflowByName(store, "research-flow")?.statusLine, "Collecting codebase evidence.");
+  assert.equal(
+    workflowTool.formatOutput(output),
+    "Updated workflow research-flow monitor status.\n\nCollecting codebase evidence.",
+  );
 });
 
 test("workflow validates leader names and workgroup names", async () => {

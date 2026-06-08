@@ -67,9 +67,10 @@ A supervising parent may use `workgroup action=cancel` to abort an unfinished gr
 
 A workflow is led by one flow leader subagent. Persisted workflow runs mirror the
 workgroup lifecycle shape: they store the workflow bus id, the flow leader run id,
-child workgroup ids, `state` (`running`, `closing`, `closed`), and final `result`.
-The final success/blocked/failed status lives in `result.status`, not in workflow
-state. Child outputs stay on their `WorkgroupRun.result`; the workflow points to
+child workgroup ids, flow-leader-authored `statusLine`, `state` (`running`,
+`closing`, `closed`), and final `result`. The final success/blocked/failed status
+lives in `result.status`, not in workflow state. Child outputs stay on their
+`WorkgroupRun.result`; the workflow points to
 those runs with `workgroupIds` instead of duplicating a workflow-specific
 workgroup result shape. Workflows do not persist a separate leader spec; once
 started, the leader is an `AgentRun`.
@@ -77,17 +78,20 @@ started, the leader is an `AgentRun`.
 Workflow flow:
 
 1. `workflow create` creates a private workflow bus and spawns the flow leader.
-2. The flow leader uses `workflow spawn_workgroup` with `workflowId` to create
+2. The flow leader uses `workflow update_status` with `workflowId` to maintain a
+   one-line current status for monitors. The monitor displays this value as-is
+   alongside workflow name, uptime, and derived active/done group and agent counts.
+3. The flow leader uses `workflow spawn_workgroup` with `workflowId` to create
    the next child workgroup when current evidence shows it is useful, or several
    child workgroups in parallel when the goal has independent tracks whose
    outputs do not depend on one another.
-3. Each child workgroup gets its own private bus and its own workgroup leader.
-4. The workgroup leader uses `workgroup add_members` and `workgroup finish` to
+4. Each child workgroup gets its own private bus and its own workgroup leader.
+5. The workgroup leader uses `workgroup add_members` and `workgroup finish` to
    coordinate members and produce the group output.
-5. Workflow-internal `workgroup.finished` events are routed to the flow leader,
+6. Workflow-internal `workgroup.finished` events are routed to the flow leader,
    not main. The flow leader uses those outputs to decide the next group or final
    workflow result.
-6. The flow leader calls `workflow finish` with `status`, `summary`, and optional
+7. The flow leader calls `workflow finish` with `status`, `summary`, and optional
    `data` when the overall goal is complete, blocked, or failed.
 
 Workflow ownership follows the same scoped rule. The flow leader is the effective

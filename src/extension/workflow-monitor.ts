@@ -113,18 +113,20 @@ export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now())
 function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun, nowMs: number): void {
   if (lines.length >= MAX_WIDGET_LINES) return;
 
-  const workflowLabel = `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}]`;
   const workgroupActivity = calculateWorkgroupActivity(store, workflow);
   const agentActivity = calculateAgentActivity(store, workflow);
   lines.push(
-    workflowLabel,
-    `  groups active ${workgroupActivity.active}, done ${workgroupActivity.done}`,
-    `  agents active ${agentActivity.active}, done ${agentActivity.done}`,
+    `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}] — ${formatWorkflowStatusLine(workflow)}`,
+    `  groups active ${workgroupActivity.active}, done ${workgroupActivity.done}; agents active ${agentActivity.active}, done ${agentActivity.done}`,
   );
 }
 
 function listActiveWorkflows(store: AgentStore): WorkflowRun[] {
   return store.listWorkflows().filter((workflow) => !isTerminalAgentState(workflow.state));
+}
+
+function formatWorkflowStatusLine(workflow: WorkflowRun): string {
+  return workflow.statusLine ?? "waiting for flow leader status";
 }
 
 function calculateWorkgroupActivity(store: AgentStore, workflow: WorkflowRun): { active: number; done: number } {

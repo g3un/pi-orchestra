@@ -52,6 +52,11 @@ export type WorkflowInput =
       leader: WorkflowLeaderInput;
     }
   | {
+      action: "update_status";
+      workflowId: string;
+      statusLine: string;
+    }
+  | {
       action: "finish";
       workflowId: string;
       result: AgentResult;
@@ -76,6 +81,10 @@ export type WorkflowToolOutput =
       workflow: WorkflowRun;
       workgroup: WorkgroupRun;
       bus: Bus;
+    }
+  | {
+      action: "update_status";
+      workflow: WorkflowRun;
     }
   | {
       action: "finish";
@@ -110,6 +119,8 @@ export interface WorkflowPiToolOptions {
   onWorkflowOutput: ((ctx: ExtensionContext, output: WorkflowToolOutput) => void) | undefined;
 }
 
+const WORKFLOW_STATUS_LINE_MAX_LENGTH = 160;
+
 const WorkflowLeaderParams = Type.Object(
   {
     profile: AgentProfileParams,
@@ -125,8 +136,8 @@ const WorkflowLeaderParams = Type.Object(
 );
 
 const WorkflowActionParams = Type.String({
-  enum: ["create", "spawn_workgroup", "finish", "status", "cancel"],
-  description: "create/spawn_workgroup/finish/status/cancel a workflow.",
+  enum: ["create", "spawn_workgroup", "update_status", "finish", "status", "cancel"],
+  description: "create/spawn_workgroup/update_status/finish/status/cancel a workflow.",
 });
 
 const WorkflowToolParams = Type.Object(
@@ -139,12 +150,19 @@ const WorkflowToolParams = Type.Object(
     ),
     workflowId: Type.Optional(
       Type.String({
-        description: "Required for spawn_workgroup/finish/status/cancel. Workflow name.",
+        description: "Required for spawn_workgroup/update_status/finish/status/cancel. Workflow name.",
       }),
     ),
     goal: Type.Optional(
       Type.String({
         description: "Required for create/spawn_workgroup. Goal.",
+      }),
+    ),
+    statusLine: Type.Optional(
+      Type.String({
+        maxLength: WORKFLOW_STATUS_LINE_MAX_LENGTH,
+        description:
+          "Required for update_status. One-line current workflow status authored by the flow leader and shown verbatim in the monitor.",
       }),
     ),
     leader: Type.Optional(WorkflowLeaderParams),
@@ -201,6 +219,14 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
 
       if (input.action === "status") return { action: "status", workflow };
 
+      if (input.action === "update_status") {
+        const updatedWorkflow = updateWorkflowStatusLine(store, workflow, input.statusLine);
+        return {
+          action: "update_status",
+          workflow: updatedWorkflow,
+        };
+      }
+
       if (input.action === "cancel") {
         const closedWorkflow = await closeWorkflow(orchestra, store, workflow);
         return {
@@ -233,9 +259,10 @@ export function defineWorkflowPiTool(
     name: "workflow",
     label: "Workflow",
     description: "Run an adaptive led workflow.",
-    promptSnippet: "Create a workflow; its leader spawns workgroups and finishes.",
+    promptSnippet: "Create a workflow; its leader updates status, spawns workgroups, and finishes.",
     promptGuidelines: [
       "Use workflow create with one flow leader.",
+      "The flow leader uses workflow update_status for one-line monitor status when focus changes.",
       "The flow leader uses workflow spawn_workgroup and workflow finish.",
       "Spawn multiple child workgroups in parallel only for independent tracks.",
       "Give child workgroup leaders the workgroup tool.",
@@ -391,6 +418,19 @@ async function spawnWorkflowWorkgroup(
   };
 }
 
+function updateWorkflowStatusLine(store: AgentStore, workflow: WorkflowRun, statusLine: string): WorkflowRun {
+  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
+  if (latestWorkflow.state !== "running")
+    throw new Error(`Workflow ${latestWorkflow.name} is ${latestWorkflow.state}.`);
+
+  const updatedWorkflow: WorkflowRun = {
+    ...latestWorkflow,
+    statusLine: normalizeWorkflowStatusLine(statusLine),
+  };
+  store.saveWorkflow(updatedWorkflow);
+  return updatedWorkflow;
+}
+
 async function finishWorkflowFromLeader(
   orchestra: OrchestraApi,
   store: AgentStore,
@@ -497,6 +537,7 @@ function createWorkflowRun(
     busId,
     leaderRunId: null,
     workgroupIds: [],
+    statusLine: null,
     result: null,
   };
 }
@@ -517,6 +558,16 @@ function validateWorkgroupName(name: string, existingWorkgroups: WorkgroupRun[])
   if (existingWorkgroups.some((workgroup) => workgroup.id === normalizedName || workgroup.name === normalizedName)) {
     throw new Error(`Workflow workgroup name "${normalizedName}" is already in use.`);
   }
+}
+
+function normalizeWorkflowStatusLine(statusLine: string): string {
+  const normalizedStatusLine = statusLine.trim();
+  if (!normalizedStatusLine) throw new Error("workflow action=update_status requires a non-empty statusLine.");
+  if (/\r|\n/.test(normalizedStatusLine)) throw new Error("workflow statusLine must be one line.");
+  if (normalizedStatusLine.length > WORKFLOW_STATUS_LINE_MAX_LENGTH) {
+    throw new Error(`workflow statusLine must be at most ${WORKFLOW_STATUS_LINE_MAX_LENGTH} characters.`);
+  }
+  return normalizedStatusLine;
 }
 
 function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
@@ -543,6 +594,16 @@ function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
       name: params.name,
       goal: params.goal,
       leader: toWorkflowLeaderInput(params.leader, "workflow workgroup leader"),
+    };
+  }
+
+  if (params.action === "update_status") {
+    if (!params.workflowId) throw new Error("workflow action=update_status requires workflowId.");
+    if (params.statusLine === undefined) throw new Error("workflow action=update_status requires statusLine.");
+    return {
+      action: "update_status",
+      workflowId: params.workflowId,
+      statusLine: normalizeWorkflowStatusLine(params.statusLine),
     };
   }
 
@@ -614,6 +675,8 @@ function buildFlowLeaderTask(workflow: WorkflowRun, leaderTask: string): string 
     workflow.goal,
     "",
     `Workflow name for workflowId: ${workflow.name}`,
+    "Use workflow action=update_status with this workflow name to set the one-line monitor status when your current focus changes.",
+    "The monitor displays statusLine verbatim, so keep it concise, human-readable, and one line; do not update it for every minor thought.",
     "Use workflow action=spawn_workgroup with this workflow name to spawn a child workgroup led by a group leader.",
     "Each spawn_workgroup call needs name, goal, and leader. Give the group leader the workgroup tool.",
     "Child workgroup buses are created internally. Workgroup member events go to the group leader; workgroup.finished events come back to you.",
@@ -718,6 +781,7 @@ function formatWorkflowOutputMessage(output: WorkflowToolOutput, store: AgentSto
   }
 
   if (output.action === "spawn_workgroup") return formatWorkflowWorkgroupCreatedMessage(output, store);
+  if (output.action === "update_status") return formatWorkflowStatusLineUpdatedMessage(output.workflow);
   if (output.action === "finish")
     return formatWorkflowSummary(store, output.workflow, "Workflow final output recorded; closing resources.");
   if (output.action === "cancel") return formatWorkflowSummary(store, output.workflow, "Workflow cancelled.");
@@ -729,6 +793,10 @@ function formatWorkflowNotFound(id: string): string {
   return `Workflow ${id} not found.`;
 }
 
+function formatWorkflowStatusLineUpdatedMessage(workflow: WorkflowRun): string {
+  return [`Updated workflow ${workflow.name} monitor status.`, "", workflow.statusLine ?? "not set"].join("\n");
+}
+
 function formatWorkflowSummary(
   store: AgentStore,
   workflow: WorkflowRun,
@@ -738,6 +806,7 @@ function formatWorkflowSummary(
     headline,
     "",
     `Goal: ${workflow.goal}`,
+    `Monitor status: ${workflow.statusLine ?? "not set"}`,
     "",
     `Flow leader: ${formatOptionalRunName(store, workflow.leaderRunId)}`,
     `Workflow bus: ${formatBusName(store, workflow.busId)}`,
@@ -827,10 +896,11 @@ function terminalRunEvent(store: AgentStore, runId: string): Promise<AgentRun> {
 }
 
 type RawWorkflowParams = {
-  action: "create" | "spawn_workgroup" | "finish" | "status" | "cancel";
+  action: "create" | "spawn_workgroup" | "update_status" | "finish" | "status" | "cancel";
   name?: string;
   workflowId?: string;
   goal?: string;
+  statusLine?: string;
   leader?: RawWorkflowLeaderParams;
   status?: AgentResultStatus;
   summary?: string;

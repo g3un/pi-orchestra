@@ -22,8 +22,9 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
 - Use the smallest orchestration primitive that fits the task.
 - Completion events are delivered back to the main conversation, so delegated
   work can continue without polling.
-- Active workflows appear in a TUI widget with active/done group and agent
-  counts. Reopen it with `/orchestra-workflows`.
+- Active workflows appear in a TUI widget with workflow name, uptime, current
+  status, and active/done group and agent counts. Reopen it with
+  `/orchestra-workflows`.
 - Child profiles can use presets such as `source-code-qa`,
   `external-researcher`, and `code-reviewer`, or provide a custom role prompt.
 

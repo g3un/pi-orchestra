@@ -34,7 +34,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   );
 
   pi.registerCommand("orchestra-workflows", {
-    description: "Show the active pi-orchestra workflow progress widget.",
+    description: "Show the active pi-orchestra workflow status widget.",
     handler: async (_args, ctx) => {
       const monitor = getToolBundle(ctx).workflowMonitor;
       if (monitor.show(ctx)) return;
@@ -88,7 +88,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     subagentTool: createSubagentTool({ orchestra }),
     workgroupTool,
     workflowTool: createWorkflowTool({ orchestra, store }),
-    workflowMonitor: new WorkflowMonitorController(store, { now: undefined, tickMs: undefined }),
+    workflowMonitor: new WorkflowMonitorController(store),
     orchestraEvents,
     dispose() {
       this.workflowMonitor.dispose();

@@ -447,6 +447,7 @@ function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     busId: "workflow-bus",
     leaderRunId: null,
     workgroupIds: [],
+    statusLine: null,
     result: null,
     ...overrides,
   };
