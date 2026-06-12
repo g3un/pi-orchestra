@@ -68,7 +68,7 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     name: Type.Optional(
       Type.String({
-        description: "Bus name. Optional for create; required for status/publish/subscribe/unsubscribe.",
+        description: "Bus name. Optional for create; required for status/publish/subscribe/unsubscribe/compact.",
       }),
     ),
     message: Type.Optional(
@@ -187,28 +187,31 @@ function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
       subscriberId: "main",
       subscriberKind: "main",
       lastDeliveredMessageId: maxMessageId(bus.messages.map((message) => message.id)),
+      deliveredMessageIds: [],
     });
   store.saveBusSubscription(subscription);
   return subscription;
 }
 
 function compactDeliveredBusMessages(store: AgentStore, bus: Bus): { bus: Bus; removedCount: number } {
-  const subscriptions = store.listBusSubscriptions({
-    busId: bus.id,
-    subscriberId: undefined,
-    subscriberKind: undefined,
-  });
-  const messages = bus.messages.filter((message) => !isBusMessageCompactable(message, subscriptions));
-  const removedCount = bus.messages.length - messages.length;
-  if (removedCount === 0) return { bus, removedCount };
+  let removedCount = 0;
+  const compactedBus =
+    store.updateBus(bus.id, (latestBus) => {
+      const subscriptions = store.listBusSubscriptions({
+        busId: bus.id,
+        subscriberId: undefined,
+        subscriberKind: undefined,
+      });
+      if (subscriptions.length === 0) return latestBus;
 
-  const compactedBus = { ...bus, messages };
-  store.saveBus(compactedBus);
+      const messages = latestBus.messages.filter((message) => !isBusMessageCompactable(message, subscriptions));
+      removedCount = latestBus.messages.length - messages.length;
+      return removedCount === 0 ? latestBus : { ...latestBus, messages };
+    }) ?? bus;
   return { bus: compactedBus, removedCount };
 }
 
 function isBusMessageCompactable(message: BusMessage, subscriptions: BusSubscription[]): boolean {
-  if (subscriptions.length === 0) return true;
   return subscriptions.every((subscription) => {
     if (subscription.subscriberId === message.from) return true;
     return isBusMessageDelivered(subscription, message.id);

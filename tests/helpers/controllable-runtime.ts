@@ -64,7 +64,13 @@ export class ControllableRuntime implements AgentRuntime {
     this.spawned.push(record);
     this.store.saveRun(run);
     this.store.saveBusSubscription(
-      createBusSubscription({ busId, subscriberId: run.id, subscriberKind: "agent", lastDeliveredMessageId: null }),
+      createBusSubscription({
+        busId,
+        subscriberId: run.id,
+        subscriberKind: "agent",
+        lastDeliveredMessageId: null,
+        deliveredMessageIds: [],
+      }),
     );
 
     const spawnedRun = await this.onSpawn?.(run, record);

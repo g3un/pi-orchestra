@@ -264,6 +264,7 @@ test("orchestra event controller emits subscribed main bus messages", () => {
     subscriberId: "main",
     subscriberKind: "main",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
   store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
@@ -296,6 +297,7 @@ test("orchestra event controller does not mark queued main bus messages delivere
     subscriberId: "main",
     subscriberKind: "main",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 10_000 });
 

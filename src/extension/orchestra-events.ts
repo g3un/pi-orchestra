@@ -449,7 +449,8 @@ export class OrchestraEventController {
     const subscription = this.store.getBusSubscription(delivery.subscriptionId);
     if (!subscription) return;
 
-    this.store.saveBusSubscription(markBusMessagesDelivered(subscription, delivery.message));
+    const busMessages = this.store.getBus(subscription.busId)?.messages ?? [];
+    this.store.saveBusSubscription(markBusMessagesDelivered(subscription, delivery.message, busMessages));
   }
 
   private queueEvent(event: OrchestraMainEvent): void {

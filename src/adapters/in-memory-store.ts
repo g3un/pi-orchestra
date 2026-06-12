@@ -75,22 +75,33 @@ export class InMemoryAgentStore implements AgentStore {
     return [...this.buses.values()].map(snapshot);
   }
 
-  addBusMessage(busId: string, message: BusMessage): void {
+  updateBus(busId: string, update: (bus: Bus) => Bus): Bus | undefined {
     const bus = this.buses.get(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
+    if (!bus) return undefined;
 
-    const savedMessage = snapshot(message);
-    const existingIndex = bus.messages.findIndex((current) => current.id === savedMessage.id);
-    const messages = [...bus.messages];
-    if (existingIndex >= 0) {
-      messages[existingIndex] = savedMessage;
-      this.buses.set(bus.id, { ...bus, messages });
-      return;
-    }
+    const updatedBus = snapshot(update(snapshot(bus)));
+    this.saveBus(updatedBus);
+    return snapshot(updatedBus);
+  }
 
-    messages.push(savedMessage);
-    this.buses.set(bus.id, { ...bus, messages });
-    notifySubscribers(this.busMessageSubscriptions, { busId, message: snapshot(savedMessage) });
+  addBusMessage(busId: string, message: BusMessage): void {
+    let addedMessage: BusMessage | undefined;
+    const updatedBus = this.updateBus(busId, (bus) => {
+      if (bus.state === "closed") throw new Error(`Bus ${bus.name} is closed.`);
+
+      const savedMessage = snapshot(message);
+      const existingIndex = bus.messages.findIndex((current) => current.id === savedMessage.id);
+      const messages = [...bus.messages];
+      if (existingIndex >= 0) {
+        messages[existingIndex] = savedMessage;
+        return { ...bus, messages };
+      }
+
+      addedMessage = savedMessage;
+      return { ...bus, messages: [...messages, savedMessage] };
+    });
+    if (!updatedBus) throw new Error(`Bus ${busId} not found.`);
+    if (addedMessage) notifySubscribers(this.busMessageSubscriptions, { busId, message: snapshot(addedMessage) });
   }
 
   subscribeBusMessages(

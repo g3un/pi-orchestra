@@ -121,6 +121,7 @@ test("bus compact removes messages delivered to all current subscribers", async 
     subscriberId: "agent-1",
     subscriberKind: "agent",
     lastDeliveredMessageId: "message-1",
+    deliveredMessageIds: [],
   });
 
   const output = await tool.execute({ action: "compact", name: bus.name });
@@ -136,7 +137,7 @@ test("bus compact removes messages delivered to all current subscribers", async 
   );
 });
 
-test("bus compact removes all messages when there are no current subscribers", async () => {
+test("bus compact keeps messages when there are no current subscribers", async () => {
   const orchestra = new FakeOrchestra();
   const store = new InMemoryAgentStore();
   const tool = createBusTool({ orchestra, store });
@@ -151,8 +152,8 @@ test("bus compact removes all messages when there are no current subscribers", a
 
   const output = await tool.execute({ action: "compact", name: bus.name });
 
-  assert.equal(output.message, "Compacted bus bus-1; removed 1 delivered message(s), kept 0.");
-  assert.deepEqual(output.bus?.messages, []);
+  assert.equal(output.message, "Compacted bus bus-1; removed 0 delivered message(s), kept 1.");
+  assert.deepEqual(output.bus?.messages, bus.messages);
 });
 
 test("bus subscribe and unsubscribe manage the main bus subscription", async () => {
@@ -177,6 +178,7 @@ test("bus subscribe and unsubscribe manage the main bus subscription", async () 
     subscriberId: "main",
     subscriberKind: "main",
     lastDeliveredMessageId: "message-1",
+    deliveredMessageIds: [],
   });
 
   const unsubscribeOutput = await tool.execute({ action: "unsubscribe", name: bus.name });

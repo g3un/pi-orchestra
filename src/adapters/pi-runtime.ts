@@ -420,7 +420,8 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private markSubscriptionMessagesDelivered(subscription: BusSubscription, messages: BusMessage | BusMessage[]): void {
     const latestSubscription = this.store.getBusSubscription(subscription.id) ?? subscription;
-    this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages));
+    const busMessages = this.store.getBus(latestSubscription.busId)?.messages ?? [];
+    this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages, busMessages));
   }
 
   private formatBusMessagesForPrompt(messages: BusMessage[]): string {
@@ -500,6 +501,7 @@ function createAgentBusSubscription(runId: string, busId: string): BusSubscripti
     subscriberId: runId,
     subscriberKind: "agent",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
 }
 

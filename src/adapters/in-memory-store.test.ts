@@ -267,6 +267,7 @@ function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscript
     subscriberId: "agent-1",
     subscriberKind: "agent",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
     ...overrides,
   };
 }

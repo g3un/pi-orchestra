@@ -68,8 +68,10 @@ export class Orchestra implements OrchestraApi {
   closeBus(id: string): Bus | undefined {
     const bus = this.findBus(id);
     if (!bus) return undefined;
-    const closedBus: Bus = { ...bus, state: "closed" };
-    this.store.saveBus(closedBus);
+    const closedBus = this.store.updateBus(bus.id, (current) => ({ ...current, state: "closed" })) ?? {
+      ...bus,
+      state: "closed",
+    };
     for (const subscription of this.store.listBusSubscriptions({
       busId: bus.id,
       subscriberId: undefined,

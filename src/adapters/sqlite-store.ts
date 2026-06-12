@@ -89,24 +89,34 @@ export class SqliteAgentStore implements AgentStore {
     return listPayloads(this.statements.listBuses, "buses");
   }
 
-  addBusMessage(busId: string, message: BusMessage): void {
-    let event: BusMessageEvent | undefined;
+  updateBus(busId: string, update: (bus: Bus) => Bus): Bus | undefined {
+    let updatedBus: Bus | undefined;
     this.withImmediateTransaction(() => {
       const bus = this.getBus(busId);
-      if (!bus) throw new Error(`Bus ${busId} not found.`);
+      if (!bus) return;
+
+      updatedBus = update(bus);
+      this.saveBus(updatedBus);
+    });
+    return updatedBus;
+  }
+
+  addBusMessage(busId: string, message: BusMessage): void {
+    let event: BusMessageEvent | undefined;
+    const updatedBus = this.updateBus(busId, (bus) => {
+      if (bus.state === "closed") throw new Error(`Bus ${bus.name} is closed.`);
 
       const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
       const messages = [...bus.messages];
       if (existingIndex >= 0) {
         messages[existingIndex] = message;
-        this.saveBus({ ...bus, messages });
-        return;
+        return { ...bus, messages };
       }
 
-      messages.push(message);
-      this.saveBus({ ...bus, messages });
       event = { busId, message };
+      return { ...bus, messages: [...messages, message] };
     });
+    if (!updatedBus) throw new Error(`Bus ${busId} not found.`);
     if (event) notifySubscribers(this.busMessageSubscriptions, event);
   }
 

@@ -68,6 +68,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     subscriberId: run.id,
     subscriberKind: "agent",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
   assert.deepEqual(resolveModel.mock.calls, [["mock-provider/mock-model"]]);
   assert.deepEqual(codingAgentMocks.sessionManagerCreate.mock.calls, [
@@ -217,6 +218,51 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   assert.equal(secondSession.steerCalls.at(-1), "Continue after seeing the bus fact.");
 });
 
+test("pi runtime preserves skipped earlier bus messages after later steering delivery", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  const session = queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+
+  session.isStreaming = false;
+  const skippedMessage = await runtime.publishBus("bus-1", "Skipped while idle.", "main");
+  session.isStreaming = true;
+  const steeredMessage = await runtime.publishBus("bus-1", "Steered while streaming.", "main");
+
+  assert.equal(session.steerCalls.length, 1);
+  assert.match(session.steerCalls[0] ?? "", /Steered while streaming\./);
+  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", run.id)), {
+    id: createBusSubscriptionId("bus-1", "agent", run.id),
+    busId: "bus-1",
+    subscriberId: run.id,
+    subscriberKind: "agent",
+    lastDeliveredMessageId: null,
+    deliveredMessageIds: [steeredMessage.id],
+  });
+
+  session.isStreaming = false;
+  await runtime.message(run.id, "Continue with bus context.");
+
+  assert.equal(session.steerCalls.length, 2);
+  assert.match(session.steerCalls[1] ?? "", /Skipped while idle\./);
+  assert.doesNotMatch(session.steerCalls[1] ?? "", /Steered while streaming\./);
+  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", run.id)), {
+    id: createBusSubscriptionId("bus-1", "agent", run.id),
+    busId: "bus-1",
+    subscriberId: run.id,
+    subscriberKind: "agent",
+    lastDeliveredMessageId: steeredMessage.id,
+    deliveredMessageIds: [],
+  });
+  assert.equal(skippedMessage.id < steeredMessage.id, true);
+});
+
 test("pi runtime publishes bus messages to active subscribers rather than run bus membership", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
@@ -235,6 +281,7 @@ test("pi runtime publishes bus messages to active subscribers rather than run bu
     subscriberId: run.id,
     subscriberKind: "agent",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
 
   await runtime.publishBus("bus-1", "Subscribed fact.", "main");

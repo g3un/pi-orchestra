@@ -14,6 +14,8 @@ export interface AgentStore {
   getBus(id: string): Bus | undefined;
   getBusByName(name: string): Bus | undefined;
   listBuses(): Bus[];
+  /** Update a bus payload from the latest stored value. */
+  updateBus(busId: string, update: (bus: Bus) => Bus): Bus | undefined;
   /** Add or replace a bus message by id. */
   addBusMessage(busId: string, message: BusMessage): void;
   subscribeBusMessages(
