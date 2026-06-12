@@ -173,8 +173,8 @@ test("subagent close handles missing runs", async () => {
   const output = await tool.execute({ action: "close", id: "missing" });
 
   assert.equal(output.run, undefined);
-  assert.equal(output.message, "Closed subagent missing.");
-  assert.deepEqual(orchestra.closedIds, ["missing"]);
+  assert.equal(output.message, "Subagent missing not found.");
+  assert.deepEqual(orchestra.closedIds, []);
 });
 
 class FakeOrchestra implements OrchestraApi {
@@ -251,10 +251,10 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
-    this.closedIds.push(id);
     const current = this.runs.get(id);
     if (!current) return undefined;
 
+    this.closedIds.push(id);
     const closedRun = { ...current, state: "closed" as const };
     this.runs.set(id, closedRun);
     return closedRun;

@@ -168,9 +168,7 @@ export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentToo
       const run = await orchestra.closeAgent(input.id, { busId: undefined });
       return {
         run,
-        message: run
-          ? formatRunMessage(run, `Closed subagent ${run.name}.`)
-          : formatClosedMissingSubagentMessage(input.id),
+        message: run ? formatRunMessage(run, `Closed subagent ${run.name}.`) : formatMissingSubagentMessage(input.id),
       };
     },
   };
@@ -298,10 +296,6 @@ export function withDefaultProfileModelInput<T extends { profile: AgentProfile }
 
 function formatMissingSubagentMessage(id: string): string {
   return `Subagent ${id} not found.`;
-}
-
-function formatClosedMissingSubagentMessage(id: string): string {
-  return `Closed subagent ${id}.`;
 }
 
 function formatRunMessage(run: AgentRun, headline = `Subagent ${run.name} is ${run.state}.`): string {

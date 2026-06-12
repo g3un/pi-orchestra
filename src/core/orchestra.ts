@@ -108,7 +108,8 @@ export class Orchestra implements OrchestraApi {
 
   async closeAgent(id: string, options: RunLookupOptions): Promise<AgentRun | undefined> {
     const run = this.getRun(id, options);
-    return await this.runtime.close(run?.id ?? id);
+    if (!run) return undefined;
+    return await this.runtime.close(run.id);
   }
 
   private requireBus(id: string): Bus {

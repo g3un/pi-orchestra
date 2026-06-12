@@ -150,6 +150,22 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   assert.equal(closedRun?.state, "closed");
 });
 
+test("orchestra closeAgent honors bus narrowing", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const firstBus = orchestra.createBus({ name: "bus-a" });
+  const secondBus = orchestra.createBus({ name: "bus-b" });
+  const runOnSecondBus = run({ id: "agent-1", name: "agent-1", busId: secondBus.id });
+  store.saveRun(runOnSecondBus);
+
+  const closedRun = await orchestra.closeAgent(runOnSecondBus.id, { busId: firstBus.id });
+
+  assert.equal(closedRun, undefined);
+  assert.deepEqual(runtime.closedIds, []);
+  assert.deepEqual(store.getRun(runOnSecondBus.id), runOnSecondBus);
+});
+
 test("orchestra publishes bus messages through runtime and reads updated store state", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
