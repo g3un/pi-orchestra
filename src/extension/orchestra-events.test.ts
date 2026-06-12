@@ -5,7 +5,11 @@ import { createBusSubscriptionId } from "../core/bus.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
-import { OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
+import {
+  OrchestraEventController,
+  type OrchestraMainEvent,
+  type WorkgroupLeaderFailedEvent,
+} from "./orchestra-events.ts";
 
 test("orchestra event controller emits standalone subagent finish events", () => {
   const store = new InMemoryAgentStore();
@@ -358,6 +362,51 @@ test("orchestra event controller falls back to main when a workflow child workgr
 
   assert.equal(agentEvents.length, 0);
   assert.equal(sent.batches.length, 1);
+  assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
+});
+
+test("orchestra event controller reports running workgroup leader failures", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const leaderRun = run({ id: "leader", name: "leader", busId: "bus-1", state: "running" });
+  const workgroup = workgroupRun({ leaderRunId: leaderRun.id, state: "running" });
+  const leaderFailures: WorkgroupLeaderFailedEvent[] = [];
+  store.saveRun(leaderRun);
+  store.saveWorkgroup(workgroup);
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    onWorkgroupLeaderFailed: (event) => leaderFailures.push(event),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...leaderRun, state: "failed", result: { status: "failed", summary: "Leader failed." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(leaderFailures.length, 1);
+  assert.equal(leaderFailures[0]?.workgroup.id, workgroup.id);
+  assert.equal(leaderFailures[0]?.run.runId, leaderRun.id);
+});
+
+test("orchestra event controller does not report workgroup leader completion after the workgroup is closed", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const leaderRun = run({ id: "leader", name: "leader", busId: "bus-1", state: "running" });
+  const workgroup = workgroupRun({ leaderRunId: leaderRun.id, state: "running" });
+  const leaderFailures: WorkgroupLeaderFailedEvent[] = [];
+  store.saveRun(leaderRun);
+  store.saveWorkgroup(workgroup);
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    onWorkgroupLeaderFailed: (event) => leaderFailures.push(event),
+    flushDelayMs: 0,
+  });
+
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Done." } });
+  store.saveRun({ ...leaderRun, state: "success", result: { status: "success", summary: "Leader done." } });
+
+  assert.equal(leaderFailures.length, 0);
   assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
 });
 

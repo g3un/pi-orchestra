@@ -42,10 +42,16 @@ export interface WorkgroupLaunchRegistration {
 
 export type WorkgroupRegistration = WorkgroupLaunchRegistration;
 
+export interface WorkgroupLeaderFailedEvent {
+  workgroup: WorkgroupRun;
+  run: AgentRunResult;
+}
+
 export interface OrchestraEventControllerOptions {
   store: AgentStore;
   sendEvents: (events: OrchestraMainEvent[], content: string) => void;
   sendAgentEvents?: (runId: string, events: OrchestraMainEvent[], content: string) => void;
+  onWorkgroupLeaderFailed?: (event: WorkgroupLeaderFailedEvent) => void;
   /** Defaults to 50 ms when undefined. Use 0 in tests for immediate delivery. */
   flushDelayMs: number | undefined;
 }
@@ -76,6 +82,7 @@ export class OrchestraEventController {
   private readonly store: AgentStore;
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
   private readonly sendAgentEvents: NonNullable<OrchestraEventControllerOptions["sendAgentEvents"]> | undefined;
+  private readonly onWorkgroupLeaderFailed: OrchestraEventControllerOptions["onWorkgroupLeaderFailed"];
   private readonly flushDelayMs: number;
   private readonly runFinished = new Map<string, boolean>();
   private readonly workflowStates = new Map<string, WorkflowRun["state"]>();
@@ -84,6 +91,8 @@ export class OrchestraEventController {
   private readonly workflowIdByBusId = new Map<string, string>();
   private readonly workgroupMemberRunIndexes = new Map<string, string[]>();
   private readonly workgroupIdByMemberRunId = new Map<string, string>();
+  private readonly workgroupLeaderRunIndexes = new Map<string, string | null>();
+  private readonly workgroupIdByLeaderRunId = new Map<string, string>();
   private readonly workgroupStates = new Map<string, WorkgroupState>();
   private readonly mainWorkgroupsByBusId = new Map<string, RegisteredWorkgroup>();
   private readonly launchingWorkgroupsByBusId = new Map<string, LaunchingWorkgroup>();
@@ -100,6 +109,7 @@ export class OrchestraEventController {
     this.store = options.store;
     this.sendEvents = options.sendEvents;
     this.sendAgentEvents = options.sendAgentEvents;
+    this.onWorkgroupLeaderFailed = options.onWorkgroupLeaderFailed;
     this.flushDelayMs = options.flushDelayMs ?? 50;
 
     for (const run of this.store.listRuns()) this.runFinished.set(run.id, isAgentFinishRun(run));
@@ -225,6 +235,12 @@ export class OrchestraEventController {
       return;
     }
 
+    const ledWorkgroup = this.findRunningWorkgroupLedByRun(run.id);
+    if (ledWorkgroup) {
+      this.onWorkgroupLeaderFailed?.({ workgroup: ledWorkgroup, run: toAgentRunResult(run) });
+      return;
+    }
+
     if (this.isWorkflowBus(run.busId)) return;
 
     const registeredWorkgroup = this.mainWorkgroupsByBusId.get(run.busId);
@@ -313,6 +329,12 @@ export class OrchestraEventController {
     return workgroupId ? this.store.getWorkgroup(workgroupId) : undefined;
   }
 
+  private findRunningWorkgroupLedByRun(runId: string): WorkgroupRun | undefined {
+    const workgroupId = this.workgroupIdByLeaderRunId.get(runId);
+    const workgroup = workgroupId ? this.store.getWorkgroup(workgroupId) : undefined;
+    return workgroup?.state === "running" ? workgroup : undefined;
+  }
+
   private findWorkflowForWorkgroup(workgroupId: string): WorkflowRun | undefined {
     const workflowId = this.workflowIdByWorkgroupId.get(workgroupId);
     return workflowId ? this.store.getWorkflow(workflowId) : undefined;
@@ -352,8 +374,16 @@ export class OrchestraEventController {
       if (this.workgroupIdByMemberRunId.get(runId) === workgroup.id) this.workgroupIdByMemberRunId.delete(runId);
     }
 
+    const previousLeaderRunId = this.workgroupLeaderRunIndexes.get(workgroup.id);
+    if (previousLeaderRunId && this.workgroupIdByLeaderRunId.get(previousLeaderRunId) === workgroup.id) {
+      this.workgroupIdByLeaderRunId.delete(previousLeaderRunId);
+    }
+
     this.workgroupMemberRunIndexes.set(workgroup.id, [...workgroup.memberRunIds]);
     for (const runId of workgroup.memberRunIds) this.workgroupIdByMemberRunId.set(runId, workgroup.id);
+
+    this.workgroupLeaderRunIndexes.set(workgroup.id, workgroup.leaderRunId);
+    if (workgroup.leaderRunId) this.workgroupIdByLeaderRunId.set(workgroup.leaderRunId, workgroup.id);
 
     const workflowId = this.workflowIdByWorkgroupId.get(workgroup.id);
     if (workflowId) this.workflowIdByBusId.set(workgroup.busId, workflowId);

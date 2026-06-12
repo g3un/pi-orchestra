@@ -5,7 +5,12 @@ import { Orchestra } from "../core/orchestra.ts";
 import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
 import { createSubagentTool, defineSubagentPiTool, type SubagentTool } from "../tools/subagent.ts";
 import { createWorkflowTool, defineWorkflowPiTool, type WorkflowTool } from "../tools/workflow.ts";
-import { createWorkgroupTool, defineWorkgroupPiTool, type WorkgroupTool } from "../tools/workgroup.ts";
+import {
+  closeWorkgroupRun,
+  createWorkgroupTool,
+  defineWorkgroupPiTool,
+  type WorkgroupTool,
+} from "../tools/workgroup.ts";
 import { ORCHESTRA_EVENT_CUSTOM_TYPE, OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
 import { WorkflowMonitorController } from "./workflow-monitor.ts";
 
@@ -67,6 +72,13 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     sendEvents: (events, content) => sendOrchestraEvents(pi, events, content),
     sendAgentEvents: (runId, _events, content) => {
       void orchestra.messageAgent(runId, content, { busId: undefined }).catch(() => undefined);
+    },
+    onWorkgroupLeaderFailed: ({ workgroup, run }) => {
+      const result = run.result ?? {
+        status: "failed" as const,
+        summary: `Workgroup leader ${run.name} reached ${run.state} without finishing workgroup ${workgroup.name}.`,
+      };
+      void closeWorkgroupRun(orchestra, store, workgroup, { includeLeader: true, result }).catch(() => undefined);
     },
     flushDelayMs: undefined,
   });
