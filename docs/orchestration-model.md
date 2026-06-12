@@ -20,6 +20,11 @@ Bus messages are peer reference context only:
 - `publish_bus` sends useful findings to subscribers of the same bus.
 - Subagents subscribe to their assigned bus when spawned.
 - Subscribed bus context is delivered as supplemental `<bus_reference_context>`.
+- Delivery bookkeeping uses a contiguous watermark plus out-of-order delivered
+  ids, so later steered messages do not cause earlier skipped messages to be
+  lost.
+- `bus action=compact` removes messages that every current subscriber has
+  received; it is an explicit retention operation, not automatic cleanup.
 - Decisions and escalation do not go through the bus; call the `finish` tool with
   `status: "blocked"`.
 
@@ -89,8 +94,9 @@ Workflow flow:
 5. The workgroup leader uses `workgroup add_members` and `workgroup finish` to
    coordinate members and produce the group output.
 6. Workflow-internal `workgroup.finished` events are routed to the flow leader,
-   not main. The flow leader uses those outputs to decide the next group or final
-   workflow result.
+   not main. Workgroup leader run finishes are not separately routed as
+   `subagent.finished` to the flow leader. The flow leader uses group outputs to
+   decide the next group or final workflow result.
 7. The flow leader calls `workflow finish` with `status`, `summary`, and optional
    `data` when the overall goal is complete, blocked, or failed.
 
@@ -107,4 +113,6 @@ Closing a workflow moves it through `closing`, closes every child workgroup,
 closes all child buses, closes the workflow bus, closes child group leaders and
 the flow leader, then emits one `workflow.finished` event to main. Standalone
 workgroup events still go to main; workflow-internal workgroup events stay inside
-the workflow control loop.
+the workflow control loop. Child subagents spawned by another subagent route
+`subagent.finished` to the active parent run; if that parent is inactive inside a
+workflow bus, the event is suppressed rather than leaking to main.

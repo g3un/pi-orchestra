@@ -7,7 +7,7 @@ import {
   type AgentResultStatus,
   type AgentRun,
 } from "../core/subagent.ts";
-import type { Bus } from "../core/bus.ts";
+import { BUS_NAME_MAX_LENGTH, type Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
@@ -122,7 +122,7 @@ export interface WorkflowPiToolOptions {
 }
 
 const WORKFLOW_STATUS_LINE_MAX_LENGTH = 160;
-const INTERNAL_BUS_NAME_MAX_LENGTH = 64;
+const INTERNAL_BUS_NAME_MAX_LENGTH = BUS_NAME_MAX_LENGTH;
 const WORKFLOW_FLOW_BUS_SUFFIX = "-flow-bus";
 const WORKFLOW_CHILD_BUS_SUFFIX = "-bus";
 
@@ -466,11 +466,16 @@ function createWorkflowFlowBusName(workflowName: string): string {
 function createWorkflowWorkgroupBusName(workflowName: string, workgroupName: string): string {
   const busName = `${workflowName}-${workgroupName}${WORKFLOW_CHILD_BUS_SUFFIX}`;
   if (busName.length > INTERNAL_BUS_NAME_MAX_LENGTH) {
+    const maxWorkgroupNameLength = getWorkflowWorkgroupNameMaxLength(workflowName);
     throw new Error(
-      `Workflow ${workflowName} and workgroup ${workgroupName} names combine to an internal bus name longer than ${INTERNAL_BUS_NAME_MAX_LENGTH} characters.`,
+      `Workflow ${workflowName} and workgroup ${workgroupName} names combine to an internal bus name longer than ${INTERNAL_BUS_NAME_MAX_LENGTH} characters; use a workgroup name ${maxWorkgroupNameLength} characters or fewer for this workflow.`,
     );
   }
   return busName;
+}
+
+function getWorkflowWorkgroupNameMaxLength(workflowName: string): number {
+  return INTERNAL_BUS_NAME_MAX_LENGTH - workflowName.length - 1 - WORKFLOW_CHILD_BUS_SUFFIX.length;
 }
 
 function updateWorkflowStatusLine(store: AgentStore, workflow: WorkflowRun, statusLine: string): WorkflowRun {

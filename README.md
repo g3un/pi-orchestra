@@ -25,6 +25,8 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
 - Active workflows appear in a TUI widget with workflow name, uptime, current
   status, and active/done group and agent counts. Reopen it with
   `/orchestra-workflows`.
+- Use `/orchestra-recovery` after a restart to inspect persisted active records
+  before explicitly cancelling or closing abandoned scopes.
 - Child profiles can use presets such as `source-code-qa`,
   `external-researcher`, and `code-reviewer`, or provide a custom role prompt.
 
@@ -34,7 +36,8 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
 
 A bus is shared reference context for standalone subagents. Create one when
 multiple standalone agents need the same evolving context. Workgroups and
-workflows create their own private buses internally.
+workflows create their own private buses internally. `bus action=compact` removes
+messages already delivered to all current subscribers.
 
 ### Subagent
 

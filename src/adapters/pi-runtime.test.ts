@@ -42,7 +42,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   assert.deepEqual(run, {
@@ -109,7 +109,7 @@ test("pi runtime registers requested profile custom tools in child sessions", as
     { name: "flow-leader", systemPrompt: "Lead the workflow.", tools: ["bus", "workflow", "read"], model: undefined },
     "Lead the work.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   const options = lastCreateAgentSessionOptions();
@@ -131,7 +131,7 @@ test("pi runtime rejects profiles without explicit tools", async () => {
         { name: "researcher", systemPrompt: "Research the task.", model: undefined } as AgentProfile,
         "Inspect the code.",
         "bus-1",
-        { id: "agent-1", name: "Agent 1" },
+        { id: "agent-1", name: "Agent 1", parentRunId: null },
       ),
     /Profile "researcher" must specify tools\./,
   );
@@ -160,6 +160,7 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
     {
       id: "agent-1",
       name: "Agent 1",
+      parentRunId: null,
     },
   );
 
@@ -187,6 +188,7 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
     {
       id: "agent-1",
       name: "Agent 1",
+      parentRunId: null,
     },
   );
   const secondRun = await runtime.spawn(
@@ -196,6 +198,7 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
     {
       id: "agent-2",
       name: "Agent 2",
+      parentRunId: null,
     },
   );
 
@@ -227,7 +230,7 @@ test("pi runtime preserves skipped earlier bus messages after later steering del
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   session.isStreaming = false;
@@ -273,7 +276,7 @@ test("pi runtime publishes bus messages to active subscribers rather than run bu
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-2",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
   store.saveBusSubscription({
     id: createBusSubscriptionId("bus-1", "agent", run.id),
@@ -300,7 +303,7 @@ test("pi runtime child tools publish to the run bus, finish runs, and reject clo
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
   const publishBusTool = customTool("publish_bus");
   const finishTool = customTool("finish");
@@ -342,7 +345,7 @@ test("pi runtime finish requires running workgroup leaders to finish the workgro
     { name: "leader", systemPrompt: "Lead the group.", tools: ["workgroup"], model: undefined },
     "Lead the workgroup.",
     "bus-1",
-    { id: "leader-1", name: "Leader 1" },
+    { id: "leader-1", name: "Leader 1", parentRunId: null },
   );
   store.saveWorkgroup(workgroupRun({ leaderRunId: run.id, state: "running" }));
   const finishTool = customTool("finish");
@@ -370,7 +373,7 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   const steeredRun = await runtime.message(run.id, "Please adjust your approach.");
@@ -403,7 +406,7 @@ test("pi runtime steers running runs with an in-flight prompt task before stream
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
   session.isStreaming = false;
 
@@ -424,7 +427,7 @@ test("pi runtime close prunes entries while preserving closed-run message errors
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   await runtime.close(run.id);
@@ -443,7 +446,7 @@ test("pi runtime dispose closes runs before disposing sessions and does not prom
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
 
   runtime.dispose();
@@ -465,7 +468,7 @@ test("pi runtime dispose closes completed live runs while preserving results", a
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
   store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
 
@@ -493,7 +496,7 @@ test("pi runtime reports prompt task rejections through the prompt task error ho
     { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
     "Inspect the code.",
     "bus-1",
-    { id: "agent-1", name: "Agent 1" },
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
   );
   await waitForMicrotasks();
 
@@ -522,6 +525,7 @@ test("pi runtime marks a run failed when the session ends without finish", async
     {
       id: "agent-1",
       name: "Agent 1",
+      parentRunId: null,
     },
   );
   const failedRun = await waitForRunResultStatus(store, "agent-1", "failed");
@@ -552,7 +556,7 @@ test("pi runtime rejects unresolved profile models before creating a session", a
         { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: "missing/model" },
         "Inspect the code.",
         "bus-1",
-        { id: "agent-1", name: "Agent 1" },
+        { id: "agent-1", name: "Agent 1", parentRunId: null },
       ),
     /Could not resolve profile model "missing\/model"\./,
   );

@@ -153,7 +153,7 @@ function sendOrchestraRecoveryReport(pi: ExtensionAPI, content: string): void {
       content,
       display: true,
     },
-    { deliverAs: "nextTurn" },
+    { deliverAs: "steer" },
   );
 }
 

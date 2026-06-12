@@ -45,8 +45,9 @@ Do not delegate trivial tasks that you can finish faster yourself.
    - For workflows, wait for `workflow.finished` or use `workflow status` only
      when you need progress.
 7. If the main session was lost, a completion event was missed, or you need to
-   debug a child run, read `references/debugging.md` for the persisted store and
-   session transcript recovery workflow.
+   debug a child run, run `/orchestra-recovery` and read
+   `references/debugging.md` for the persisted store and session transcript
+   recovery workflow.
 
 ## Briefing child agents
 
@@ -130,6 +131,8 @@ The flow leader should:
 - Reuse the same standalone bus only for agents working on the same delegated
   work item.
 - Do not wait on or poll buses; use `bus status` only to inspect shared messages.
+  Use `bus action=compact` only when you want to discard messages delivered to
+  all current subscribers.
 - Do not create all workflow workgroups up front unless the goal has clearly
   independent parallel tracks.
 - Do not finish a scope you do not own: subagents finish themselves, workgroup

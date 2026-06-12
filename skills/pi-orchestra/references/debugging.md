@@ -17,7 +17,8 @@ missed.
 These files are local runtime artifacts. Inspect them for debugging/recovery, but
 do not edit them unless you intentionally want to repair or reset local state.
 Prefer Pi-Orchestra tools (`status`, `message`, `finish`, `cancel`) for live
-orchestration changes.
+orchestration changes. Run `/orchestra-recovery` first when you only need an
+inventory of persisted active records.
 
 ## When to inspect persisted state
 
@@ -69,11 +70,19 @@ sqlite3 -header -column .pi/orchestra/store.db '
 '
 ```
 
-Pretty-print one entity payload:
+Pretty-print one entity payload. Run names are unique only while runs are not
+`closed`; if a name was reused, this query prefers the active/non-closed run and
+then the newest closed record:
 
 ```bash
-sqlite3 -noheader .pi/orchestra/store.db \
-  "SELECT payload_json FROM runs WHERE name = 'RUN_NAME' LIMIT 1;" | jq .
+sqlite3 -noheader .pi/orchestra/store.db "
+  SELECT payload_json
+  FROM runs
+  WHERE name = 'RUN_NAME'
+  ORDER BY CASE WHEN json_extract(payload_json, '$.state') != 'closed' THEN 0 ELSE 1 END,
+           rowid DESC
+  LIMIT 1;
+" | jq .
 ```
 
 Use `workgroups` or `workflows` instead of `runs` for those entity types.
@@ -87,6 +96,8 @@ SESSION_FILE=$(sqlite3 -noheader .pi/orchestra/store.db "
   SELECT json_extract(payload_json, '$.sessionFile')
   FROM runs
   WHERE name = 'RUN_NAME'
+  ORDER BY CASE WHEN json_extract(payload_json, '$.state') != 'closed' THEN 0 ELSE 1 END,
+           rowid DESC
   LIMIT 1;
 ")
 
@@ -131,7 +142,8 @@ sqlite3 -header -column .pi/orchestra/store.db \
 - If a run failed without a useful result: inspect its session JSONL for the last
   assistant/tool messages and decide whether to message, respawn, or proceed.
 - If bus context matters: inspect `buses.payload_json`; messages are stored on
-  the bus payload under `messages`.
+  the bus payload under `messages`. Use `bus action=compact` to remove messages
+  delivered to all current subscribers.
 
 ## Safety notes
 

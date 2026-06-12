@@ -94,7 +94,7 @@ export class PiAgentRuntime implements AgentRuntime {
       task,
       busId,
       sessionFile,
-      parentRunId: options.parentRunId ?? null,
+      parentRunId: options.parentRunId,
       state: "running",
       result: null,
     };

@@ -107,7 +107,7 @@ test("workflow validates derived child workgroup bus names before creating resou
         goal: "Collect evidence.",
         leader: { name: "collect-lead", profile: hangingGroupLeaderProfile, task: "Lead evidence collection." },
       }),
-    /names combine to an internal bus name longer than 64 characters\./,
+    /names combine to an internal bus name longer than 64 characters; use a workgroup name 9 characters or fewer/,
   );
 
   assert.deepEqual(store.listWorkgroups(), []);

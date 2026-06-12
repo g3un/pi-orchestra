@@ -4,7 +4,7 @@ import type { BusMessage } from "./bus.ts";
 export interface SpawnAgentRuntimeOptions {
   id: string;
   name: string;
-  parentRunId?: string | null;
+  parentRunId: string | null;
 }
 
 export interface AgentRuntime {

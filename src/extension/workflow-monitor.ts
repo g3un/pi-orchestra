@@ -72,8 +72,17 @@ export class WorkflowMonitorController {
     queueMicrotask(() => {
       if (!this.renderQueued) return;
       this.renderQueued = false;
-      this.render();
+      this.safeRender();
     });
+  }
+
+  private safeRender(): boolean {
+    try {
+      return this.render();
+    } catch {
+      this.dispose();
+      return false;
+    }
   }
 
   private render(): boolean {
@@ -92,7 +101,7 @@ export class WorkflowMonitorController {
 
   private startTicking(): void {
     if (this.tickMs <= 0 || this.tickTimer) return;
-    const timer = setInterval(() => this.render(), this.tickMs);
+    const timer = setInterval(() => this.safeRender(), this.tickMs);
     (timer as typeof timer & { unref?: () => void }).unref?.();
     this.tickTimer = timer;
   }
