@@ -120,6 +120,9 @@ export interface WorkflowPiToolOptions {
 }
 
 const WORKFLOW_STATUS_LINE_MAX_LENGTH = 160;
+const INTERNAL_BUS_NAME_MAX_LENGTH = 64;
+const WORKFLOW_FLOW_BUS_SUFFIX = "-flow-bus";
+const WORKFLOW_CHILD_BUS_SUFFIX = "-bus";
 
 const WorkflowLeaderParams = Type.Object(
   {
@@ -298,7 +301,8 @@ async function startWorkflow(
   validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
 
   const identity = createEntityIdentity(input.name, "workflow", deps.store.listWorkflows(), "Workflow");
-  const bus = deps.orchestra.createBus({ name: `${identity.name}-flow-bus` });
+  const busName = createWorkflowFlowBusName(identity.name);
+  const bus = deps.orchestra.createBus({ name: busName });
   const workflow = createWorkflowRun(input, identity, bus.id);
   deps.store.saveWorkflow(workflow);
 
@@ -370,8 +374,9 @@ async function spawnWorkflowWorkgroup(
 
   validateLeaderName(input.leader.name, "Workflow workgroup leader", deps.store.listRuns());
   const identity = createWorkgroupIdentity(input.name, deps.store.listWorkgroups(), "Workflow workgroup");
+  const busName = createWorkflowWorkgroupBusName(workflow.name, identity.name);
 
-  const bus = deps.orchestra.createBus({ name: `${workflow.name}-${identity.name}-bus` });
+  const bus = deps.orchestra.createBus({ name: busName });
   const workgroup = createWorkgroupRun({
     identity,
     busId: bus.id,
@@ -423,6 +428,26 @@ async function spawnWorkflowWorkgroup(
     workgroup: ledWorkgroup,
     bus,
   };
+}
+
+function createWorkflowFlowBusName(workflowName: string): string {
+  const maxWorkflowNameLength = INTERNAL_BUS_NAME_MAX_LENGTH - WORKFLOW_FLOW_BUS_SUFFIX.length;
+  if (workflowName.length > maxWorkflowNameLength) {
+    throw new Error(
+      `Workflow name must be ${maxWorkflowNameLength} characters or fewer to leave room for the internal flow bus.`,
+    );
+  }
+  return `${workflowName}${WORKFLOW_FLOW_BUS_SUFFIX}`;
+}
+
+function createWorkflowWorkgroupBusName(workflowName: string, workgroupName: string): string {
+  const busName = `${workflowName}-${workgroupName}${WORKFLOW_CHILD_BUS_SUFFIX}`;
+  if (busName.length > INTERNAL_BUS_NAME_MAX_LENGTH) {
+    throw new Error(
+      `Workflow ${workflowName} and workgroup ${workgroupName} names combine to an internal bus name longer than ${INTERNAL_BUS_NAME_MAX_LENGTH} characters.`,
+    );
+  }
+  return busName;
 }
 
 function updateWorkflowStatusLine(store: AgentStore, workflow: WorkflowRun, statusLine: string): WorkflowRun {

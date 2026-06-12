@@ -57,6 +57,64 @@ test("workflow creates a flow leader on a private workflow bus", async () => {
   assert.match(leaderTask, /workflow action=finish/);
 });
 
+test("workflow validates derived flow bus names before creating resources", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "create",
+        name: "w".repeat(56),
+        goal: "Research and analyze the topic.",
+        leader: {
+          name: "flow-lead",
+          profile: hangingFlowLeaderProfile,
+          task: "Coordinate the adaptive research workflow.",
+        },
+      }),
+    /Workflow name must be 55 characters or fewer to leave room for the internal flow bus\./,
+  );
+
+  assert.deepEqual(store.listBuses(), []);
+  assert.deepEqual(store.listWorkflows(), []);
+  assert.deepEqual(store.listRuns(), []);
+});
+
+test("workflow validates derived child workgroup bus names before creating resources", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await workflowTool.execute({
+    action: "create",
+    name: "w".repeat(50),
+    goal: "Research and analyze the topic.",
+    leader: {
+      name: "flow-lead",
+      profile: hangingFlowLeaderProfile,
+      task: "Coordinate the adaptive research workflow.",
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "spawn_workgroup",
+        workflowId: "w".repeat(50),
+        name: "g".repeat(10),
+        goal: "Collect evidence.",
+        leader: { name: "collect-lead", profile: hangingGroupLeaderProfile, task: "Lead evidence collection." },
+      }),
+    /names combine to an internal bus name longer than 64 characters\./,
+  );
+
+  assert.deepEqual(store.listWorkgroups(), []);
+  assert.equal(store.listBuses().length, 1);
+  assert.equal(store.getBus(`${"w".repeat(50)}-flow-bus`)?.state, "open");
+  assert.equal(store.getRun("flow-lead")?.state, "running");
+});
+
 test("flow leader creates led workgroups that reuse workgroup lifecycle", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
