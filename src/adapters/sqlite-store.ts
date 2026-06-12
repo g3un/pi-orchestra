@@ -43,8 +43,13 @@ export class SqliteAgentStore implements AgentStore {
   constructor(options: SqliteAgentStoreOptions) {
     mkdirSync(dirname(options.databasePath), { recursive: true });
     this.db = new DatabaseSync(options.databasePath, { timeout: 5_000 });
-    initializeSchema(this.db, options.databasePath);
-    this.statements = prepareStatements(this.db);
+    try {
+      initializeSchema(this.db, options.databasePath);
+      this.statements = prepareStatements(this.db);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   saveRun(run: AgentRun): void {
