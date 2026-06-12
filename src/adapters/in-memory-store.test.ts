@@ -33,7 +33,7 @@ test("store saves runs in insertion order and notifies matching subscribers", ()
   assert.deepEqual(observed, [first]);
 });
 
-test("store enforces active name uniqueness and allows closed name reuse", () => {
+test("store keeps finished run names active until closed", () => {
   const store = new InMemoryAgentStore();
   const firstRun = run({ id: "first", name: "shared-run" });
   const secondRun = run({ id: "second", name: "shared-run" });
@@ -41,7 +41,16 @@ test("store enforces active name uniqueness and allows closed name reuse", () =>
   store.saveRun(firstRun);
   assert.throws(() => store.saveRun(secondRun), /Agent name "shared-run" is already in use\./);
 
-  const closedFirstRun = { ...firstRun, state: "closed" as const, result: null };
+  const finishedFirstRun = {
+    ...firstRun,
+    state: "success" as const,
+    result: { status: "success" as const, summary: "Done." },
+  };
+  store.saveRun(finishedFirstRun);
+  assert.throws(() => store.saveRun(secondRun), /Agent name "shared-run" is already in use\./);
+  assert.deepEqual(store.getRunByName("shared-run"), finishedFirstRun);
+
+  const closedFirstRun = { ...finishedFirstRun, state: "closed" as const };
   store.saveRun(closedFirstRun);
   store.saveRun(secondRun);
 

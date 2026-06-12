@@ -35,7 +35,7 @@ export class InMemoryAgentStore implements AgentStore {
     const savedRun = snapshot(run);
     saveNamedEntity(this.runs, this.runIdByName, savedRun, {
       label: "Agent",
-      isNameActive: (current) => current.state === "running",
+      isNameActive: (current) => current.state !== "closed",
     });
     notifySubscribers(this.runSubscriptions, snapshot(savedRun));
   }
@@ -45,7 +45,7 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   getRunByName(name: string): AgentRun | undefined {
-    return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name, (run) => run.state === "running"));
+    return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name, (run) => run.state !== "closed"));
   }
 
   listRuns(): AgentRun[] {

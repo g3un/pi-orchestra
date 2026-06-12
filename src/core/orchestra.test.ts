@@ -39,6 +39,7 @@ test("orchestra closes buses, clears subscriptions, and rejects new work", async
     subscriberId: "main",
     subscriberKind: "main",
     lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
   });
 
   const closedBus = orchestra.closeBus(bus.name);
@@ -102,6 +103,12 @@ test("orchestra keeps agent run names globally unique", async () => {
   assertUuid7(secondAutoRun.id);
   assert.equal(secondAutoRun.name, "researcher-2");
   assert.deepEqual(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
+  await assert.rejects(
+    () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer", parentRunId: null }),
+    /Agent name "Reviewer" is already in use\./,
+  );
+
+  store.saveRun({ ...namedRun, state: "success", result: { status: "success", summary: "Done." } });
   await assert.rejects(
     () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer", parentRunId: null }),
     /Agent name "Reviewer" is already in use\./,

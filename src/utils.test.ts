@@ -34,6 +34,16 @@ test("createEntityIdentity accepts unique requested names, assigns UUIDv7 ids, a
   assert.throws(() => createEntityIdentity("reviewer", "agent", existing, "Agent"), /already in use/);
 });
 
+test("createEntityIdentity rejects names that match reserved inactive ids", () => {
+  const active = [{ id: "active-id", name: "Active" }];
+  const reserved = [...active, { id: "closed-id", name: "Reusable" }];
+
+  assert.throws(
+    () => createEntityIdentity("closed-id", "agent", active, "Agent", undefined, reserved),
+    /already in use/,
+  );
+});
+
 test("createEntityIdentity generates collision-free names from auto seeds", () => {
   const existing = [
     { id: "researcher", name: "researcher" },

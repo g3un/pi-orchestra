@@ -302,11 +302,14 @@ async function startWorkflow(
   validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
   validateLeaderTool(input.leader.profile, "workflow", "Workflow leader");
 
+  const workflows = deps.store.listWorkflows();
   const identity = createEntityIdentity(
     input.name,
     "workflow",
-    deps.store.listWorkflows().filter((currentWorkflow) => currentWorkflow.state !== "closed"),
+    workflows.filter((currentWorkflow) => currentWorkflow.state !== "closed"),
     "Workflow",
+    undefined,
+    workflows,
   );
   const busName = createWorkflowFlowBusName(identity.name);
   const bus = deps.orchestra.createBus({ name: busName });
@@ -586,7 +589,7 @@ function validateLeaderName(name: string, label: string, existingRuns: AgentRun[
   const normalizedName = normalizeEntityName(name, label);
 
   for (const run of existingRuns) {
-    if (run.state !== "running") continue;
+    if (run.state === "closed") continue;
     if (run.id === normalizedName || run.name === normalizedName) {
       throw new Error(`${label} name "${normalizedName}" is already in use.`);
     }

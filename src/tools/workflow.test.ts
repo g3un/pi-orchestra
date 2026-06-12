@@ -443,6 +443,14 @@ test("workflow validates leader names and workgroup names", async () => {
   const orchestra = new FakeOrchestra(store);
   const workflowTool = createWorkflowTool({ orchestra, store });
   store.saveRun(run({ id: "existing-lead", name: "existing-lead" }));
+  store.saveRun(
+    run({
+      id: "finished-lead",
+      name: "finished-lead",
+      state: "success",
+      result: { status: "success", summary: "Done." },
+    }),
+  );
 
   await assert.rejects(
     () =>
@@ -453,6 +461,17 @@ test("workflow validates leader names and workgroup names", async () => {
         leader: { profile: hangingFlowLeaderProfile, name: "existing-lead", task: "Lead the duplicate workflow." },
       }),
     /Workflow leader name "existing-lead" is already in use\./,
+  );
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "create",
+        name: "finished-duplicate-leader-flow",
+        goal: "Research the topic.",
+        leader: { profile: hangingFlowLeaderProfile, name: "finished-lead", task: "Lead the duplicate workflow." },
+      }),
+    /Workflow leader name "finished-lead" is already in use\./,
   );
 
   await startWorkflow(workflowTool);

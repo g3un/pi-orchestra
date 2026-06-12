@@ -36,6 +36,7 @@ export function createWorkgroupIdentity(
     existingWorkgroups.filter((workgroup) => workgroup.state !== "closed"),
     entityLabel,
     WORKGROUP_NAME_MAX_LENGTH,
+    existingWorkgroups,
   );
 }
 

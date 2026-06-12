@@ -27,13 +27,14 @@ export function normalizeEntityName(name: string, entityLabel: string, maxLength
 export function createEntityIdentity(
   requestedName: string | undefined,
   autoSeed: string,
-  existingEntities: NamedEntity[],
+  existingActiveEntities: NamedEntity[],
   entityLabel: string,
   maxLength = 64,
+  reservedEntities: NamedEntity[] = existingActiveEntities,
 ): NamedEntity {
   if (requestedName !== undefined) {
     const name = normalizeEntityName(requestedName, entityLabel, maxLength);
-    if (hasEntityNameConflict(name, existingEntities))
+    if (hasEntityNameConflict(name, existingActiveEntities, reservedEntities))
       throw new Error(`${entityLabel} name "${name}" is already in use.`);
     return { id: createUuid7(), name };
   }
@@ -41,7 +42,7 @@ export function createEntityIdentity(
   const base = slugify(autoSeed) || entityLabel.toLowerCase();
   for (let index = 1; ; index++) {
     const name = index === 1 ? base : `${base}-${index}`;
-    if (!hasEntityNameConflict(name, existingEntities)) return { id: createUuid7(), name };
+    if (!hasEntityNameConflict(name, existingActiveEntities, reservedEntities)) return { id: createUuid7(), name };
   }
 }
 
@@ -49,8 +50,15 @@ export function createUuid7(): string {
   return uuid7();
 }
 
-function hasEntityNameConflict(name: string, existingEntities: NamedEntity[]): boolean {
-  return existingEntities.some((entity) => entity.name === name || entity.id === name);
+function hasEntityNameConflict(
+  name: string,
+  existingActiveEntities: NamedEntity[],
+  reservedEntities: NamedEntity[],
+): boolean {
+  return (
+    existingActiveEntities.some((entity) => entity.name === name) ||
+    reservedEntities.some((entity) => entity.id === name)
+  );
 }
 
 export function findWorkflow(store: AgentStore, id: string): WorkflowRun | undefined {

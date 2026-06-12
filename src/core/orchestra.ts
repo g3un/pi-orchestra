@@ -150,20 +150,26 @@ export class Orchestra implements OrchestraApi {
   }
 
   private createBusIdentity(name: string | undefined) {
+    const buses = this.store.listBuses();
     return createEntityIdentity(
       name,
       "bus",
-      this.store.listBuses().filter((bus) => bus.state === "open"),
+      buses.filter((bus) => bus.state === "open"),
       "Bus",
+      undefined,
+      buses,
     );
   }
 
   private createRunIdentity(profile: AgentProfile, name: string | undefined) {
+    const runs = this.store.listRuns();
     return createEntityIdentity(
       name,
       profile.name,
-      this.store.listRuns().filter((run) => run.state === "running"),
+      runs.filter((run) => run.state !== "closed"),
       "Agent",
+      undefined,
+      runs,
     );
   }
 }

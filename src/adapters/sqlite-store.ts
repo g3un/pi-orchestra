@@ -313,7 +313,7 @@ function initializeSchema(db: DatabaseSync, databasePath: string): void {
     CREATE INDEX IF NOT EXISTS workflows_name_idx ON workflows(name);
     CREATE UNIQUE INDEX IF NOT EXISTS runs_active_name_unique_idx
       ON runs(name)
-      WHERE json_extract(payload_json, '$.state') = 'running';
+      WHERE json_extract(payload_json, '$.state') != 'closed';
     CREATE UNIQUE INDEX IF NOT EXISTS buses_active_name_unique_idx
       ON buses(name)
       WHERE json_extract(payload_json, '$.state') = 'open';
@@ -361,7 +361,7 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
     getRunByName: db.prepare(`
       SELECT payload_json FROM runs
       WHERE name = ?
-      ORDER BY CASE WHEN json_extract(payload_json, '$.state') = 'running' THEN 0 ELSE 1 END, rowid DESC
+      ORDER BY CASE WHEN json_extract(payload_json, '$.state') != 'closed' THEN 0 ELSE 1 END, rowid DESC
       LIMIT 1
     `),
     listRuns: db.prepare("SELECT payload_json FROM runs ORDER BY rowid"),
