@@ -21,7 +21,7 @@ test("extension registers a workflow monitor command", () => {
 
   assert.deepEqual(
     registeredCommands.map((command) => command.name),
-    ["orchestra-workflows"],
+    ["orchestra-workflows", "orchestra-recovery"],
   );
 });
 

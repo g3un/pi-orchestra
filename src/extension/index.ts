@@ -12,6 +12,7 @@ import {
   type WorkgroupTool,
 } from "../tools/workgroup.ts";
 import { ORCHESTRA_EVENT_CUSTOM_TYPE, OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
+import { formatOrchestraRecoveryReport } from "./recovery.ts";
 import { WorkflowMonitorController } from "./workflow-monitor.ts";
 
 interface ToolBundle {
@@ -22,6 +23,7 @@ interface ToolBundle {
   workflowMonitor: WorkflowMonitorController;
   orchestraEvents: OrchestraEventController;
   runtime: PiAgentRuntime;
+  store: ReturnType<typeof createProjectSqliteAgentStore>;
   createSubagentTool(parentRunId: string | null): SubagentTool;
   dispose(): void;
 }
@@ -46,6 +48,14 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       const monitor = getToolBundle(ctx).workflowMonitor;
       if (monitor.show(ctx)) return;
       ctx.ui.notify("No active pi-orchestra workflows.", "info");
+    },
+  });
+
+  pi.registerCommand("orchestra-recovery", {
+    description: "Show persisted active pi-orchestra records for explicit recovery.",
+    handler: async (_args, ctx) => {
+      const report = formatOrchestraRecoveryReport(getToolBundle(ctx).store);
+      sendOrchestraRecoveryReport(pi, report);
     },
   });
 
@@ -106,6 +116,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     workflowMonitor: new WorkflowMonitorController(store),
     orchestraEvents,
     runtime,
+    store,
     createSubagentTool: createScopedSubagentTool,
     dispose() {
       this.workflowMonitor.dispose();
@@ -128,6 +139,17 @@ function defineBundlePiTools(bundle: ToolBundle, parentRunId: string): ToolDefin
       onWorkflowOutput: (ctx) => bundle.workflowMonitor.show(ctx),
     }),
   ];
+}
+
+function sendOrchestraRecoveryReport(pi: ExtensionAPI, content: string): void {
+  pi.sendMessage(
+    {
+      customType: "pi-orchestra.recovery",
+      content,
+      display: true,
+    },
+    { deliverAs: "nextTurn" },
+  );
 }
 
 function sendOrchestraEvents(pi: ExtensionAPI, events: OrchestraMainEvent[], content: string): void {
