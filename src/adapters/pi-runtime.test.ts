@@ -175,6 +175,35 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
   assert.equal(session.steerCalls.at(-1), "Continue with the same context.");
 });
 
+test("pi runtime does not mark drained bus messages delivered when prompt fails", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({
+    id: "bus-1",
+    name: "Bus 1",
+    state: "open",
+    messages: [{ id: "message-1", from: "main", message: "Existing shared context." }],
+  });
+  queueSession(new FakeSession(() => Promise.reject(new Error("prompt failed"))));
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+
+  await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1", parentRunId: null },
+  );
+  await waitForRunResultStatus(store, "agent-1", "failed");
+
+  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "agent", "agent-1")), {
+    id: createBusSubscriptionId("bus-1", "agent", "agent-1"),
+    busId: "bus-1",
+    subscriberId: "agent-1",
+    subscriberKind: "agent",
+    lastDeliveredMessageId: null,
+    deliveredMessageIds: [],
+  });
+});
+
 test("pi runtime publishes bus messages and steers active sibling sessions without replaying seen messages", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });

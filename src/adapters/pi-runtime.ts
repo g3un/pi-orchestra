@@ -41,6 +41,16 @@ interface RuntimeEntry {
   promptTask?: Promise<void>;
 }
 
+interface PromptMessage {
+  content: string;
+  busDeliveries: PendingBusDelivery[];
+}
+
+interface PendingBusDelivery {
+  subscriptionId: string;
+  messages: BusMessage[];
+}
+
 const ORCHESTRA_SESSION_RELATIVE_DIR = join(".pi", "orchestra", "sessions");
 
 const FinishAgentParams = Type.Object({
@@ -62,6 +72,7 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
   private readonly resolveCustomTools: NonNullable<PiAgentRuntimeOptions["resolveCustomTools"]>;
   private readonly onPromptTaskError: PiAgentRuntimeOptions["onPromptTaskError"];
+  private readonly pendingBusDeliveryIds = new Set<string>();
   private disposed = false;
 
   constructor(options: PiAgentRuntimeOptions) {
@@ -130,7 +141,13 @@ export class PiAgentRuntime implements AgentRuntime {
     const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
     if (run.state === "running" && (entry.promptTask || entry.session.isStreaming)) {
-      await entry.session.steer(messageWithBusContext);
+      try {
+        await entry.session.steer(messageWithBusContext.content);
+        this.markPendingBusDeliveries(messageWithBusContext.busDeliveries);
+      } catch (error) {
+        this.clearPendingBusDeliveries(messageWithBusContext.busDeliveries);
+        throw error;
+      }
       return run;
     }
 
@@ -215,7 +232,7 @@ export class PiAgentRuntime implements AgentRuntime {
     this.entries.clear();
   }
 
-  private startPromptTask(id: string, entry: RuntimeEntry, message: string): void {
+  private startPromptTask(id: string, entry: RuntimeEntry, message: PromptMessage): void {
     const task = this.runPrompt(id, message)
       .catch((error) => this.handlePromptTaskError(id, error))
       .finally(() => {
@@ -224,12 +241,16 @@ export class PiAgentRuntime implements AgentRuntime {
     entry.promptTask = task;
   }
 
-  private async runPrompt(id: string, message: string): Promise<void> {
+  private async runPrompt(id: string, message: PromptMessage): Promise<void> {
     const entry = this.requireEntry(id);
-    if (this.isClosed(id)) return;
+    if (this.isClosed(id)) {
+      this.clearPendingBusDeliveries(message.busDeliveries);
+      return;
+    }
 
     try {
-      await entry.session.prompt(message, { expandPromptTemplates: false });
+      await entry.session.prompt(message.content, { expandPromptTemplates: false });
+      this.markPendingBusDeliveries(message.busDeliveries);
       if (this.isClosed(id)) return;
       if (this.isRunningWithoutResult(id)) {
         await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
@@ -248,6 +269,7 @@ export class PiAgentRuntime implements AgentRuntime {
         });
       }
     } catch (error) {
+      this.clearPendingBusDeliveries(message.busDeliveries);
       if (this.isClosed(id)) return;
       const run = this.store.getRun(id);
       if (!run) return;
@@ -390,19 +412,24 @@ export class PiAgentRuntime implements AgentRuntime {
     return bus;
   }
 
-  private withSubscribedBusMessages(runId: string, message: string): string {
-    const busMessages = this.drainSubscribedBusMessages(runId);
-    if (busMessages.length === 0) return message;
-    return [message, "", this.formatBusMessagesForPrompt(busMessages)].join("\n");
+  private withSubscribedBusMessages(runId: string, message: string): PromptMessage {
+    const busContext = this.drainSubscribedBusMessages(runId);
+    this.trackPendingBusDeliveries(busContext.busDeliveries);
+    if (busContext.messages.length === 0) return { content: message, busDeliveries: [] };
+    return {
+      content: [message, "", this.formatBusMessagesForPrompt(busContext.messages)].join("\n"),
+      busDeliveries: busContext.busDeliveries,
+    };
   }
 
-  private drainSubscribedBusMessages(runId: string): BusMessage[] {
+  private drainSubscribedBusMessages(runId: string): { messages: BusMessage[]; busDeliveries: PendingBusDelivery[] } {
     const subscriptions = this.store.listBusSubscriptions({
       busId: undefined,
       subscriberId: runId,
       subscriberKind: "agent",
     });
     const unreadMessages: BusMessage[] = [];
+    const busDeliveries: PendingBusDelivery[] = [];
     for (const subscription of subscriptions) {
       const bus = this.store.getBus(subscription.busId);
       if (!bus) {
@@ -412,14 +439,41 @@ export class PiAgentRuntime implements AgentRuntime {
 
       const subscriptionUnreadMessages = bus.messages.filter((message) => {
         if (message.from === runId) return false;
-        return !isBusMessageDelivered(subscription, message.id);
+        if (isBusMessageDelivered(subscription, message.id)) return false;
+        return !this.isPendingBusDelivery(subscription.id, message.id);
       });
       if (subscriptionUnreadMessages.length === 0) continue;
 
       unreadMessages.push(...subscriptionUnreadMessages);
-      this.markSubscriptionMessagesDelivered(subscription, subscriptionUnreadMessages);
+      busDeliveries.push({ subscriptionId: subscription.id, messages: subscriptionUnreadMessages });
     }
-    return unreadMessages;
+    return { messages: unreadMessages, busDeliveries };
+  }
+
+  private trackPendingBusDeliveries(deliveries: PendingBusDelivery[]): void {
+    for (const delivery of deliveries) {
+      for (const message of delivery.messages)
+        this.pendingBusDeliveryIds.add(createPendingBusDeliveryId(delivery, message));
+    }
+  }
+
+  private markPendingBusDeliveries(deliveries: PendingBusDelivery[]): void {
+    for (const delivery of deliveries) {
+      const subscription = this.store.getBusSubscription(delivery.subscriptionId);
+      if (subscription) this.markSubscriptionMessagesDelivered(subscription, delivery.messages);
+    }
+    this.clearPendingBusDeliveries(deliveries);
+  }
+
+  private clearPendingBusDeliveries(deliveries: PendingBusDelivery[]): void {
+    for (const delivery of deliveries) {
+      for (const message of delivery.messages)
+        this.pendingBusDeliveryIds.delete(createPendingBusDeliveryId(delivery, message));
+    }
+  }
+
+  private isPendingBusDelivery(subscriptionId: string, messageId: string): boolean {
+    return this.pendingBusDeliveryIds.has(`${subscriptionId}:message:${messageId}`);
   }
 
   private markSubscriptionMessagesDelivered(subscription: BusSubscription, messages: BusMessage | BusMessage[]): void {
@@ -497,6 +551,10 @@ function dedupeToolsByName(tools: ToolDefinition[]): ToolDefinition[] {
   const toolsByName = new Map<string, ToolDefinition>();
   for (const tool of tools) toolsByName.set(tool.name, tool);
   return [...toolsByName.values()];
+}
+
+function createPendingBusDeliveryId(delivery: PendingBusDelivery, message: BusMessage): string {
+  return `${delivery.subscriptionId}:message:${message.id}`;
 }
 
 function createAgentBusSubscription(runId: string, busId: string): BusSubscription {
