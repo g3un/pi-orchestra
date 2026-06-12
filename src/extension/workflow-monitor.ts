@@ -20,6 +20,7 @@ export class WorkflowMonitorController {
   private readonly tickMs: number;
   private unsubscribe?: () => void;
   private tickTimer?: ReturnType<typeof setInterval>;
+  private renderQueued = false;
   private ctx?: ExtensionContext;
 
   constructor(
@@ -39,9 +40,9 @@ export class WorkflowMonitorController {
 
     this.ctx = ctx;
     if (!this.unsubscribe) {
-      const unsubscribeRuns = this.store.subscribeRuns(() => this.render(), undefined);
-      const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.render(), undefined);
-      const unsubscribeWorkgroups = this.store.subscribeWorkgroups(() => this.render(), undefined);
+      const unsubscribeRuns = this.store.subscribeRuns(() => this.requestRender(), undefined);
+      const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.requestRender(), undefined);
+      const unsubscribeWorkgroups = this.store.subscribeWorkgroups(() => this.requestRender(), undefined);
       this.unsubscribe = () => {
         unsubscribeRuns();
         unsubscribeWorkflows();
@@ -56,12 +57,23 @@ export class WorkflowMonitorController {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.renderQueued = false;
     this.stopTicking();
 
     if (this.ctx?.hasUI) {
       this.ctx.ui.setWidget(WIDGET_KEY, undefined);
     }
     this.ctx = undefined;
+  }
+
+  private requestRender(): void {
+    if (this.renderQueued) return;
+    this.renderQueued = true;
+    queueMicrotask(() => {
+      if (!this.renderQueued) return;
+      this.renderQueued = false;
+      this.render();
+    });
   }
 
   private render(): boolean {

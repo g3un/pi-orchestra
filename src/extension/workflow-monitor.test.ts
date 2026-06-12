@@ -50,7 +50,7 @@ test("workflow monitor counts closed workgroups and falls back before status is 
   ]);
 });
 
-test("workflow monitor controller updates the widget and clears it when workflows finish", () => {
+test("workflow monitor controller updates the widget and clears it when workflows finish", async () => {
   const store = new InMemoryAgentStore();
   const workflow = workflowRun({ leaderRunId: "flow-leader", statusLine: null });
   store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
@@ -68,15 +68,41 @@ test("workflow monitor controller updates the widget and clears it when workflow
   assert.deepEqual(statuses, []);
 
   store.saveWorkflow({ ...workflow, statusLine: "Collecting implementation evidence." });
+  await flushMicrotasks();
   assert.deepEqual(widgets.at(-1), [
     "workflow [10s] — Collecting implementation evidence.",
     "  groups active 0, done 0; agents active 1, done 0",
   ]);
 
   store.saveWorkflow({ ...workflow, state: "closed" });
+  await flushMicrotasks();
 
   assert.equal(widgets.at(-1), undefined);
   assert.deepEqual(statuses, []);
+});
+
+test("workflow monitor coalesces store updates before rerendering", async () => {
+  const store = new CountingWorkflowStore();
+  const workflow = workflowRun({ leaderRunId: "flow-leader", statusLine: null });
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
+  store.saveWorkflow(workflow);
+  const widgets: Array<string[] | undefined> = [];
+  const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+
+  assert.equal(monitor.show(workflowMonitorContext(widgets, [])), true);
+  const listCallsAfterShow = store.listWorkflowsCalls;
+
+  store.saveWorkflow({ ...workflow, statusLine: "First update." });
+  store.saveWorkflow({ ...workflow, statusLine: "Second update." });
+
+  assert.equal(store.listWorkflowsCalls, listCallsAfterShow);
+  await flushMicrotasks();
+
+  assert.equal(store.listWorkflowsCalls, listCallsAfterShow + 1);
+  assert.deepEqual(widgets.at(-1), [
+    "workflow [10s] — Second update.",
+    "  groups active 0, done 0; agents active 1, done 0",
+  ]);
 });
 
 test("workflow monitor returns no lines when there are no active workflows", () => {
@@ -85,6 +111,19 @@ test("workflow monitor returns no lines when there are no active workflows", () 
 
   assert.deepEqual(buildWorkflowMonitorLines(store), []);
 });
+
+class CountingWorkflowStore extends InMemoryAgentStore {
+  listWorkflowsCalls = 0;
+
+  override listWorkflows(): WorkflowRun[] {
+    this.listWorkflowsCalls++;
+    return super.listWorkflows();
+  }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+}
 
 function workflowMonitorContext(
   widgets: Array<string[] | undefined>,
