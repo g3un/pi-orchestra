@@ -33,6 +33,21 @@ test("store saves runs in insertion order and notifies matching subscribers", ()
   assert.deepEqual(observed, [first]);
 });
 
+test("store enforces active name uniqueness and allows closed name reuse", () => {
+  const store = new InMemoryAgentStore();
+  const firstRun = run({ id: "first", name: "shared-run" });
+  const secondRun = run({ id: "second", name: "shared-run" });
+
+  store.saveRun(firstRun);
+  assert.throws(() => store.saveRun(secondRun), /Agent name "shared-run" is already in use\./);
+
+  const closedFirstRun = { ...firstRun, state: "closed" as const, result: null };
+  store.saveRun(closedFirstRun);
+  store.saveRun(secondRun);
+
+  assert.deepEqual(store.getRunByName("shared-run"), secondRun);
+});
+
 test("store snapshots saved and returned orchestration state", () => {
   const store = new InMemoryAgentStore();
   const savedRun = run({ id: "agent-1" });
@@ -239,6 +254,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;
@@ -250,15 +266,16 @@ function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscript
     busId: "bus-1",
     subscriberId: "agent-1",
     subscriberKind: "agent",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
     ...overrides,
   };
 }
 
 function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  const id = overrides.id ?? "workgroup-1";
   return {
-    id: "workgroup-1",
-    name: "workgroup-1",
+    id,
+    name: overrides.name ?? id,
     busId: "bus-1",
     goal: "Complete the workgroup.",
     leaderRunId: null,
@@ -271,9 +288,10 @@ function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
 }
 
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  const id = overrides.id ?? "workflow-1";
   return {
-    id: "workflow-1",
-    name: "workflow-1",
+    id,
+    name: overrides.name ?? id,
     goal: "Complete the workflow.",
     startedAtMs: 1_700_000_000_000,
     state: "running",

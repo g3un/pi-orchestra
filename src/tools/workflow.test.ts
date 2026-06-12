@@ -217,17 +217,20 @@ test("workflow closes child workgroups when leader spawn fails", async () => {
   assert.deepEqual(workgroup.result, { status: "failed", summary: "Spawn failed." });
   assert.equal(store.getBus("research-flow-broken-group-bus")?.state, "closed");
   assert.deepEqual(findWorkflowByName(store, "research-flow")?.workgroupIds, [workgroup.id]);
-  await assert.rejects(
-    () =>
-      workflowTool.execute({
-        action: "spawn_workgroup",
-        workflowId: "research-flow",
-        name: "broken-group",
-        goal: "Retry with the same name.",
-        leader: { name: "retry-lead", profile: hangingGroupLeaderProfile, task: "Retry the group." },
-      }),
-    /Workflow workgroup name "broken-group" is already in use\./,
-  );
+
+  const retryOutput = await workflowTool.execute({
+    action: "spawn_workgroup",
+    workflowId: "research-flow",
+    name: "broken-group",
+    goal: "Retry with the same name.",
+    leader: { name: "retry-lead", profile: hangingGroupLeaderProfile, task: "Retry the group." },
+  });
+
+  assert.equal(retryOutput.action, "spawn_workgroup");
+  assert.notEqual(retryOutput.workgroup.id, workgroup.id);
+  assert.equal(retryOutput.workgroup.name, "broken-group");
+  assert.equal(retryOutput.workgroup.state, "running");
+  assert.deepEqual(findWorkflowByName(store, "research-flow")?.workgroupIds, [workgroup.id, retryOutput.workgroup.id]);
 });
 
 test("workflow does not resurrect child workgroups closed during leader launch", async () => {
@@ -582,7 +585,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    options: { name: string | undefined },
+    options: { name: string | undefined; parentRunId: string | null },
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
@@ -593,7 +596,7 @@ class FakeOrchestra implements OrchestraApi {
 
     const name = options.name ?? profile.name;
     this.spawned.push({ profile, task, busId: bus.id, name });
-    const createdRun = run({ id: slugify(name), name, profile, task, busId: bus.id });
+    const createdRun = run({ id: slugify(name), name, profile, task, busId: bus.id, parentRunId: options.parentRunId });
     this.runs.set(createdRun.id, createdRun);
     return createdRun;
   }
@@ -670,6 +673,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: overrides.busId ?? "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

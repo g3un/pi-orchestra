@@ -53,7 +53,7 @@ test("agent profile params require explicit tools", () => {
 
 test("subagent spawn uses an existing bus and delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: "parent-run" });
   const bus: Bus = { id: "bus-1", name: "bus-1", state: "open", messages: [] };
   orchestra.buses.set(bus.id, bus);
 
@@ -68,16 +68,18 @@ test("subagent spawn uses an existing bus and delegates to orchestra", async () 
   assert.ok(output.run);
   assert.equal(output.run.id, "agent-1");
   assert.equal(output.run.busId, bus.id);
+  assert.equal(output.run.parentRunId, "parent-run");
   assert.deepEqual(orchestra.spawned, {
     profile,
     task: "Inspect the code.",
     busId: bus.id,
+    parentRunId: "parent-run",
   });
 });
 
 test("subagent spawn rejects missing buses", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
 
   await assert.rejects(
     () =>
@@ -88,7 +90,7 @@ test("subagent spawn rejects missing buses", async () => {
 
 test("subagent status reads orchestra state", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
   const successRun = run({
     id: "agent-1",
     state: "success",
@@ -122,7 +124,7 @@ test("subagent status reads orchestra state", async () => {
 
 test("subagent status formats blocked results", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
   const blockedRun = run({
     id: "agent-1",
     state: "blocked",
@@ -140,7 +142,7 @@ test("subagent status formats blocked results", async () => {
 
 test("subagent message delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
   const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
@@ -154,7 +156,7 @@ test("subagent message delegates to orchestra", async () => {
 
 test("subagent close delegates to orchestra", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
   const existing = run({ id: "agent-1", state: "success", result: { status: "success", summary: "Done." } });
   orchestra.runs.set(existing.id, existing);
 
@@ -168,7 +170,7 @@ test("subagent close delegates to orchestra", async () => {
 
 test("subagent close handles missing runs", async () => {
   const orchestra = new FakeOrchestra();
-  const tool = createSubagentTool({ orchestra });
+  const tool = createSubagentTool({ orchestra, parentRunId: null });
 
   const output = await tool.execute({ action: "close", id: "missing" });
 
@@ -180,7 +182,7 @@ test("subagent close handles missing runs", async () => {
 class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();
-  spawned?: { profile: AgentProfile; task: string; busId: string };
+  spawned?: { profile: AgentProfile; task: string; busId: string; parentRunId: string | null };
   messaged?: { id: string; message: string };
   closedIds: string[] = [];
 
@@ -215,17 +217,18 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    _options: { name: string | undefined },
+    options: { name: string | undefined; parentRunId: string | null },
   ): Promise<AgentRun> {
     if (!this.buses.has(busId)) throw new Error(`Bus ${busId} not found.`);
 
-    this.spawned = { profile, task, busId };
+    this.spawned = { profile, task, busId, parentRunId: options.parentRunId };
     const spawnedRun = run({
       id: "agent-1",
       name: "agent-1",
       profile,
       task,
       busId,
+      parentRunId: options.parentRunId,
       state: "running",
     });
     this.runs.set(spawnedRun.id, spawnedRun);
@@ -271,6 +274,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

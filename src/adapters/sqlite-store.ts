@@ -19,7 +19,7 @@ import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const ORCHESTRA_STORE_RELATIVE_DIR = join(".pi", "orchestra");
 const ORCHESTRA_STORE_FILENAME = "store.db";
 
@@ -53,7 +53,7 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   saveRun(run: AgentRun): void {
-    this.statements.saveRun.run(run.id, run.name, stringifyPayload(run, `run ${run.id}`));
+    saveNamedPayload(this.statements.saveRun, run.id, run.name, stringifyPayload(run, `run ${run.id}`), "Agent");
     notifySubscribers(this.runSubscriptions, run);
   }
 
@@ -74,7 +74,7 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   saveBus(bus: Bus): void {
-    this.statements.saveBus.run(bus.id, bus.name, stringifyPayload(bus, `bus ${bus.id}`));
+    saveNamedPayload(this.statements.saveBus, bus.id, bus.name, stringifyPayload(bus, `bus ${bus.id}`), "Bus");
   }
 
   getBus(id: string): Bus | undefined {
@@ -135,10 +135,12 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   saveWorkgroup(workgroup: WorkgroupRun): void {
-    this.statements.saveWorkgroup.run(
+    saveNamedPayload(
+      this.statements.saveWorkgroup,
       workgroup.id,
       workgroup.name,
       stringifyPayload(workgroup, `workgroup ${workgroup.id}`),
+      "Workgroup",
     );
     notifySubscribers(this.workgroupSubscriptions, workgroup);
   }
@@ -163,7 +165,13 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   saveWorkflow(workflow: WorkflowRun): void {
-    this.statements.saveWorkflow.run(workflow.id, workflow.name, stringifyPayload(workflow, `workflow ${workflow.id}`));
+    saveNamedPayload(
+      this.statements.saveWorkflow,
+      workflow.id,
+      workflow.name,
+      stringifyPayload(workflow, `workflow ${workflow.id}`),
+      "Workflow",
+    );
     notifySubscribers(this.workflowSubscriptions, workflow);
   }
 
@@ -273,6 +281,18 @@ function initializeSchema(db: DatabaseSync, databasePath: string): void {
     CREATE INDEX IF NOT EXISTS buses_name_idx ON buses(name);
     CREATE INDEX IF NOT EXISTS workgroups_name_idx ON workgroups(name);
     CREATE INDEX IF NOT EXISTS workflows_name_idx ON workflows(name);
+    CREATE UNIQUE INDEX IF NOT EXISTS runs_active_name_unique_idx
+      ON runs(name)
+      WHERE json_extract(payload_json, '$.state') = 'running';
+    CREATE UNIQUE INDEX IF NOT EXISTS buses_active_name_unique_idx
+      ON buses(name)
+      WHERE json_extract(payload_json, '$.state') = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS workgroups_active_name_unique_idx
+      ON workgroups(name)
+      WHERE json_extract(payload_json, '$.state') != 'closed';
+    CREATE UNIQUE INDEX IF NOT EXISTS workflows_active_name_unique_idx
+      ON workflows(name)
+      WHERE json_extract(payload_json, '$.state') != 'closed';
   `);
 
   if (schemaVersion < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -308,7 +328,12 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, payload_json = excluded.payload_json
     `),
     getRun: db.prepare("SELECT payload_json FROM runs WHERE id = ?"),
-    getRunByName: db.prepare("SELECT payload_json FROM runs WHERE name = ? ORDER BY rowid LIMIT 1"),
+    getRunByName: db.prepare(`
+      SELECT payload_json FROM runs
+      WHERE name = ?
+      ORDER BY CASE WHEN json_extract(payload_json, '$.state') = 'running' THEN 0 ELSE 1 END, rowid DESC
+      LIMIT 1
+    `),
     listRuns: db.prepare("SELECT payload_json FROM runs ORDER BY rowid"),
     saveBus: db.prepare(`
       INSERT INTO buses (id, name, payload_json)
@@ -316,7 +341,12 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, payload_json = excluded.payload_json
     `),
     getBus: db.prepare("SELECT payload_json FROM buses WHERE id = ?"),
-    getBusByName: db.prepare("SELECT payload_json FROM buses WHERE name = ? ORDER BY rowid LIMIT 1"),
+    getBusByName: db.prepare(`
+      SELECT payload_json FROM buses
+      WHERE name = ?
+      ORDER BY CASE WHEN json_extract(payload_json, '$.state') = 'open' THEN 0 ELSE 1 END, rowid DESC
+      LIMIT 1
+    `),
     listBuses: db.prepare("SELECT payload_json FROM buses ORDER BY rowid"),
     saveBusSubscription: db.prepare(`
       INSERT INTO bus_subscriptions (id, payload_json)
@@ -332,7 +362,12 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, payload_json = excluded.payload_json
     `),
     getWorkgroup: db.prepare("SELECT payload_json FROM workgroups WHERE id = ?"),
-    getWorkgroupByName: db.prepare("SELECT payload_json FROM workgroups WHERE name = ? ORDER BY rowid LIMIT 1"),
+    getWorkgroupByName: db.prepare(`
+      SELECT payload_json FROM workgroups
+      WHERE name = ?
+      ORDER BY CASE WHEN json_extract(payload_json, '$.state') != 'closed' THEN 0 ELSE 1 END, rowid DESC
+      LIMIT 1
+    `),
     listWorkgroups: db.prepare("SELECT payload_json FROM workgroups ORDER BY rowid"),
     saveWorkflow: db.prepare(`
       INSERT INTO workflows (id, name, payload_json)
@@ -340,9 +375,35 @@ function prepareStatements(db: DatabaseSync): StoreStatements {
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, payload_json = excluded.payload_json
     `),
     getWorkflow: db.prepare("SELECT payload_json FROM workflows WHERE id = ?"),
-    getWorkflowByName: db.prepare("SELECT payload_json FROM workflows WHERE name = ? ORDER BY rowid LIMIT 1"),
+    getWorkflowByName: db.prepare(`
+      SELECT payload_json FROM workflows
+      WHERE name = ?
+      ORDER BY CASE WHEN json_extract(payload_json, '$.state') != 'closed' THEN 0 ELSE 1 END, rowid DESC
+      LIMIT 1
+    `),
     listWorkflows: db.prepare("SELECT payload_json FROM workflows ORDER BY rowid"),
   };
+}
+
+function saveNamedPayload(
+  statement: StatementSync,
+  id: string,
+  name: string,
+  payload: string,
+  entityLabel: string,
+): void {
+  try {
+    statement.run(id, name, payload);
+  } catch (error) {
+    if (isSqliteUniqueConstraintError(error)) {
+      throw new Error(`${entityLabel} name "${name}" is already in use.`);
+    }
+    throw error;
+  }
+}
+
+function isSqliteUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/.test(error.message);
 }
 
 function getPayload<T>(statement: StatementSync, id: string, label: string): T | undefined {

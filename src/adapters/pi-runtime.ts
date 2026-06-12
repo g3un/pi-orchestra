@@ -32,7 +32,7 @@ export interface PiAgentRuntimeOptions {
   store: AgentStore;
   cwd: string | undefined;
   resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
-  resolveCustomTools: (() => ToolDefinition[]) | undefined;
+  resolveCustomTools: ((runId: string) => ToolDefinition[]) | undefined;
   onPromptTaskError?: (runId: string, error: unknown) => void;
 }
 
@@ -68,7 +68,7 @@ export class PiAgentRuntime implements AgentRuntime {
     this.store = options.store;
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
-    this.resolveCustomTools = options.resolveCustomTools ?? (() => []);
+    this.resolveCustomTools = options.resolveCustomTools ?? ((_runId: string) => []);
     this.onPromptTaskError = options.onPromptTaskError;
   }
 
@@ -94,12 +94,13 @@ export class PiAgentRuntime implements AgentRuntime {
       task,
       busId,
       sessionFile,
+      parentRunId: options.parentRunId ?? null,
       state: "running",
       result: null,
     };
 
     const childTools = this.createChildTools(run.id);
-    const customTools = this.selectCustomTools(baseTools, childTools);
+    const customTools = this.selectCustomTools(baseTools, childTools, run.id);
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
     const { session } = await createAgentSession({
       cwd: this.cwd,
@@ -257,9 +258,11 @@ export class PiAgentRuntime implements AgentRuntime {
     }
   }
 
-  private selectCustomTools(profileToolNames: string[], childTools: ToolDefinition[]): ToolDefinition[] {
+  private selectCustomTools(profileToolNames: string[], childTools: ToolDefinition[], runId: string): ToolDefinition[] {
     const requestedProfileToolNames = new Set(profileToolNames);
-    const requestedCustomTools = this.resolveCustomTools().filter((tool) => requestedProfileToolNames.has(tool.name));
+    const requestedCustomTools = this.resolveCustomTools(runId).filter((tool) =>
+      requestedProfileToolNames.has(tool.name),
+    );
     return dedupeToolsByName([...requestedCustomTools, ...childTools]);
   }
 
@@ -496,7 +499,7 @@ function createAgentBusSubscription(runId: string, busId: string): BusSubscripti
     busId,
     subscriberId: runId,
     subscriberKind: "agent",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
 }
 

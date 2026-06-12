@@ -302,7 +302,12 @@ async function startWorkflow(
   validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
   validateLeaderTool(input.leader.profile, "workflow", "Workflow leader");
 
-  const identity = createEntityIdentity(input.name, "workflow", deps.store.listWorkflows(), "Workflow");
+  const identity = createEntityIdentity(
+    input.name,
+    "workflow",
+    deps.store.listWorkflows().filter((currentWorkflow) => currentWorkflow.state !== "closed"),
+    "Workflow",
+  );
   const busName = createWorkflowFlowBusName(identity.name);
   const bus = deps.orchestra.createBus({ name: busName });
   const workflow = createWorkflowRun(input, identity, bus.id);
@@ -313,7 +318,7 @@ async function startWorkflow(
       input.leader.profile,
       buildFlowLeaderTask(workflow, input.leader.task),
       workflow.busId,
-      { name: input.leader.name },
+      { name: input.leader.name, parentRunId: null },
     );
     const workflowWithLeader: WorkflowRun = { ...requireWorkflow(deps.store, workflow.id), leaderRunId: leaderRun.id };
     deps.store.saveWorkflow(workflowWithLeader);
@@ -395,7 +400,7 @@ async function spawnWorkflowWorkgroup(
       input.leader.profile,
       buildWorkgroupLeaderTask(deps.store, workflowWithWorkgroup, workgroup, input.goal, input.leader.task),
       bus.id,
-      { name: input.leader.name },
+      { name: input.leader.name, parentRunId: workflow.leaderRunId },
     );
   } catch (error) {
     await closeWorkgroupRun(deps.orchestra, deps.store, workgroup, {
@@ -581,6 +586,7 @@ function validateLeaderName(name: string, label: string, existingRuns: AgentRun[
   const normalizedName = normalizeEntityName(name, label);
 
   for (const run of existingRuns) {
+    if (run.state !== "running") continue;
     if (run.id === normalizedName || run.name === normalizedName) {
       throw new Error(`${label} name "${normalizedName}" is already in use.`);
     }

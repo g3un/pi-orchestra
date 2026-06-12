@@ -33,7 +33,10 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveRun(run: AgentRun): void {
     const savedRun = snapshot(run);
-    saveNamedEntity(this.runs, this.runIdByName, savedRun);
+    saveNamedEntity(this.runs, this.runIdByName, savedRun, {
+      label: "Agent",
+      isNameActive: (current) => current.state === "running",
+    });
     notifySubscribers(this.runSubscriptions, snapshot(savedRun));
   }
 
@@ -42,7 +45,7 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   getRunByName(name: string): AgentRun | undefined {
-    return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name));
+    return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name, (run) => run.state === "running"));
   }
 
   listRuns(): AgentRun[] {
@@ -54,7 +57,10 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   saveBus(bus: Bus): void {
-    saveNamedEntity(this.buses, this.busIdByName, snapshot(bus));
+    saveNamedEntity(this.buses, this.busIdByName, snapshot(bus), {
+      label: "Bus",
+      isNameActive: (current) => current.state === "open",
+    });
   }
 
   getBus(id: string): Bus | undefined {
@@ -62,7 +68,7 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   getBusByName(name: string): Bus | undefined {
-    return snapshotOrUndefined(getNamedEntity(this.buses, this.busIdByName, name));
+    return snapshotOrUndefined(getNamedEntity(this.buses, this.busIdByName, name, (bus) => bus.state === "open"));
   }
 
   listBuses(): Bus[] {
@@ -114,7 +120,10 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveWorkgroup(workgroup: WorkgroupRun): void {
     const savedWorkgroup = snapshot(workgroup);
-    saveNamedEntity(this.workgroups, this.workgroupIdByName, savedWorkgroup);
+    saveNamedEntity(this.workgroups, this.workgroupIdByName, savedWorkgroup, {
+      label: "Workgroup",
+      isNameActive: (current) => current.state !== "closed",
+    });
     notifySubscribers(this.workgroupSubscriptions, snapshot(savedWorkgroup));
   }
 
@@ -123,7 +132,9 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   getWorkgroupByName(name: string): WorkgroupRun | undefined {
-    return snapshotOrUndefined(getNamedEntity(this.workgroups, this.workgroupIdByName, name));
+    return snapshotOrUndefined(
+      getNamedEntity(this.workgroups, this.workgroupIdByName, name, (workgroup) => workgroup.state !== "closed"),
+    );
   }
 
   listWorkgroups(): WorkgroupRun[] {
@@ -139,7 +150,10 @@ export class InMemoryAgentStore implements AgentStore {
 
   saveWorkflow(workflow: WorkflowRun): void {
     const savedWorkflow = snapshot(workflow);
-    saveNamedEntity(this.workflows, this.workflowIdByName, savedWorkflow);
+    saveNamedEntity(this.workflows, this.workflowIdByName, savedWorkflow, {
+      label: "Workflow",
+      isNameActive: (current) => current.state !== "closed",
+    });
     notifySubscribers(this.workflowSubscriptions, snapshot(savedWorkflow));
   }
 
@@ -148,7 +162,9 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   getWorkflowByName(name: string): WorkflowRun | undefined {
-    return snapshotOrUndefined(getNamedEntity(this.workflows, this.workflowIdByName, name));
+    return snapshotOrUndefined(
+      getNamedEntity(this.workflows, this.workflowIdByName, name, (workflow) => workflow.state !== "closed"),
+    );
   }
 
   listWorkflows(): WorkflowRun[] {
@@ -168,27 +184,46 @@ interface NamedEntity {
   name: string;
 }
 
+interface NamedEntitySaveOptions<T> {
+  label: string;
+  isNameActive(entity: T): boolean;
+}
+
 function saveNamedEntity<T extends NamedEntity>(
   entities: Map<string, T>,
   idByName: Map<string, string>,
   entity: T,
+  options: NamedEntitySaveOptions<T>,
 ): void {
   const previous = entities.get(entity.id);
   if (previous && idByName.get(previous.name) === entity.id) idByName.delete(previous.name);
+
+  if (options.isNameActive(entity)) {
+    const conflict = [...entities.values()].find(
+      (current) => current.id !== entity.id && current.name === entity.name && options.isNameActive(current),
+    );
+    if (conflict) throw new Error(`${options.label} name "${entity.name}" is already in use.`);
+    idByName.set(entity.name, entity.id);
+  }
+
   entities.set(entity.id, entity);
-  const existingIdForName = idByName.get(entity.name);
-  if (!existingIdForName || existingIdForName === entity.id) idByName.set(entity.name, entity.id);
 }
 
 function getNamedEntity<T extends NamedEntity>(
   entities: Map<string, T>,
   idByName: Map<string, string>,
   name: string,
+  isNameActive: (entity: T) => boolean,
 ): T | undefined {
   const id = idByName.get(name);
   const indexed = id ? entities.get(id) : undefined;
-  if (indexed?.name === name) return indexed;
-  return [...entities.values()].find((entity) => entity.name === name);
+  if (indexed?.name === name && isNameActive(indexed)) return indexed;
+  const values = [...entities.values()];
+  for (let index = values.length - 1; index >= 0; index--) {
+    const entity = values[index];
+    if (entity.name === name) return entity;
+  }
+  return undefined;
 }
 
 function snapshot<T>(value: T): T {

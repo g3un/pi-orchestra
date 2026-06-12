@@ -22,6 +22,7 @@ interface ToolBundle {
   workflowMonitor: WorkflowMonitorController;
   orchestraEvents: OrchestraEventController;
   runtime: PiAgentRuntime;
+  createSubagentTool(parentRunId: string | null): SubagentTool;
   dispose(): void;
 }
 
@@ -59,12 +60,12 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   if (existing) return existing;
 
   const store = createProjectSqliteAgentStore(ctx.cwd);
-  let childCustomTools: ToolDefinition[] = [];
+  let resolveChildCustomTools: (runId: string) => ToolDefinition[] = () => [];
   const runtime = new PiAgentRuntime({
     store,
     cwd: ctx.cwd,
     resolveModel: (model) => resolveModel(ctx, model),
-    resolveCustomTools: () => childCustomTools,
+    resolveCustomTools: (runId) => resolveChildCustomTools(runId),
   });
   const orchestra = new Orchestra({ runtime, store });
   const orchestraEvents = new OrchestraEventController({
@@ -96,14 +97,16 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     onWorkgroupLaunchFailed: ({ bus, runIds }) =>
       orchestraEvents.cancelWorkgroupLaunch(bus.id, { suppressRunIds: runIds }),
   });
+  const createScopedSubagentTool = (parentRunId: string | null) => createSubagentTool({ orchestra, parentRunId });
   const bundle = {
     busTool: createBusTool({ orchestra, store }),
-    subagentTool: createSubagentTool({ orchestra }),
+    subagentTool: createScopedSubagentTool(null),
     workgroupTool,
     workflowTool: createWorkflowTool({ orchestra, store }),
     workflowMonitor: new WorkflowMonitorController(store),
     orchestraEvents,
     runtime,
+    createSubagentTool: createScopedSubagentTool,
     dispose() {
       this.workflowMonitor.dispose();
       this.orchestraEvents.dispose();
@@ -111,14 +114,14 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
       store.dispose();
     },
   };
-  childCustomTools = defineBundlePiTools(bundle);
+  resolveChildCustomTools = (runId) => defineBundlePiTools(bundle, runId);
   bundles.set(ctx.cwd, bundle);
   return bundle;
 }
 
-function defineBundlePiTools(bundle: ToolBundle): ToolDefinition[] {
+function defineBundlePiTools(bundle: ToolBundle, parentRunId: string): ToolDefinition[] {
   return [
-    defineSubagentPiTool(() => bundle.subagentTool),
+    defineSubagentPiTool(() => bundle.createSubagentTool(parentRunId)),
     defineWorkgroupPiTool(() => bundle.workgroupTool),
     defineWorkflowPiTool(() => bundle.workflowTool, {
       onWorkflowInput: (ctx) => bundle.workflowMonitor.show(ctx),

@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import {
   createBusSubscription,
   createBusSubscriptionId,
+  maxMessageId,
   type Bus,
   type BusMessage,
   type BusSubscription,
@@ -167,7 +168,7 @@ function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
       busId: bus.id,
       subscriberId: "main",
       subscriberKind: "main",
-      deliveredMessageIds: bus.messages.map((message) => message.id),
+      lastDeliveredMessageId: maxMessageId(bus.messages.map((message) => message.id)),
     });
   store.saveBusSubscription(subscription);
   return subscription;

@@ -210,8 +210,9 @@ test("workgroup member name checks are global", async () => {
     profile: securityProfile,
     task: "Existing work.",
     busId: otherBus.id,
+    parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
-    state: "closed",
+    state: "running",
     result: null,
   });
 
@@ -322,6 +323,7 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
     profile: securityProfile,
     task: "Lead the group.",
     busId: workgroup.busId,
+    parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/workgroup-lead.jsonl",
     state: "running",
     result: null,
@@ -385,6 +387,7 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
     profile: securityProfile,
     task: "Lead cleanup.",
     busId: workgroup.busId,
+    parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/cleanup-lead.jsonl",
     state: "running",
     result: null,
@@ -648,7 +651,12 @@ class FakeOrchestra implements OrchestraApi {
   store = new InMemoryAgentStore();
   buses = new Map<string, Bus>();
   runs = new SyncedRunMap(this.store);
-  spawned: Array<{ profile: AgentProfile; task: string; busId: string; options: { name: string | undefined } }> = [];
+  spawned: Array<{
+    profile: AgentProfile;
+    task: string;
+    busId: string;
+    options: { name: string | undefined; parentRunId: string | null };
+  }> = [];
   closedIds: string[] = [];
   spawnDelay: Promise<void> | undefined;
   closeDelay: Promise<void> | undefined;
@@ -686,7 +694,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    options: { name: string | undefined },
+    options: { name: string | undefined; parentRunId: string | null },
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
@@ -704,6 +712,7 @@ class FakeOrchestra implements OrchestraApi {
       profile,
       task,
       busId: bus.id,
+      parentRunId: options.parentRunId,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
       result: null,
@@ -758,6 +767,7 @@ function agentRun(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: overrides.busId ?? "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

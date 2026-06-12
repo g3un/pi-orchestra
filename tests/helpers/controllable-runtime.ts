@@ -55,6 +55,7 @@ export class ControllableRuntime implements AgentRuntime {
       profile,
       task,
       busId,
+      parentRunId: options.parentRunId ?? null,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
       result: null,
@@ -63,7 +64,7 @@ export class ControllableRuntime implements AgentRuntime {
     this.spawned.push(record);
     this.store.saveRun(run);
     this.store.saveBusSubscription(
-      createBusSubscription({ busId, subscriberId: run.id, subscriberKind: "agent", deliveredMessageIds: [] }),
+      createBusSubscription({ busId, subscriberId: run.id, subscriberKind: "agent", lastDeliveredMessageId: null }),
     );
 
     const spawnedRun = await this.onSpawn?.(run, record);

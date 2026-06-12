@@ -56,6 +56,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     },
     task: "Inspect the code.",
     busId: "bus-1",
+    parentRunId: null,
     sessionFile: `${getProjectOrchestraSessionDir("/workspace")}/mock-session.jsonl`,
     state: "running",
     result: null,
@@ -66,7 +67,7 @@ test("pi runtime spawns sessions with resolved models, tools, and the initial pr
     busId: "bus-1",
     subscriberId: run.id,
     subscriberKind: "agent",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
   assert.deepEqual(resolveModel.mock.calls, [["mock-provider/mock-model"]]);
   assert.deepEqual(codingAgentMocks.sessionManagerCreate.mock.calls, [
@@ -233,7 +234,7 @@ test("pi runtime publishes bus messages to active subscribers rather than run bu
     busId: "bus-1",
     subscriberId: run.id,
     subscriberKind: "agent",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
 
   await runtime.publishBus("bus-1", "Subscribed fact.", "main");

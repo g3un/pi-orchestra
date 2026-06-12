@@ -18,7 +18,7 @@ export interface BusSubscription {
   busId: string;
   subscriberId: string;
   subscriberKind: BusSubscriberKind;
-  deliveredMessageIds: string[];
+  lastDeliveredMessageId: string | null;
 }
 
 export interface ListBusSubscriptionsOptions {
@@ -38,7 +38,7 @@ export interface CreateBusSubscriptionOptions {
   busId: string;
   subscriberId: string;
   subscriberKind: BusSubscriberKind;
-  deliveredMessageIds: string[];
+  lastDeliveredMessageId: string | null;
 }
 
 export function createBusSubscriptionId(
@@ -55,21 +55,27 @@ export function createBusSubscription(options: CreateBusSubscriptionOptions): Bu
     busId: options.busId,
     subscriberId: options.subscriberId,
     subscriberKind: options.subscriberKind,
-    deliveredMessageIds: options.deliveredMessageIds,
+    lastDeliveredMessageId: options.lastDeliveredMessageId,
   };
 }
 
 export function isBusMessageDelivered(subscription: BusSubscription, messageId: string): boolean {
-  return subscription.deliveredMessageIds.includes(messageId);
+  return subscription.lastDeliveredMessageId !== null && messageId <= subscription.lastDeliveredMessageId;
 }
 
 export function markBusMessagesDelivered(
   subscription: BusSubscription,
   messages: BusMessage | BusMessage[],
 ): BusSubscription {
-  const deliveredMessageIds = new Set(subscription.deliveredMessageIds);
-  for (const message of Array.isArray(messages) ? messages : [messages]) deliveredMessageIds.add(message.id);
-  return { ...subscription, deliveredMessageIds: [...deliveredMessageIds] };
+  const deliveredMessageIds = [
+    ...(subscription.lastDeliveredMessageId ? [subscription.lastDeliveredMessageId] : []),
+    ...(Array.isArray(messages) ? messages : [messages]).map((message) => message.id),
+  ];
+  return { ...subscription, lastDeliveredMessageId: maxMessageId(deliveredMessageIds) };
+}
+
+export function maxMessageId(messageIds: string[]): string | null {
+  return messageIds.length > 0 ? messageIds.reduce((maxId, id) => (id > maxId ? id : maxId)) : null;
 }
 
 export function matchesBusSubscription(subscription: BusSubscription, options: ListBusSubscriptionsOptions): boolean {

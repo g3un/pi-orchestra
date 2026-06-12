@@ -263,7 +263,7 @@ test("orchestra event controller emits subscribed main bus messages", () => {
     busId: "bus-1",
     subscriberId: "main",
     subscriberKind: "main",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
   store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
   new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 0 });
@@ -279,9 +279,10 @@ test("orchestra event controller emits subscribed main bus messages", () => {
   });
   assert.match(sent.batches[0]?.content ?? "", /Bus message on Bus 1 from Researcher A/);
   assert.doesNotMatch(sent.batches[0]?.content ?? "", /from agent-1/);
-  assert.deepEqual(store.getBusSubscription(createBusSubscriptionId("bus-1", "main", "main"))?.deliveredMessageIds, [
+  assert.equal(
+    store.getBusSubscription(createBusSubscriptionId("bus-1", "main", "main"))?.lastDeliveredMessageId,
     "message-1",
-  ]);
+  );
 });
 
 test("orchestra event controller does not mark queued main bus messages delivered before flush", () => {
@@ -294,18 +295,18 @@ test("orchestra event controller does not mark queued main bus messages delivere
     busId: "bus-1",
     subscriberId: "main",
     subscriberKind: "main",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
   const controller = new OrchestraEventController({ store, sendEvents: sent.send, flushDelayMs: 10_000 });
 
   store.addBusMessage("bus-1", { id: "message-1", from: "agent-1", message: "Shared fact." });
 
-  assert.deepEqual(store.getBusSubscription(subscriptionId)?.deliveredMessageIds, []);
+  assert.equal(store.getBusSubscription(subscriptionId)?.lastDeliveredMessageId, null);
   assert.equal(sent.batches.length, 0);
 
   controller.dispose();
 
-  assert.deepEqual(store.getBusSubscription(subscriptionId)?.deliveredMessageIds, []);
+  assert.equal(store.getBusSubscription(subscriptionId)?.lastDeliveredMessageId, null);
 });
 
 test("orchestra event controller routes workflow child workgroup finishes to the flow leader", () => {
@@ -466,6 +467,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

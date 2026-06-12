@@ -30,7 +30,13 @@ export function createWorkgroupIdentity(
   existingWorkgroups: WorkgroupRun[],
   entityLabel = "Workgroup",
 ): NamedEntity {
-  return createEntityIdentity(name, "workgroup", existingWorkgroups, entityLabel, WORKGROUP_NAME_MAX_LENGTH);
+  return createEntityIdentity(
+    name,
+    "workgroup",
+    existingWorkgroups.filter((workgroup) => workgroup.state !== "closed"),
+    entityLabel,
+    WORKGROUP_NAME_MAX_LENGTH,
+  );
 }
 
 export function createWorkgroupRun(options: CreateWorkgroupRunOptions): WorkgroupRun {

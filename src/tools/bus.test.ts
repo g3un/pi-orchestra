@@ -120,7 +120,7 @@ test("bus subscribe and unsubscribe manage the main bus subscription", async () 
     busId: bus.id,
     subscriberId: "main",
     subscriberKind: "main",
-    deliveredMessageIds: ["message-1"],
+    lastDeliveredMessageId: "message-1",
   });
 
   const unsubscribeOutput = await tool.execute({ action: "unsubscribe", name: bus.name });
@@ -171,7 +171,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    _options: { name: string | undefined },
+    _options: { name: string | undefined; parentRunId: string | null },
   ): Promise<AgentRun> {
     const spawnedRun = run({ id: "agent-1", name: "agent-1", profile, task, busId, state: "running" });
     this.runs.set(spawnedRun.id, spawnedRun);
@@ -209,6 +209,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

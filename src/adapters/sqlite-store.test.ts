@@ -77,6 +77,22 @@ test("SQLite store preserves insertion order when updating existing records", ()
   });
 });
 
+test("SQLite store enforces active name uniqueness and allows closed name reuse", () => {
+  withTempStore((store) => {
+    const firstRun = run({ id: "first", name: "shared-run" });
+    const secondRun = run({ id: "second", name: "shared-run" });
+
+    store.saveRun(firstRun);
+    assert.throws(() => store.saveRun(secondRun), /Agent name "shared-run" is already in use\./);
+
+    const closedFirstRun = { ...firstRun, state: "closed" as const, result: null };
+    store.saveRun(closedFirstRun);
+    store.saveRun(secondRun);
+
+    assert.equal(store.getRunByName("shared-run")?.id, secondRun.id);
+  });
+});
+
 test("SQLite store appends and replaces bus messages by id", () => {
   withTempStore((store) => {
     const bus: Bus = { id: "bus-1", name: "Bus 1", state: "open", messages: [] };
@@ -208,7 +224,7 @@ test("SQLite store rejects existing unversioned stores and tells the user to rec
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 0; expected 6\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 0; expected 7\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -226,7 +242,7 @@ test("SQLite store rejects older schemas and tells the user to recreate the stor
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 2; expected 6\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 2; expected 7\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -279,6 +295,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;
@@ -290,15 +307,16 @@ function busSubscription(overrides: Partial<BusSubscription> = {}): BusSubscript
     busId: "bus-1",
     subscriberId: "agent-1",
     subscriberKind: "agent",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
     ...overrides,
   };
 }
 
 function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
+  const id = overrides.id ?? "workgroup-1";
   return {
-    id: "workgroup-1",
-    name: "workgroup-1",
+    id,
+    name: overrides.name ?? id,
     busId: "bus-1",
     goal: "Complete the workgroup.",
     leaderRunId: null,
@@ -311,9 +329,10 @@ function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {
 }
 
 function workflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  const id = overrides.id ?? "workflow-1";
   return {
-    id: "workflow-1",
-    name: "workflow-1",
+    id,
+    name: overrides.name ?? id,
     goal: "Complete the workflow.",
     startedAtMs: 1_700_000_000_000,
     state: "running",

@@ -38,7 +38,7 @@ test("orchestra closes buses, clears subscriptions, and rejects new work", async
     busId: bus.id,
     subscriberId: "main",
     subscriberKind: "main",
-    deliveredMessageIds: [],
+    lastDeliveredMessageId: null,
   });
 
   const closedBus = orchestra.closeBus(bus.name);
@@ -51,7 +51,7 @@ test("orchestra closes buses, clears subscriptions, and rejects new work", async
   );
   await assert.rejects(() => orchestra.publishBus(bus.id, "Too late.", "main"), /Bus Close Me is closed\./);
   await assert.rejects(
-    () => orchestra.spawnAgent(profile, "Too late.", bus.id, { name: "late-agent" }),
+    () => orchestra.spawnAgent(profile, "Too late.", bus.id, { name: "late-agent", parentRunId: null }),
     /Bus Close Me is closed\./,
   );
 });
@@ -62,7 +62,10 @@ test("orchestra accepts short names for buses and agent runs", async () => {
   const orchestra = new Orchestra({ runtime, store });
 
   const bus = orchestra.createBus({ name: "Frontend Audit" });
-  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.name, { name: "Reviewer A" });
+  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.name, {
+    name: "Reviewer A",
+    parentRunId: null,
+  });
 
   assertUuid7(bus.id);
   assert.equal(bus.name, "Frontend Audit");
@@ -79,10 +82,17 @@ test("orchestra keeps agent run names globally unique", async () => {
 
   const firstBus = orchestra.createBus({ name: "Frontend Audit" });
   const secondBus = orchestra.createBus({ name: "Backend Audit" });
-  const namedRun = await orchestra.spawnAgent(profile, "Inspect frontend code.", firstBus.id, { name: "Reviewer" });
-  const firstAutoRun = await orchestra.spawnAgent(profile, "Research frontend code.", firstBus.id, { name: undefined });
+  const namedRun = await orchestra.spawnAgent(profile, "Inspect frontend code.", firstBus.id, {
+    name: "Reviewer",
+    parentRunId: null,
+  });
+  const firstAutoRun = await orchestra.spawnAgent(profile, "Research frontend code.", firstBus.id, {
+    name: undefined,
+    parentRunId: null,
+  });
   const secondAutoRun = await orchestra.spawnAgent(profile, "Research backend code.", secondBus.id, {
     name: undefined,
+    parentRunId: null,
   });
 
   assertUuid7(namedRun.id);
@@ -93,7 +103,7 @@ test("orchestra keeps agent run names globally unique", async () => {
   assert.equal(secondAutoRun.name, "researcher-2");
   assert.deepEqual(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
   await assert.rejects(
-    () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer" }),
+    () => orchestra.spawnAgent(profile, "Inspect backend code.", secondBus.id, { name: "Reviewer", parentRunId: null }),
     /Agent name "Reviewer" is already in use\./,
   );
 });
@@ -118,7 +128,10 @@ test("orchestra resolves global run names for lifecycle actions", async () => {
   const runtime = new FakeRuntime(store);
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus({ name: "Frontend Audit" });
-  const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, { name: "Reviewer" });
+  const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, {
+    name: "Reviewer",
+    parentRunId: null,
+  });
   store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
 
   const messagedRun = await orchestra.messageAgent("Reviewer", "Continue.", { busId: undefined });
@@ -136,7 +149,7 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   const orchestra = new Orchestra({ runtime, store });
   const bus = orchestra.createBus({ name: undefined });
 
-  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id, { name: undefined });
+  const run = await orchestra.spawnAgent(profile, "Inspect the code.", bus.id, { name: undefined, parentRunId: null });
   store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
   const messagedRun = await orchestra.messageAgent(run.id, "Continue.", { busId: undefined });
   const closedRun = await orchestra.closeAgent(run.id, { busId: undefined });
@@ -217,6 +230,7 @@ class FakeRuntime implements AgentRuntime {
       profile,
       task,
       busId,
+      parentRunId: options.parentRunId ?? null,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
       result: null,
@@ -268,6 +282,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: "bus-1",
     state: "running",
     ...overrides,
+    parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
   } as AgentRun;

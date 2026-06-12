@@ -23,6 +23,7 @@ export interface CreateBusOptions {
 
 export interface SpawnAgentOptions {
   name: string | undefined;
+  parentRunId: string | null;
 }
 
 export interface PublishedBusMessage {
@@ -87,7 +88,10 @@ export class Orchestra implements OrchestraApi {
 
   async spawnAgent(profile: AgentProfile, task: string, busId: string, options: SpawnAgentOptions): Promise<AgentRun> {
     const bus = this.requireOpenBus(busId);
-    return await this.runtime.spawn(profile, task, bus.id, this.createRunIdentity(profile, options.name));
+    return await this.runtime.spawn(profile, task, bus.id, {
+      ...this.createRunIdentity(profile, options.name),
+      parentRunId: options.parentRunId,
+    });
   }
 
   getRun(id: string, options: RunLookupOptions): AgentRun | undefined {
@@ -144,10 +148,20 @@ export class Orchestra implements OrchestraApi {
   }
 
   private createBusIdentity(name: string | undefined) {
-    return createEntityIdentity(name, "bus", this.store.listBuses(), "Bus");
+    return createEntityIdentity(
+      name,
+      "bus",
+      this.store.listBuses().filter((bus) => bus.state === "open"),
+      "Bus",
+    );
   }
 
   private createRunIdentity(profile: AgentProfile, name: string | undefined) {
-    return createEntityIdentity(name, profile.name, this.store.listRuns(), "Agent");
+    return createEntityIdentity(
+      name,
+      profile.name,
+      this.store.listRuns().filter((run) => run.state === "running"),
+      "Agent",
+    );
   }
 }

@@ -30,7 +30,7 @@ test("tools coordinate buses, subagents, messages, and completion events through
   const runtime = new ControllableRuntime({ store });
   const orchestra = new Orchestra({ runtime, store });
   const busTool = createBusTool({ orchestra, store });
-  const subagentTool = createSubagentTool({ orchestra });
+  const subagentTool = createSubagentTool({ orchestra, parentRunId: null });
   const eventBatches: OrchestraMainEvent[][] = [];
   new OrchestraEventController({
     store,

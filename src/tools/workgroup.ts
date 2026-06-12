@@ -276,7 +276,7 @@ export function createWorkgroupTool({
       try {
         const spawnResults = await Promise.allSettled(
           members.map(async (member): Promise<SpawnSuccess> => {
-            const run = await spawnSubagent(orchestra, member);
+            const run = await spawnSubagent(orchestra, member, workgroup.leaderRunId);
             return { member, run };
           }),
         );
@@ -514,6 +514,7 @@ function collectWorkgroupMemberRuns(store: AgentStore, workgroup: WorkgroupRun):
 function prepareMembers(members: WorkgroupMemberInput[], existingRuns: AgentRun[], bus: Bus): SubagentSpawnInput[] {
   const reservedNames = new Set<string>();
   for (const run of existingRuns) {
+    if (run.state !== "running") continue;
     reservedNames.add(run.id);
     reservedNames.add(run.name);
   }

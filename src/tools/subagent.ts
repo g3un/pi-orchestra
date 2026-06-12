@@ -44,6 +44,7 @@ export interface SubagentTool {
 
 export interface SubagentToolDeps {
   orchestra: OrchestraApi;
+  parentRunId: string | null;
 }
 
 export const SubagentRunNameParam = Type.String({
@@ -137,17 +138,21 @@ const SubagentToolParams = Type.Object(
   { additionalProperties: false },
 );
 
-export async function spawnSubagent(orchestra: OrchestraApi, input: SubagentSpawnInput): Promise<AgentRun> {
-  return await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name });
+export async function spawnSubagent(
+  orchestra: OrchestraApi,
+  input: SubagentSpawnInput,
+  parentRunId: string | null,
+): Promise<AgentRun> {
+  return await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name, parentRunId });
 }
 
-export function createSubagentTool({ orchestra }: SubagentToolDeps): SubagentTool {
+export function createSubagentTool({ orchestra, parentRunId }: SubagentToolDeps): SubagentTool {
   return {
     name: "subagent",
 
     async execute(input) {
       if (input.action === "spawn") {
-        const run = await spawnSubagent(orchestra, input);
+        const run = await spawnSubagent(orchestra, input, parentRunId);
         return { run, message: formatRunMessage(run) };
       }
 
