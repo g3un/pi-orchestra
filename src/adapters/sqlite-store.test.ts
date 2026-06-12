@@ -61,6 +61,22 @@ test("project SQLite store creates .pi/orchestra and persists saved orchestratio
   });
 });
 
+test("SQLite store stamps new databases with the current schema version", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
+  try {
+    createProjectSqliteAgentStore(cwd).dispose();
+    const db = new DatabaseSync(getProjectSqliteStorePath(cwd));
+    try {
+      const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
+      assert.equal(row.user_version, 8);
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("SQLite store preserves insertion order when updating existing records", () => {
   withTempStore((store) => {
     const first = run({ id: "agent-1", state: "running" });
@@ -256,7 +272,7 @@ test("SQLite store rejects existing unversioned stores and tells the user to rec
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 0; expected 7\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 0; expected 8\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -274,7 +290,7 @@ test("SQLite store rejects older schemas and tells the user to recreate the stor
 
     assert.throws(
       () => createProjectSqliteAgentStore(cwd),
-      /Unsupported pi-orchestra SQLite store schema version 2; expected 7\..*Delete .*store\.db and run the command again/,
+      /Unsupported pi-orchestra SQLite store schema version 2; expected 8\..*Delete .*store\.db and run the command again/,
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });

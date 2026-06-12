@@ -19,7 +19,7 @@ import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const ORCHESTRA_STORE_RELATIVE_DIR = join(".pi", "orchestra");
 const ORCHESTRA_STORE_FILENAME = "store.db";
 
