@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeEach, test, vi } from "vitest";
-import { createBusSubscriptionId } from "../core/bus.ts";
+import { createBusSubscriptionId, type BusSubscription } from "../core/bus.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
@@ -168,7 +168,8 @@ test("pi runtime injects unread bus messages once and skips messages from the sa
   session.isStreaming = false;
   await runtime.message("agent-1", "Continue with the same context.");
 
-  assert.equal(session.promptCalls.at(-1)?.message, "Continue with the same context.");
+  assert.equal(session.promptCalls.length, 1);
+  assert.equal(session.steerCalls.at(-1), "Continue with the same context.");
 });
 
 test("pi runtime publishes bus messages and steers active sibling sessions without replaying seen messages", async () => {
@@ -211,7 +212,8 @@ test("pi runtime publishes bus messages and steers active sibling sessions witho
   secondSession.isStreaming = false;
   await runtime.message(secondRun.id, "Continue after seeing the bus fact.");
 
-  assert.equal(secondSession.promptCalls.at(-1)?.message, "Continue after seeing the bus fact.");
+  assert.equal(secondSession.promptCalls.length, 1);
+  assert.equal(secondSession.steerCalls.at(-1), "Continue after seeing the bus fact.");
 });
 
 test("pi runtime publishes bus messages to active subscribers rather than run bus membership", async () => {
@@ -342,6 +344,113 @@ test("pi runtime steers streaming running runs and restarts idle result runs on 
   assert.equal(restartedRun.result, null);
   assert.equal(store.getRun(run.id)?.state, "running");
   assert.equal(session.promptCalls.at(-1)?.message, "Use option B.");
+});
+
+test("pi runtime steers running runs with an in-flight prompt task before streaming starts", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  const session = queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+  session.isStreaming = false;
+
+  const messagedRun = await runtime.message(run.id, "Use the new constraint.");
+
+  assert.deepEqual(messagedRun, run);
+  assert.deepEqual(session.steerCalls, ["Use the new constraint."]);
+  assert.equal(session.promptCalls.length, 1);
+  assert.equal(store.getRun(run.id)?.state, "running");
+});
+
+test("pi runtime close prunes entries while preserving closed-run message errors", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  const session = queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+
+  await runtime.close(run.id);
+
+  assert.equal(session.disposed, true);
+  await assert.rejects(() => runtime.message(run.id, "Too late."), /Agent Agent 1 is closed\./);
+});
+
+test("pi runtime dispose closes runs before disposing sessions and does not prompt for missing finish", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  const promptGate = createDeferred();
+  const session = queueSession(new FakeSession(() => promptGate.promise));
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+
+  runtime.dispose();
+  promptGate.resolve();
+  await waitForMicrotasks();
+
+  assert.equal(store.getRun(run.id)?.state, "closed");
+  assert.equal(session.disposed, true);
+  assert.equal(session.promptCalls.length, 1);
+  await assert.rejects(() => runtime.message(run.id, "Too late."), /PiAgentRuntime is disposed\./);
+});
+
+test("pi runtime dispose preserves completed run status", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  const session = queueSession();
+  const runtime = new PiAgentRuntime({ store, cwd: undefined, resolveModel: undefined, resolveCustomTools: undefined });
+  const run = await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+  store.saveRun({ ...run, state: "success", result: { status: "success", summary: "Done." } });
+
+  runtime.dispose();
+
+  assert.equal(store.getRun(run.id)?.state, "success");
+  assert.equal(session.disposed, true);
+});
+
+test("pi runtime reports prompt task rejections through the prompt task error hook", async () => {
+  const store = new PromptTaskErrorStore();
+  store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
+  queueSession();
+  const promptTaskErrors: Array<{ runId: string; error: unknown }> = [];
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: undefined,
+    resolveCustomTools: undefined,
+    onPromptTaskError: (runId, error) => promptTaskErrors.push({ runId, error }),
+  });
+
+  await runtime.spawn(
+    { name: "researcher", systemPrompt: "Research the task.", tools: ["read", "bash"], model: undefined },
+    "Inspect the code.",
+    "bus-1",
+    { id: "agent-1", name: "Agent 1" },
+  );
+  await waitForMicrotasks();
+
+  assert.equal(promptTaskErrors.length, 1);
+  assert.equal(promptTaskErrors[0]?.runId, "agent-1");
+  assert.match(promptTaskErrors[0]?.error instanceof Error ? promptTaskErrors[0].error.message : "", /getRun failed/);
 });
 
 test("pi runtime marks a run failed when the session ends without finish", async () => {
@@ -532,6 +641,34 @@ function model(overrides: Partial<Model<"openai-responses">> = {}): Model<"opena
     maxTokens: 4_096,
     ...overrides,
   };
+}
+
+class PromptTaskErrorStore extends InMemoryAgentStore {
+  private throwOnGetRun = false;
+
+  override saveBusSubscription(subscription: BusSubscription): void {
+    super.saveBusSubscription(subscription);
+    this.throwOnGetRun = true;
+  }
+
+  override getRun(id: string): AgentRun | undefined {
+    if (this.throwOnGetRun) throw new Error("getRun failed.");
+    return super.getRun(id);
+  }
+}
+
+function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function workgroupRun(overrides: Partial<WorkgroupRun> = {}): WorkgroupRun {

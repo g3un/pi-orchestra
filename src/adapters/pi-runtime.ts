@@ -33,6 +33,7 @@ export interface PiAgentRuntimeOptions {
   cwd: string | undefined;
   resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
   resolveCustomTools: (() => ToolDefinition[]) | undefined;
+  onPromptTaskError?: (runId: string, error: unknown) => void;
 }
 
 interface RuntimeEntry {
@@ -60,12 +61,15 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly cwd: string;
   private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
   private readonly resolveCustomTools: NonNullable<PiAgentRuntimeOptions["resolveCustomTools"]>;
+  private readonly onPromptTaskError: PiAgentRuntimeOptions["onPromptTaskError"];
+  private disposed = false;
 
   constructor(options: PiAgentRuntimeOptions) {
     this.store = options.store;
     this.cwd = options.cwd ?? process.cwd();
     this.resolveModel = options.resolveModel;
     this.resolveCustomTools = options.resolveCustomTools ?? (() => []);
+    this.onPromptTaskError = options.onPromptTaskError;
   }
 
   async spawn(
@@ -74,6 +78,7 @@ export class PiAgentRuntime implements AgentRuntime {
     busId: string,
     options: SpawnAgentRuntimeOptions,
   ): Promise<AgentRun> {
+    this.assertNotDisposed();
     this.requireBus(busId);
 
     const baseTools = filterChildProfileTools(requireProfileTools(profile));
@@ -117,12 +122,13 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   async message(id: string, message: string): Promise<AgentRun> {
-    const entry = this.requireEntry(id);
+    this.assertNotDisposed();
     const run = this.requireRun(id);
     this.assertOpenRun(run);
+    const entry = this.requireEntry(id);
     const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
-    if (run.state === "running" && entry.session.isStreaming) {
+    if (run.state === "running" && (entry.promptTask || entry.session.isStreaming)) {
       await entry.session.steer(messageWithBusContext);
       return run;
     }
@@ -134,6 +140,7 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
+    this.assertNotDisposed();
     this.requireBus(busId);
     const busMessage: BusMessage = {
       id: uuid7(),
@@ -174,6 +181,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const entry = this.entries.get(id);
     if (run.state === "closed") {
       entry?.session.dispose();
+      this.entries.delete(id);
       return run;
     }
 
@@ -181,13 +189,33 @@ export class PiAgentRuntime implements AgentRuntime {
     this.store.saveRun(closedRun);
     this.deleteAgentBusSubscriptions(id);
     entry?.session.dispose();
+    this.entries.delete(id);
     return closedRun;
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    const entries = [...this.entries.entries()];
+    for (const [id] of entries) {
+      const run = this.store.getRun(id);
+      if (!run || run.state !== "running") continue;
+
+      this.store.saveRun({ ...run, state: "closed" });
+      this.deleteAgentBusSubscriptions(id);
+    }
+
+    for (const [, entry] of entries) entry.session.dispose();
+    this.entries.clear();
+  }
+
   private startPromptTask(id: string, entry: RuntimeEntry, message: string): void {
-    const task = this.runPrompt(id, message).finally(() => {
-      if (entry.promptTask === task) entry.promptTask = undefined;
-    });
+    const task = this.runPrompt(id, message)
+      .catch((error) => this.handlePromptTaskError(id, error))
+      .finally(() => {
+        if (entry.promptTask === task) entry.promptTask = undefined;
+      });
     entry.promptTask = task;
   }
 
@@ -313,6 +341,18 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private assertOpenRun(run: AgentRun): void {
     if (run.state === "closed") throw new Error(`Agent ${run.name} is closed.`);
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("PiAgentRuntime is disposed.");
+  }
+
+  private handlePromptTaskError(runId: string, error: unknown): void {
+    try {
+      this.onPromptTaskError?.(runId, error);
+    } catch {
+      // Prompt task failures are already terminal for that task; the observer must not create another rejection.
+    }
   }
 
   private isClosed(id: string): boolean {

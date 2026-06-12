@@ -16,6 +16,7 @@ interface ToolBundle {
   workflowTool: WorkflowTool;
   workflowMonitor: WorkflowMonitorController;
   orchestraEvents: OrchestraEventController;
+  runtime: PiAgentRuntime;
   dispose(): void;
 }
 
@@ -90,9 +91,11 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     workflowTool: createWorkflowTool({ orchestra, store }),
     workflowMonitor: new WorkflowMonitorController(store),
     orchestraEvents,
+    runtime,
     dispose() {
       this.workflowMonitor.dispose();
       this.orchestraEvents.dispose();
+      this.runtime.dispose();
       store.dispose();
     },
   };
