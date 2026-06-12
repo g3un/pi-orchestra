@@ -337,6 +337,46 @@ test("orchestra event controller routes workflow child workgroup finishes to the
   assert.equal(agentEvents[0]?.events[0]?.type, "workgroup.finished");
 });
 
+test("orchestra event controller does not route workflow workgroup leader finish as parent subagent finish", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const flowLeader = run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" });
+  const groupLeader = run({
+    id: "group-leader",
+    name: "group-leader",
+    busId: "child-bus",
+    parentRunId: flowLeader.id,
+    state: "running",
+  });
+  const workgroup = workgroupRun({
+    id: "child-workgroup",
+    busId: "child-bus",
+    leaderRunId: groupLeader.id,
+    state: "running",
+  });
+  store.saveRun(flowLeader);
+  store.saveRun(groupLeader);
+  store.saveWorkgroup(workgroup);
+  store.saveWorkflow(
+    workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: flowLeader.id, workgroupIds: [workgroup.id] }),
+  );
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveWorkgroup({ ...workgroup, state: "closed", result: { status: "success", summary: "Child done." } });
+  store.saveRun({ ...groupLeader, state: "success", result: { status: "success", summary: "Leader done." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0]?.runId, flowLeader.id);
+  assert.equal(agentEvents[0]?.events[0]?.type, "workgroup.finished");
+});
+
 test("orchestra event controller falls back to main when a workflow child workgroup cannot reach the flow leader", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
@@ -443,7 +483,7 @@ test("orchestra event controller routes child-spawned subagent finishes to paren
   assert.equal(agentEvents[0]?.events[0]?.type, "subagent.finished");
 });
 
-test("orchestra event controller falls back to main for child-spawned subagents with inactive parents", () => {
+test("orchestra event controller suppresses workflow child finishes when parent is inactive", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
   const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
@@ -462,6 +502,39 @@ test("orchestra event controller falls back to main for child-spawned subagents 
     state: "running",
   });
   store.saveWorkflow(workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: parentRun.id }));
+  store.saveRun(parentRun);
+  store.saveRun(childRun);
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...childRun, state: "success", result: { status: "success", summary: "Child done." } });
+
+  assert.equal(agentEvents.length, 0);
+  assert.equal(sent.batches.length, 0);
+});
+
+test("orchestra event controller falls back to main for child-spawned subagents with inactive parents outside workflows", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const parentRun = run({
+    id: "parent",
+    name: "parent",
+    busId: "bus-1",
+    state: "failed",
+    result: { status: "failed", summary: "Parent failed." },
+  });
+  const childRun = run({
+    id: "child",
+    name: "child",
+    busId: "bus-1",
+    parentRunId: parentRun.id,
+    state: "running",
+  });
   store.saveRun(parentRun);
   store.saveRun(childRun);
   new OrchestraEventController({

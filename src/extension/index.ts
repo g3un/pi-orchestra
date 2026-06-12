@@ -83,7 +83,9 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     store,
     sendEvents: (events, content) => sendOrchestraEvents(pi, events, content),
     sendAgentEvents: (runId, _events, content) => {
+      if (!runtime.listRunIds().includes(runId)) return false;
       void orchestra.messageAgent(runId, content, { busId: undefined }).catch(() => undefined);
+      return true;
     },
     onWorkgroupLeaderFailed: ({ workgroup, run }) => {
       const result = run.result ?? {

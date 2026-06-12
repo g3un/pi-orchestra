@@ -50,7 +50,7 @@ export interface WorkgroupLeaderFailedEvent {
 export interface OrchestraEventControllerOptions {
   store: AgentStore;
   sendEvents: (events: OrchestraMainEvent[], content: string) => void;
-  sendAgentEvents?: (runId: string, events: OrchestraMainEvent[], content: string) => void;
+  sendAgentEvents?: (runId: string, events: OrchestraMainEvent[], content: string) => unknown;
   onWorkgroupLeaderFailed?: (event: WorkgroupLeaderFailedEvent) => void;
   /** Defaults to 50 ms when undefined. Use 0 in tests for immediate delivery. */
   flushDelayMs: number | undefined;
@@ -246,8 +246,9 @@ export class OrchestraEventController {
       busId: run.busId,
       run: toAgentRunResult(run),
     };
-    if (run.parentRunId) {
+    if (run.parentRunId && !this.isWorkgroupLeaderRun(run.id)) {
       if (this.sendParentRunEvent(run.parentRunId, parentEvent)) return;
+      if (this.isWorkflowBus(run.busId)) return;
       this.queueEvent(parentEvent);
       return;
     }
@@ -319,8 +320,9 @@ export class OrchestraEventController {
     const leaderRun = this.store.getRun(leaderRunId);
     if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents(leaderRunId, [event], formatOrchestraEvents([event], this.createFormatOptions()));
-    return true;
+    return (
+      this.sendAgentEvents(leaderRunId, [event], formatOrchestraEvents([event], this.createFormatOptions())) !== false
+    );
   }
 
   private sendParentRunEvent(
@@ -330,8 +332,9 @@ export class OrchestraEventController {
     const parentRun = this.store.getRun(parentRunId);
     if (!parentRun || !isAgentRunActive(parentRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents(parentRunId, [event], formatOrchestraEvents([event], this.createFormatOptions()));
-    return true;
+    return (
+      this.sendAgentEvents(parentRunId, [event], formatOrchestraEvents([event], this.createFormatOptions())) !== false
+    );
   }
 
   private sendWorkflowLeaderEvent(
@@ -342,8 +345,9 @@ export class OrchestraEventController {
     const leaderRun = this.store.getRun(workflow.leaderRunId);
     if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
-    this.sendAgentEvents(leaderRun.id, [event], formatOrchestraEvents([event], this.createFormatOptions()));
-    return true;
+    return (
+      this.sendAgentEvents(leaderRun.id, [event], formatOrchestraEvents([event], this.createFormatOptions())) !== false
+    );
   }
 
   private findWorkgroupForMemberRun(runId: string) {
@@ -355,6 +359,10 @@ export class OrchestraEventController {
     const workgroupId = this.workgroupIdByLeaderRunId.get(runId);
     const workgroup = workgroupId ? this.store.getWorkgroup(workgroupId) : undefined;
     return workgroup?.state === "running" ? workgroup : undefined;
+  }
+
+  private isWorkgroupLeaderRun(runId: string): boolean {
+    return this.workgroupIdByLeaderRunId.has(runId);
   }
 
   private findWorkflowForWorkgroup(workgroupId: string): WorkflowRun | undefined {
