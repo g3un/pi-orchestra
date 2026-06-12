@@ -31,7 +31,7 @@ const workerProfile: AgentProfile = {
 const brokenProfile: AgentProfile = {
   name: "broken",
   systemPrompt: "Fail during spawn.",
-  tools: ["read"],
+  tools: ["workflow", "workgroup", "read"],
   model: undefined,
 };
 
@@ -112,6 +112,55 @@ test("workflow validates derived child workgroup bus names before creating resou
   assert.deepEqual(store.listWorkgroups(), []);
   assert.equal(store.listBuses().length, 1);
   assert.equal(store.getBus(`${"w".repeat(50)}-flow-bus`)?.state, "open");
+  assert.equal(store.getRun("flow-lead")?.state, "running");
+});
+
+test("workflow requires flow leaders to have the workflow tool before creating resources", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "create",
+        name: "missing-tool-flow",
+        goal: "Research and analyze the topic.",
+        leader: {
+          name: "flow-lead",
+          profile: workerProfile,
+          task: "Coordinate the adaptive research workflow.",
+        },
+      }),
+    /Workflow leader profile must include workflow tool\./,
+  );
+
+  assert.deepEqual(store.listBuses(), []);
+  assert.deepEqual(store.listWorkflows(), []);
+  assert.deepEqual(store.listRuns(), []);
+});
+
+test("workflow requires workgroup leaders to have the workgroup tool before creating resources", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "spawn_workgroup",
+        workflowId: "research-flow",
+        name: "collect",
+        goal: "Collect evidence.",
+        leader: { name: "collect-lead", profile: workerProfile, task: "Lead evidence collection." },
+      }),
+    /Workflow workgroup leader profile must include workgroup tool\./,
+  );
+
+  assert.deepEqual(store.listWorkgroups(), []);
+  assert.equal(store.listBuses().length, 1);
+  assert.equal(store.getBus("research-flow-flow-bus")?.state, "open");
   assert.equal(store.getRun("flow-lead")?.state, "running");
 });
 

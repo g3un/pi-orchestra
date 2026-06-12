@@ -2,6 +2,7 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Type } from "typebox";
 import {
   AGENT_RESULT_STATUS_VALUES,
+  type AgentProfile,
   type AgentResult,
   type AgentResultStatus,
   type AgentRun,
@@ -299,6 +300,7 @@ async function startWorkflow(
   deps: WorkflowRunnerDeps,
 ): Promise<{ workflow: WorkflowRun; bus: Bus }> {
   validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
+  validateLeaderTool(input.leader.profile, "workflow", "Workflow leader");
 
   const identity = createEntityIdentity(input.name, "workflow", deps.store.listWorkflows(), "Workflow");
   const busName = createWorkflowFlowBusName(identity.name);
@@ -373,6 +375,7 @@ async function spawnWorkflowWorkgroup(
   if (workflow.state !== "running") throw new Error(`Workflow ${workflow.name} is ${workflow.state}.`);
 
   validateLeaderName(input.leader.name, "Workflow workgroup leader", deps.store.listRuns());
+  validateLeaderTool(input.leader.profile, "workgroup", "Workflow workgroup leader");
   const identity = createWorkgroupIdentity(input.name, deps.store.listWorkgroups(), "Workflow workgroup");
   const busName = createWorkflowWorkgroupBusName(workflow.name, identity.name);
 
@@ -582,6 +585,10 @@ function validateLeaderName(name: string, label: string, existingRuns: AgentRun[
       throw new Error(`${label} name "${normalizedName}" is already in use.`);
     }
   }
+}
+
+function validateLeaderTool(profile: AgentProfile, toolName: "workflow" | "workgroup", label: string): void {
+  if (!profile.tools.includes(toolName)) throw new Error(`${label} profile must include ${toolName} tool.`);
 }
 
 function normalizeWorkflowStatusLine(statusLine: string): string {
