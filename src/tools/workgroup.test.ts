@@ -487,6 +487,71 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
   assert.equal(orchestra.runs.get("security-review")?.state, "closed");
 });
 
+test("workgroup add_members does not resurrect a workgroup closed during member launch", async () => {
+  const orchestra = new FakeOrchestra();
+  const spawnStarted = createDeferred();
+  const spawnDelay = createDeferred();
+  const launchFailedRunIds: string[][] = [];
+  orchestra.onSpawnStarted = () => spawnStarted.resolve();
+  orchestra.spawnDelay = spawnDelay.promise;
+  const tool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    onWorkgroupLaunchFailed: ({ runIds }) => launchFailedRunIds.push(runIds),
+  });
+
+  const created = await tool.execute({
+    action: "create",
+    name: "race-work-workgroup",
+    goal: "Close while launch is pending.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const addTask = tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [{ name: "late-member", profile: securityProfile, task: "Start after closure." }],
+  });
+  await spawnStarted.promise;
+
+  await tool.execute({ action: "cancel", id: workgroup.id });
+  spawnDelay.resolve();
+
+  await assert.rejects(addTask, /Workgroup race-work-workgroup is closed\./);
+  assert.equal(orchestra.store.getWorkgroup(workgroup.id)?.state, "closed");
+  assert.deepEqual(orchestra.store.getWorkgroup(workgroup.id)?.memberRunIds, []);
+  assert.deepEqual(orchestra.closedIds, ["late-member"]);
+  assert.equal(orchestra.runs.get("late-member")?.state, "closed");
+  assert.deepEqual(launchFailedRunIds, [["late-member"]]);
+});
+
+test("workgroup add_members merges member ids from concurrent launches", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const created = await tool.execute({
+    action: "create",
+    name: "merge-work-workgroup",
+    goal: "Merge concurrent additions.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+
+  await Promise.all([
+    tool.execute({
+      action: "add_members",
+      id: workgroup.id,
+      members: [{ name: "first-member", profile: securityProfile, task: "Do the first part." }],
+    }),
+    tool.execute({
+      action: "add_members",
+      id: workgroup.id,
+      members: [{ name: "second-member", profile: backendProfile, task: "Do the second part." }],
+    }),
+  ]);
+
+  assert.deepEqual(
+    new Set(orchestra.store.getWorkgroup(workgroup.id)?.memberRunIds),
+    new Set(["first-member", "second-member"]),
+  );
+});
+
 function assertUuid7(id: string): void {
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 }
@@ -519,7 +584,9 @@ class FakeOrchestra implements OrchestraApi {
   runs = new SyncedRunMap(this.store);
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; options: { name: string | undefined } }> = [];
   closedIds: string[] = [];
+  spawnDelay: Promise<void> | undefined;
   onClose: ((id: string) => void) | undefined;
+  onSpawnStarted: (() => void) | undefined;
 
   createBus(options: { name: string | undefined }): Bus {
     const id = options.name ?? `bus-${this.buses.size + 1}`;
@@ -557,6 +624,9 @@ class FakeOrchestra implements OrchestraApi {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     if (profile.name === "broken") throw new Error("Spawn failed.");
+
+    this.onSpawnStarted?.();
+    if (this.spawnDelay) await this.spawnDelay;
 
     this.spawned.push({ profile, task, busId: bus.id, options });
     const name = options.name ?? profile.name;
@@ -601,6 +671,16 @@ class FakeOrchestra implements OrchestraApi {
     this.runs.set(id, closedRun);
     return closedRun;
   }
+}
+
+function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 class SyncedRunMap extends Map<string, AgentRun> {

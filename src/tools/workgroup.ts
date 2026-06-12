@@ -302,9 +302,30 @@ export function createWorkgroupTool({
         }
 
         const runs = successes.map((success) => success.run);
+        const latestWorkgroup = store.getWorkgroup(workgroup.id);
+        if (!latestWorkgroup || latestWorkgroup.state !== "running") {
+          const runIds = runs.map((run) => run.id);
+          const error = new Error(
+            latestWorkgroup
+              ? `Workgroup ${latestWorkgroup.name} is ${latestWorkgroup.state}.`
+              : `Workgroup ${workgroup.name} not found.`,
+          );
+          onWorkgroupLaunchFailed?.({
+            input,
+            workgroup: latestWorkgroup ?? workgroup,
+            bus,
+            runIds,
+            runNames,
+            error,
+          });
+          launchFailedNotified = true;
+          await closeAgentRuns(orchestra, runIds);
+          throw error;
+        }
+
         const updatedWorkgroup = {
-          ...workgroup,
-          memberRunIds: [...workgroup.memberRunIds, ...runs.map((run) => run.id)],
+          ...latestWorkgroup,
+          memberRunIds: [...new Set([...latestWorkgroup.memberRunIds, ...runs.map((run) => run.id)])],
         };
         store.saveWorkgroup(updatedWorkgroup);
         const output: Extract<WorkgroupOutput, { action: "add_members" }> = {
