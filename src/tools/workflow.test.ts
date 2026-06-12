@@ -86,6 +86,80 @@ test("flow leader creates led workgroups that reuse workgroup lifecycle", async 
   assert.match(groupLeaderTask, /Completed workflow workgroups before this one:[\s\S]*None\./);
 });
 
+test("workflow closes child workgroups when leader spawn fails", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "spawn_workgroup",
+        workflowId: "research-flow",
+        name: "broken-group",
+        goal: "Try to launch a broken group.",
+        leader: { name: "broken-lead", profile: brokenProfile, task: "Lead the broken group." },
+      }),
+    /Spawn failed\./,
+  );
+
+  const workgroup = findWorkgroupByName(store, "broken-group");
+  assert.ok(workgroup);
+  assert.equal(workgroup.state, "closed");
+  assert.deepEqual(workgroup.result, { status: "failed", summary: "Spawn failed." });
+  assert.equal(store.getBus("research-flow-broken-group-bus")?.state, "closed");
+  assert.deepEqual(findWorkflowByName(store, "research-flow")?.workgroupIds, [workgroup.id]);
+  await assert.rejects(
+    () =>
+      workflowTool.execute({
+        action: "spawn_workgroup",
+        workflowId: "research-flow",
+        name: "broken-group",
+        goal: "Retry with the same name.",
+        leader: { name: "retry-lead", profile: hangingGroupLeaderProfile, task: "Retry the group." },
+      }),
+    /Workflow workgroup name "broken-group" is already in use\./,
+  );
+});
+
+test("workflow does not resurrect child workgroups closed during leader launch", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+  const spawnStarted = createDeferred();
+  const spawnDelay = createDeferred();
+  orchestra.onSpawnStarted = () => spawnStarted.resolve();
+  orchestra.spawnDelay = spawnDelay.promise;
+
+  const spawnTask = workflowTool.execute({
+    action: "spawn_workgroup",
+    workflowId: "research-flow",
+    name: "cancelled-group",
+    goal: "Close while leader launch is pending.",
+    leader: { name: "cancelled-lead", profile: hangingGroupLeaderProfile, task: "Lead the cancelled group." },
+  });
+  await spawnStarted.promise;
+  const workgroup = findWorkgroupByName(store, "cancelled-group");
+  assert.ok(workgroup);
+  store.saveWorkgroup({
+    ...workgroup,
+    state: "closed",
+    result: { status: "blocked", summary: "Closed during leader launch." },
+  });
+  spawnDelay.resolve();
+
+  const output = await spawnTask;
+
+  assert.equal(output.action, "spawn_workgroup");
+  assert.equal(output.workgroup.state, "closed");
+  assert.deepEqual(output.workgroup.result, { status: "blocked", summary: "Closed during leader launch." });
+  assert.equal(findWorkgroupByName(store, "cancelled-group")?.state, "closed");
+  assert.equal(store.getRun("cancelled-lead")?.state, "closed");
+  assert.equal(store.getBus("research-flow-cancelled-group-bus")?.state, "closed");
+});
+
 test("workflow spawn_workgroup accepts workflow names as workflowId", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
@@ -360,6 +434,8 @@ class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs: SyncedRunMap;
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; name: string }> = [];
+  spawnDelay: Promise<void> | undefined;
+  onSpawnStarted: (() => void) | undefined;
 
   constructor(private readonly store: InMemoryAgentStore) {
     this.runs = new SyncedRunMap(store);
@@ -405,6 +481,9 @@ class FakeOrchestra implements OrchestraApi {
     if (!bus) throw new Error(`Bus ${busId} not found.`);
     if (profile.name === "broken") throw new Error("Spawn failed.");
 
+    this.onSpawnStarted?.();
+    if (this.spawnDelay) await this.spawnDelay;
+
     const name = options.name ?? profile.name;
     this.spawned.push({ profile, task, busId: bus.id, name });
     const createdRun = run({ id: slugify(name), name, profile, task, busId: bus.id });
@@ -447,6 +526,16 @@ class SyncedRunMap extends Map<string, AgentRun> {
     this.store.saveRun(value);
     return super.set(key, value);
   }
+}
+
+function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 async function startWorkflow(workflowTool: WorkflowTool): Promise<Extract<WorkflowToolOutput, { action: "create" }>> {

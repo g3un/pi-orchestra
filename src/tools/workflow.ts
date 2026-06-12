@@ -381,17 +381,26 @@ async function spawnWorkflowWorkgroup(
   deps.store.saveWorkgroup(workgroup);
 
   const workflowWithWorkgroup = appendWorkflowWorkgroupId(deps.store, workflow, workgroup.id);
-  const leaderRun = await deps.orchestra.spawnAgent(
-    input.leader.profile,
-    buildWorkgroupLeaderTask(deps.store, workflowWithWorkgroup, workgroup, input.goal, input.leader.task),
-    bus.id,
-    { name: input.leader.name },
-  );
+  let leaderRun: AgentRun;
+  try {
+    leaderRun = await deps.orchestra.spawnAgent(
+      input.leader.profile,
+      buildWorkgroupLeaderTask(deps.store, workflowWithWorkgroup, workgroup, input.goal, input.leader.task),
+      bus.id,
+      { name: input.leader.name },
+    );
+  } catch (error) {
+    await closeWorkgroupRun(deps.orchestra, deps.store, workgroup, {
+      includeLeader: true,
+      result: { status: "failed", summary: formatError(error) },
+    });
+    throw error;
+  }
 
   const latestWorkflow = deps.store.getWorkflow(workflow.id);
-  if (!latestWorkflow || latestWorkflow.state !== "running") {
-    const latestWorkgroup = deps.store.getWorkgroup(workgroup.id) ?? workgroup;
-    const ledWorkgroup = { ...latestWorkgroup, leaderRunId: leaderRun.id };
+  const latestWorkgroup = deps.store.getWorkgroup(workgroup.id) ?? workgroup;
+  if (!latestWorkflow || latestWorkflow.state !== "running" || latestWorkgroup.state !== "running") {
+    const ledWorkgroup: WorkgroupRun = { ...latestWorkgroup, leaderRunId: leaderRun.id };
     deps.store.saveWorkgroup(ledWorkgroup);
     const closedWorkgroup = await closeWorkgroupRun(deps.orchestra, deps.store, ledWorkgroup, {
       includeLeader: true,
@@ -405,7 +414,7 @@ async function spawnWorkflowWorkgroup(
     };
   }
 
-  const ledWorkgroup: WorkgroupRun = { ...workgroup, leaderRunId: leaderRun.id };
+  const ledWorkgroup: WorkgroupRun = { ...latestWorkgroup, leaderRunId: leaderRun.id };
   deps.store.saveWorkgroup(ledWorkgroup);
   const latestWorkflowWithLeader = deps.store.getWorkflow(workflow.id) ?? latestWorkflow;
   return {
