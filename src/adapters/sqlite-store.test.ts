@@ -109,6 +109,29 @@ test("SQLite store appends and replaces bus messages by id", () => {
   });
 });
 
+test("SQLite store notifies bus message subscribers after committing message writes", () => {
+  withTempStore((store) => {
+    const bus: Bus = { id: "bus-1", name: "Bus 1", state: "open", messages: [] };
+    const observed: string[] = [];
+    store.saveBus(bus);
+    const unsubscribe = store.subscribeBusMessages((event) => {
+      observed.push(event.message.id);
+      if (event.message.id === "message-1") {
+        store.addBusMessage(bus.id, { id: "message-2", from: "main", message: "Nested write." });
+      }
+    }, undefined);
+
+    store.addBusMessage(bus.id, { id: "message-1", from: "main", message: "Initial." });
+    unsubscribe();
+
+    assert.deepEqual(observed, ["message-1", "message-2"]);
+    assert.deepEqual(
+      store.getBus(bus.id)?.messages.map((message) => message.id),
+      ["message-1", "message-2"],
+    );
+  });
+});
+
 test("SQLite store notifies matching subscribers until unsubscribed", () => {
   withTempStore((store) => {
     const observedRuns: AgentRun[] = [];

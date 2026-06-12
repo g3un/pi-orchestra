@@ -90,20 +90,24 @@ export class SqliteAgentStore implements AgentStore {
   }
 
   addBusMessage(busId: string, message: BusMessage): void {
-    const bus = this.getBus(busId);
-    if (!bus) throw new Error(`Bus ${busId} not found.`);
+    let event: BusMessageEvent | undefined;
+    this.withImmediateTransaction(() => {
+      const bus = this.getBus(busId);
+      if (!bus) throw new Error(`Bus ${busId} not found.`);
 
-    const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
-    const messages = [...bus.messages];
-    if (existingIndex >= 0) {
-      messages[existingIndex] = message;
+      const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
+      const messages = [...bus.messages];
+      if (existingIndex >= 0) {
+        messages[existingIndex] = message;
+        this.saveBus({ ...bus, messages });
+        return;
+      }
+
+      messages.push(message);
       this.saveBus({ ...bus, messages });
-      return;
-    }
-
-    messages.push(message);
-    this.saveBus({ ...bus, messages });
-    notifySubscribers(this.busMessageSubscriptions, { busId, message });
+      event = { busId, message };
+    });
+    if (event) notifySubscribers(this.busMessageSubscriptions, event);
   }
 
   subscribeBusMessages(
@@ -198,6 +202,22 @@ export class SqliteAgentStore implements AgentStore {
     if (this.closed) return;
     this.db.close();
     this.closed = true;
+  }
+
+  private withImmediateTransaction<T>(operation: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original transaction error.
+      }
+      throw error;
+    }
   }
 }
 
