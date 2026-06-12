@@ -35,7 +35,14 @@ test("bus parameters use an OpenAI-compatible root object schema without wait ac
   assert.equal(parameters.type, "object");
   assert.equal(parameters.additionalProperties, false);
   assert.ok(parameters.properties);
-  assert.deepEqual(parameters.properties.action?.enum, ["create", "status", "publish", "subscribe", "unsubscribe"]);
+  assert.deepEqual(parameters.properties.action?.enum, [
+    "create",
+    "status",
+    "publish",
+    "subscribe",
+    "unsubscribe",
+    "compact",
+  ]);
   assert.match(parameters.properties.action?.description ?? "", /Manage shared buses/);
   assert.match(parameters.properties.name?.description ?? "", /status\/publish/);
   assert.equal(parameters.properties.id, undefined);

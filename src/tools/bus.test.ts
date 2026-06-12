@@ -99,6 +99,62 @@ test("bus publish preserves an explicit sender", async () => {
   );
 });
 
+test("bus compact removes messages delivered to all current subscribers", async () => {
+  const orchestra = new FakeOrchestra();
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
+  const bus: Bus = {
+    id: "bus-1",
+    name: "bus-1",
+    state: "open",
+    messages: [
+      { id: "message-1", from: "agent-1", message: "Delivered fact." },
+      { id: "message-2", from: "agent-2", message: "Unread fact." },
+      { id: "message-3", from: "agent-1", message: "Own fact." },
+    ],
+  };
+  orchestra.buses.set(bus.id, bus);
+  store.saveBus(bus);
+  store.saveBusSubscription({
+    id: createBusSubscriptionId(bus.id, "agent", "agent-1"),
+    busId: bus.id,
+    subscriberId: "agent-1",
+    subscriberKind: "agent",
+    lastDeliveredMessageId: "message-1",
+  });
+
+  const output = await tool.execute({ action: "compact", name: bus.name });
+
+  assert.equal(output.message, "Compacted bus bus-1; removed 2 delivered message(s), kept 1.");
+  assert.deepEqual(
+    output.bus?.messages.map((message) => message.id),
+    ["message-2"],
+  );
+  assert.deepEqual(
+    store.getBus(bus.id)?.messages.map((message) => message.id),
+    ["message-2"],
+  );
+});
+
+test("bus compact removes all messages when there are no current subscribers", async () => {
+  const orchestra = new FakeOrchestra();
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
+  const bus: Bus = {
+    id: "bus-1",
+    name: "bus-1",
+    state: "open",
+    messages: [{ id: "message-1", from: "main", message: "Old fact." }],
+  };
+  orchestra.buses.set(bus.id, bus);
+  store.saveBus(bus);
+
+  const output = await tool.execute({ action: "compact", name: bus.name });
+
+  assert.equal(output.message, "Compacted bus bus-1; removed 1 delivered message(s), kept 0.");
+  assert.deepEqual(output.bus?.messages, []);
+});
+
 test("bus subscribe and unsubscribe manage the main bus subscription", async () => {
   const orchestra = new FakeOrchestra();
   const store = new InMemoryAgentStore();

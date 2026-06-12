@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import {
   createBusSubscription,
   createBusSubscriptionId,
+  isBusMessageDelivered,
   maxMessageId,
   type Bus,
   type BusMessage,
@@ -34,6 +35,10 @@ export type BusInput =
   | {
       action: "unsubscribe";
       name: string;
+    }
+  | {
+      action: "compact";
+      name: string;
     };
 
 export interface BusOutput {
@@ -54,8 +59,8 @@ export interface BusToolDeps {
 }
 
 const BusActionParams = Type.String({
-  enum: ["create", "status", "publish", "subscribe", "unsubscribe"],
-  description: "Manage shared buses: create/status/publish/subscribe/unsubscribe.",
+  enum: ["create", "status", "publish", "subscribe", "unsubscribe", "compact"],
+  description: "Manage shared buses: create/status/publish/subscribe/unsubscribe/compact.",
 });
 
 const BusToolParams = Type.Object(
@@ -102,6 +107,14 @@ export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
         const subscriptionId = createBusSubscriptionId(bus.id, "main", "main");
         store.deleteBusSubscription(subscriptionId);
         return { bus, message: `Unsubscribed main from bus ${formatBusLabel(bus)}.` };
+      }
+
+      if (input.action === "compact") {
+        const compacted = compactDeliveredBusMessages(store, bus);
+        return {
+          bus: compacted.bus,
+          message: `Compacted bus ${formatBusLabel(bus)}; removed ${compacted.removedCount} delivered message(s), kept ${compacted.bus.messages.length}.`,
+        };
       }
 
       const published = await orchestra.publishBus(input.name, input.message, input.from ?? "main");
@@ -155,6 +168,11 @@ function toBusInput(params: RawBusParams): BusInput {
     return { action: "unsubscribe", name: params.name };
   }
 
+  if (params.action === "compact") {
+    if (!params.name) throw new Error("bus action=compact requires name.");
+    return { action: "compact", name: params.name };
+  }
+
   if (!params.name) throw new Error("bus action=publish requires name.");
   if (!params.message) throw new Error("bus action=publish requires message.");
   return { action: "publish", name: params.name, message: params.message, from: "main" };
@@ -172,6 +190,29 @@ function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
     });
   store.saveBusSubscription(subscription);
   return subscription;
+}
+
+function compactDeliveredBusMessages(store: AgentStore, bus: Bus): { bus: Bus; removedCount: number } {
+  const subscriptions = store.listBusSubscriptions({
+    busId: bus.id,
+    subscriberId: undefined,
+    subscriberKind: undefined,
+  });
+  const messages = bus.messages.filter((message) => !isBusMessageCompactable(message, subscriptions));
+  const removedCount = bus.messages.length - messages.length;
+  if (removedCount === 0) return { bus, removedCount };
+
+  const compactedBus = { ...bus, messages };
+  store.saveBus(compactedBus);
+  return { bus: compactedBus, removedCount };
+}
+
+function isBusMessageCompactable(message: BusMessage, subscriptions: BusSubscription[]): boolean {
+  if (subscriptions.length === 0) return true;
+  return subscriptions.every((subscription) => {
+    if (subscription.subscriberId === message.from) return true;
+    return isBusMessageDelivered(subscription, message.id);
+  });
 }
 
 function formatBusNotFound(name: string): string {
@@ -205,7 +246,7 @@ function formatBusLabel(bus: Bus): string {
 }
 
 type RawBusParams = {
-  action: "create" | "status" | "publish" | "subscribe" | "unsubscribe";
+  action: "create" | "status" | "publish" | "subscribe" | "unsubscribe" | "compact";
   name?: string;
   message?: string;
 };
