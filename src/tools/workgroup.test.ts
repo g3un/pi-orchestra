@@ -175,6 +175,31 @@ test("workgroup create does not require a pre-existing bus", async () => {
   assert.equal(orchestra.getBus(output.workgroup.busId)?.state, "open");
 });
 
+test("workgroup create validates names before creating the internal bus", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  await assert.rejects(
+    () => tool.execute({ action: "create", name: " ", goal: "Invalid empty workgroup name." }),
+    /Workgroup name must not be empty\./,
+  );
+  assert.equal(orchestra.buses.size, 0);
+
+  const longName = "a".repeat(61);
+  await assert.rejects(
+    () => tool.execute({ action: "create", name: longName, goal: "Invalid long workgroup name." }),
+    /Workgroup name must be 60 characters or fewer\./,
+  );
+  assert.equal(orchestra.buses.size, 0);
+
+  await tool.execute({ action: "create", name: "duplicate-workgroup", goal: "Create once." });
+  await assert.rejects(
+    () => tool.execute({ action: "create", name: "duplicate-workgroup", goal: "Create twice." }),
+    /Workgroup name "duplicate-workgroup" is already in use\./,
+  );
+  assert.deepEqual([...orchestra.buses.keys()], ["duplicate-workgroup-bus"]);
+});
+
 test("workgroup member name checks are global", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));

@@ -10,7 +10,7 @@ import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
-import { createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
+import { createWorkgroupIdentity, createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
 import {
   closeAgentRuns,
   createEntityIdentity,
@@ -369,13 +369,11 @@ async function spawnWorkflowWorkgroup(
   if (workflow.state !== "running") throw new Error(`Workflow ${workflow.name} is ${workflow.state}.`);
 
   validateLeaderName(input.leader.name, "Workflow workgroup leader", deps.store.listRuns());
-  validateWorkgroupName(input.name, deps.store.listWorkgroups());
+  const identity = createWorkgroupIdentity(input.name, deps.store.listWorkgroups(), "Workflow workgroup");
 
-  const bus = deps.orchestra.createBus({ name: `${workflow.name}-${input.name}-bus` });
+  const bus = deps.orchestra.createBus({ name: `${workflow.name}-${identity.name}-bus` });
   const workgroup = createWorkgroupRun({
-    name: input.name,
-    autoNameSeed: `${workflow.name}-${input.name}-workgroup`,
-    existingWorkgroups: deps.store.listWorkgroups(),
+    identity,
     busId: bus.id,
     goal: buildWorkflowWorkgroupGoal(deps.store, workflow, input.goal),
     leaderRunId: null,
@@ -549,14 +547,6 @@ function validateLeaderName(name: string, label: string, existingRuns: AgentRun[
     if (run.id === normalizedName || run.name === normalizedName) {
       throw new Error(`${label} name "${normalizedName}" is already in use.`);
     }
-  }
-}
-
-function validateWorkgroupName(name: string, existingWorkgroups: WorkgroupRun[]): void {
-  const normalizedName = normalizeEntityName(name, "Workflow workgroup");
-
-  if (existingWorkgroups.some((workgroup) => workgroup.id === normalizedName || workgroup.name === normalizedName)) {
-    throw new Error(`Workflow workgroup name "${normalizedName}" is already in use.`);
   }
 }
 

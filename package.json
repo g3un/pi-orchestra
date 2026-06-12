@@ -1,6 +1,6 @@
 {
   "name": "@g3un/pi-orchestra",
-  "version": "0.10.9",
+  "version": "0.10.10",
   "description": "Subagent orchestration tools for Pi.",
   "keywords": [
     "orchestration",

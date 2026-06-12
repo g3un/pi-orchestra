@@ -9,7 +9,7 @@ import {
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
-import { createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
+import { createWorkgroupIdentity, createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
 import { closeAgentRuns, formatError, normalizeEntityName, pluralize, resolveRunName } from "../utils.ts";
 import {
   AgentProfileParams,
@@ -209,12 +209,11 @@ export function createWorkgroupTool({
 
     async execute(input) {
       if (input.action === "create") {
-        const bus = orchestra.createBus({ name: `${input.name}-bus` });
+        const identity = createWorkgroupIdentity(input.name, store.listWorkgroups());
+        const bus = orchestra.createBus({ name: `${identity.name}-bus` });
 
         const workgroup = createWorkgroupRun({
-          name: input.name,
-          autoNameSeed: `${bus.name}-workgroup`,
-          existingWorkgroups: store.listWorkgroups(),
+          identity,
           busId: bus.id,
           goal: input.goal,
           leaderRunId: null,

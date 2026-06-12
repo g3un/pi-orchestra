@@ -1,4 +1,4 @@
-import { createEntityIdentity } from "../utils.ts";
+import { createEntityIdentity, type NamedEntity } from "../utils.ts";
 import type { AgentResult, AgentRun } from "./subagent.ts";
 
 export type WorkgroupState = "running" | "closing" | "closed";
@@ -16,19 +16,26 @@ export interface WorkgroupRun {
   createdAtMs: number;
 }
 
+export const WORKGROUP_NAME_MAX_LENGTH = 60;
+
 export interface CreateWorkgroupRunOptions {
-  name: string | undefined;
-  autoNameSeed: string;
-  existingWorkgroups: WorkgroupRun[];
+  identity: NamedEntity;
   busId: string;
   goal: string;
   leaderRunId: AgentRun["id"] | null;
 }
 
+export function createWorkgroupIdentity(
+  name: string,
+  existingWorkgroups: WorkgroupRun[],
+  entityLabel = "Workgroup",
+): NamedEntity {
+  return createEntityIdentity(name, "workgroup", existingWorkgroups, entityLabel, WORKGROUP_NAME_MAX_LENGTH);
+}
+
 export function createWorkgroupRun(options: CreateWorkgroupRunOptions): WorkgroupRun {
-  const identity = createEntityIdentity(options.name, options.autoNameSeed, options.existingWorkgroups, "Workgroup");
   return {
-    ...identity,
+    ...options.identity,
     busId: options.busId,
     goal: options.goal,
     leaderRunId: options.leaderRunId,

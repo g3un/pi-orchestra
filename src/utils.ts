@@ -29,9 +29,10 @@ export function createEntityIdentity(
   autoSeed: string,
   existingEntities: NamedEntity[],
   entityLabel: string,
+  maxLength = 64,
 ): NamedEntity {
   if (requestedName !== undefined) {
-    const name = normalizeEntityName(requestedName, entityLabel);
+    const name = normalizeEntityName(requestedName, entityLabel, maxLength);
     if (hasEntityNameConflict(name, existingEntities))
       throw new Error(`${entityLabel} name "${name}" is already in use.`);
     return { id: createUuid7(), name };
