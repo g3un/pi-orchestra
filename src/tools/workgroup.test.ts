@@ -6,7 +6,7 @@ import type { WorkgroupRun } from "../core/workgroup.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { slugify } from "../utils.ts";
-import { createWorkgroupTool, type WorkgroupOutput, type WorkgroupToolDeps } from "./workgroup.ts";
+import { closeWorkgroupRun, createWorkgroupTool, type WorkgroupOutput, type WorkgroupToolDeps } from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
   name: "security",
@@ -401,6 +401,47 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
   assert.deepEqual(orchestra.closedIds, ["cleanup-review", "cleanup-lead"]);
 });
 
+test("workgroup close cleans up runs added during cleanup", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const closeDelay = createDeferred();
+  const created = await tool.execute({
+    action: "create",
+    name: "late-cleanup-workgroup",
+    goal: "Close runs that appear during cleanup.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const initialRun = agentRun({ id: "initial-member", name: "initial-member", busId: workgroup.busId });
+  const lateLeaderRun = agentRun({ id: "late-leader", name: "late-leader", busId: workgroup.busId });
+  orchestra.runs.set(initialRun.id, initialRun);
+  orchestra.runs.set(lateLeaderRun.id, lateLeaderRun);
+  orchestra.store.saveWorkgroup({ ...workgroup, memberRunIds: [initialRun.id] });
+  orchestra.closeDelay = closeDelay.promise;
+  orchestra.onClose = (id) => {
+    if (id !== initialRun.id) return;
+    const latestWorkgroup = orchestra.store.getWorkgroup(workgroup.id);
+    assert.ok(latestWorkgroup);
+    orchestra.store.saveWorkgroup({ ...latestWorkgroup, leaderRunId: lateLeaderRun.id });
+    closeDelay.resolve();
+  };
+
+  const closedWorkgroup = await closeWorkgroupRun(
+    orchestra,
+    orchestra.store,
+    requireWorkgroup(orchestra, workgroup.id),
+    {
+      includeLeader: true,
+      result: { status: "blocked", summary: "Stopping." },
+    },
+  );
+
+  assert.equal(closedWorkgroup.state, "closed");
+  assert.equal(closedWorkgroup.leaderRunId, lateLeaderRun.id);
+  assert.deepEqual(orchestra.closedIds, [initialRun.id, lateLeaderRun.id]);
+  assert.equal(orchestra.runs.get(initialRun.id)?.state, "closed");
+  assert.equal(orchestra.runs.get(lateLeaderRun.id)?.state, "closed");
+});
+
 test("workgroup cancel preserves already finished results", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
@@ -610,6 +651,7 @@ class FakeOrchestra implements OrchestraApi {
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; options: { name: string | undefined } }> = [];
   closedIds: string[] = [];
   spawnDelay: Promise<void> | undefined;
+  closeDelay: Promise<void> | undefined;
   onClose: ((id: string) => void) | undefined;
   onSpawnStarted: (() => void) | undefined;
 
@@ -689,6 +731,8 @@ class FakeOrchestra implements OrchestraApi {
   async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
     this.closedIds.push(id);
     this.onClose?.(id);
+    if (this.closeDelay) await this.closeDelay;
+
     const run = this.runs.get(id);
     if (!run) return undefined;
 
@@ -696,6 +740,27 @@ class FakeOrchestra implements OrchestraApi {
     this.runs.set(id, closedRun);
     return closedRun;
   }
+}
+
+function requireWorkgroup(orchestra: FakeOrchestra, id: string): WorkgroupRun {
+  const workgroup = orchestra.store.getWorkgroup(id);
+  assert.ok(workgroup);
+  return workgroup;
+}
+
+function agentRun(overrides: Partial<AgentRun> = {}): AgentRun {
+  const id = overrides.id ?? "agent-1";
+  return {
+    id,
+    name: overrides.name ?? id,
+    profile: overrides.profile ?? securityProfile,
+    task: overrides.task ?? "Inspect the code.",
+    busId: overrides.busId ?? "bus-1",
+    state: "running",
+    ...overrides,
+    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
+    result: overrides.result ?? null,
+  } as AgentRun;
 }
 
 function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {

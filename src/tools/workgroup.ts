@@ -364,10 +364,7 @@ export async function closeWorkgroupRun(
   options: CloseWorkgroupRunOptions,
 ): Promise<WorkgroupRun> {
   const latestWorkgroup = store.getWorkgroup(workgroup.id) ?? workgroup;
-  const runIds = [
-    ...latestWorkgroup.memberRunIds,
-    ...(options.includeLeader && latestWorkgroup.leaderRunId ? [latestWorkgroup.leaderRunId] : []),
-  ];
+  const runIds = collectWorkgroupCloseRunIds(latestWorkgroup, options.includeLeader);
 
   if (latestWorkgroup.state === "closed") {
     await closeAgentRuns(orchestra, runIds);
@@ -382,9 +379,19 @@ export async function closeWorkgroupRun(
   orchestra.closeBus(latestWorkgroup.busId);
 
   const latestAfterCleanup = store.getWorkgroup(workgroup.id) ?? closingWorkgroup;
+  const initiallyClosedRunIds = new Set(runIds);
+  const addedRunIds = collectWorkgroupCloseRunIds(latestAfterCleanup, options.includeLeader).filter(
+    (runId) => !initiallyClosedRunIds.has(runId),
+  );
+  await closeAgentRuns(orchestra, addedRunIds);
+
   const closedWorkgroup: WorkgroupRun = { ...latestAfterCleanup, state: "closed", result };
   store.saveWorkgroup(closedWorkgroup);
   return closedWorkgroup;
+}
+
+function collectWorkgroupCloseRunIds(workgroup: WorkgroupRun, includeLeader: boolean): string[] {
+  return [...workgroup.memberRunIds, ...(includeLeader && workgroup.leaderRunId ? [workgroup.leaderRunId] : [])];
 }
 
 async function cancelWorkgroup(
