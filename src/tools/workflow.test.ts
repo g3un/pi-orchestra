@@ -3,6 +3,7 @@ import { test } from "vitest";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { isTerminalAgentState, slugify } from "../utils.ts";
 import { createWorkflowTool, type WorkflowTool, type WorkflowToolOutput } from "./workflow.ts";
@@ -401,6 +402,35 @@ test("workflow cancel closes active workflow resources with a cancellation resul
   assert.equal(store.getBus("research-flow-collect-bus")?.state, "closed");
   assert.equal(orchestra.runs.get("flow-lead")?.state, "closed");
   assert.equal(orchestra.runs.get("collect-lead")?.state, "closed");
+});
+
+test("workflow cancel finishes cleanup for closing workflows", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  const workflow: WorkflowRun = {
+    id: "stale-flow",
+    name: "stale-flow",
+    goal: "Recover a stale closing workflow.",
+    startedAtMs: 1_700_000_000_000,
+    state: "closing",
+    busId: "stale-flow-bus",
+    leaderRunId: "flow-lead",
+    workgroupIds: [],
+    statusLine: null,
+    result: null,
+  };
+  orchestra.createBus({ name: "stale-flow-bus" });
+  orchestra.runs.set("flow-lead", run({ id: "flow-lead", name: "flow-lead", busId: "stale-flow-bus" }));
+  store.saveWorkflow(workflow);
+
+  const output = await workflowTool.execute({ action: "cancel", workflowId: "stale-flow" });
+
+  assert.equal(output.action, "cancel");
+  assert.equal(output.workflow.state, "closed");
+  assert.deepEqual(output.workflow.result, { status: "blocked", summary: "Workflow cancelled." });
+  assert.equal(store.getRun("flow-lead")?.state, "closed");
+  assert.equal(store.getBus("stale-flow-bus")?.state, "closed");
 });
 
 test("workflow status returns latest adaptive workflow by name", async () => {

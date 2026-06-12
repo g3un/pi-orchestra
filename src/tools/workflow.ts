@@ -108,6 +108,7 @@ export interface WorkflowTool {
   name: "workflow";
   execute(input: WorkflowInput): Promise<WorkflowToolOutput>;
   formatOutput(output: WorkflowToolOutput): string;
+  dispose(): void;
 }
 
 export interface WorkflowToolDeps {
@@ -192,12 +193,16 @@ const WorkflowToolParams = Type.Object(
 
 export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): WorkflowTool {
   const runnerTasks = new Map<string, Promise<void>>();
+  let disposed = false;
 
   const startRunner = (workflowId: string) => {
-    if (runnerTasks.has(workflowId)) return;
+    if (disposed || runnerTasks.has(workflowId)) return;
 
-    const task = runWorkflow(workflowId, { orchestra, store })
-      .catch((error) => failWorkflow(store, workflowId, formatError(error)))
+    const task = runWorkflow(workflowId, { orchestra, store, isDisposed: () => disposed })
+      .catch((error) => {
+        if (disposed) return;
+        failWorkflow(store, workflowId, formatError(error));
+      })
       .finally(() => runnerTasks.delete(workflowId));
     runnerTasks.set(workflowId, task);
   };
@@ -205,6 +210,10 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
   return {
     name: "workflow",
     formatOutput: (output) => formatWorkflowOutputMessage(output, store),
+    dispose() {
+      disposed = true;
+      runnerTasks.clear();
+    },
 
     async execute(input) {
       if (input.action === "create") {
@@ -293,11 +302,12 @@ export function defineWorkflowPiTool(
 interface WorkflowRunnerDeps {
   orchestra: OrchestraApi;
   store: AgentStore;
+  isDisposed(): boolean;
 }
 
 async function startWorkflow(
   input: Extract<WorkflowInput, { action: "create" }>,
-  deps: WorkflowRunnerDeps,
+  deps: WorkflowToolDeps,
 ): Promise<{ workflow: WorkflowRun; bus: Bus }> {
   validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
   validateLeaderTool(input.leader.profile, "workflow", "Workflow leader");
@@ -344,6 +354,7 @@ async function startWorkflow(
 
 async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promise<void> {
   for (;;) {
+    if (deps.isDisposed()) return;
     const workflow = deps.store.getWorkflow(workflowId);
     if (!workflow || workflow.state === "closed") return;
     if (workflow.state === "closing") {
@@ -360,6 +371,7 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
       terminalRunEvent(deps.store, workflow.leaderRunId).then((run) => ({ type: "leader" as const, run })),
     ]);
 
+    if (deps.isDisposed()) return;
     const latestWorkflow = deps.store.getWorkflow(workflowId);
     if (!latestWorkflow || latestWorkflow.state === "closed") return;
 
@@ -378,7 +390,7 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
 async function spawnWorkflowWorkgroup(
   workflow: WorkflowRun,
   input: Extract<WorkflowInput, { action: "spawn_workgroup" }>,
-  deps: WorkflowRunnerDeps,
+  deps: WorkflowToolDeps,
 ): Promise<Extract<WorkflowToolOutput, { action: "spawn_workgroup" }>> {
   if (workflow.state !== "running") throw new Error(`Workflow ${workflow.name} is ${workflow.state}.`);
 
@@ -531,9 +543,14 @@ async function finalizeClosingWorkflow(
 async function closeWorkflow(orchestra: OrchestraApi, store: AgentStore, workflow: WorkflowRun): Promise<WorkflowRun> {
   const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
   if (latestWorkflow.state === "closed") return latestWorkflow;
-  if (latestWorkflow.state === "closing") return latestWorkflow;
 
   const result = latestWorkflow.result ?? { status: "blocked" as const, summary: "Workflow cancelled." };
+  if (latestWorkflow.state === "closing") {
+    const closingWorkflow: WorkflowRun = { ...latestWorkflow, result };
+    if (!latestWorkflow.result) store.saveWorkflow(closingWorkflow);
+    return await finalizeClosingWorkflow(orchestra, store, closingWorkflow);
+  }
+
   const closingWorkflow: WorkflowRun = { ...latestWorkflow, state: "closing", result };
   store.saveWorkflow(closingWorkflow);
   await closeWorkflowResources(orchestra, store, closingWorkflow);

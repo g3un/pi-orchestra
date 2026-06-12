@@ -11,6 +11,7 @@ import {
   defineWorkgroupPiTool,
   type WorkgroupTool,
 } from "../tools/workgroup.ts";
+import { closeRuntimeOwnedScopes } from "./lifecycle.ts";
 import { ORCHESTRA_EVENT_CUSTOM_TYPE, OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
 import { formatOrchestraRecoveryReport } from "./recovery.ts";
 import { WorkflowMonitorController } from "./workflow-monitor.ts";
@@ -121,6 +122,8 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     dispose() {
       this.workflowMonitor.dispose();
       this.orchestraEvents.dispose();
+      this.workflowTool.dispose();
+      closeRuntimeOwnedScopes(store, orchestra, this.runtime.listRunIds());
       this.runtime.dispose();
       store.dispose();
     },

@@ -456,7 +456,7 @@ test("pi runtime dispose closes runs before disposing sessions and does not prom
   await assert.rejects(() => runtime.message(run.id, "Too late."), /PiAgentRuntime is disposed\./);
 });
 
-test("pi runtime dispose preserves completed run status", async () => {
+test("pi runtime dispose closes completed live runs while preserving results", async () => {
   const store = new InMemoryAgentStore();
   store.saveBus({ id: "bus-1", name: "Bus 1", state: "open", messages: [] });
   const session = queueSession();
@@ -471,7 +471,8 @@ test("pi runtime dispose preserves completed run status", async () => {
 
   runtime.dispose();
 
-  assert.equal(store.getRun(run.id)?.state, "success");
+  assert.equal(store.getRun(run.id)?.state, "closed");
+  assert.deepEqual(store.getRun(run.id)?.result, { status: "success", summary: "Done." });
   assert.equal(session.disposed, true);
 });
 

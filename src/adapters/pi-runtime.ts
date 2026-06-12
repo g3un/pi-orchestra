@@ -175,6 +175,10 @@ export class PiAgentRuntime implements AgentRuntime {
     return busMessage;
   }
 
+  listRunIds(): string[] {
+    return [...this.entries.keys()];
+  }
+
   async close(id: string): Promise<AgentRun | undefined> {
     const run = this.store.getRun(id);
     if (!run) return undefined;
@@ -201,7 +205,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const entries = [...this.entries.entries()];
     for (const [id] of entries) {
       const run = this.store.getRun(id);
-      if (!run || run.state !== "running") continue;
+      if (!run || run.state === "closed") continue;
 
       this.store.saveRun({ ...run, state: "closed" });
       this.deleteAgentBusSubscriptions(id);
