@@ -79,7 +79,9 @@ export class WorkflowMonitorController {
   private safeRender(): boolean {
     try {
       return this.render();
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.ctx?.ui.notify(`Pi-orchestra workflow monitor stopped: ${message}`, "error");
       this.dispose();
       return false;
     }

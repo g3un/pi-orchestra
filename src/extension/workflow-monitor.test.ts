@@ -81,6 +81,24 @@ test("workflow monitor controller updates the widget and clears it when workflow
   assert.deepEqual(statuses, []);
 });
 
+test("workflow monitor reports and stops when a coalesced render throws", async () => {
+  const store = new ThrowingWorkflowStore();
+  const workflow = workflowRun({ leaderRunId: "flow-leader", statusLine: null });
+  store.saveRun(run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" }));
+  store.saveWorkflow(workflow);
+  const widgets: Array<string[] | undefined> = [];
+  const notifications: string[] = [];
+  const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+
+  assert.equal(monitor.show(workflowMonitorContext(widgets, [], notifications)), true);
+  store.throwOnList = true;
+  store.saveWorkflow({ ...workflow, statusLine: "Trigger render failure." });
+  await flushMicrotasks();
+
+  assert.deepEqual(notifications, ["error:Pi-orchestra workflow monitor stopped: listWorkflows failed"]);
+  assert.equal(widgets.at(-1), undefined);
+});
+
 test("workflow monitor coalesces store updates before rerendering", async () => {
   const store = new CountingWorkflowStore();
   const workflow = workflowRun({ leaderRunId: "flow-leader", statusLine: null });
@@ -112,6 +130,15 @@ test("workflow monitor returns no lines when there are no active workflows", () 
   assert.deepEqual(buildWorkflowMonitorLines(store), []);
 });
 
+class ThrowingWorkflowStore extends InMemoryAgentStore {
+  throwOnList = false;
+
+  override listWorkflows(): WorkflowRun[] {
+    if (this.throwOnList) throw new Error("listWorkflows failed");
+    return super.listWorkflows();
+  }
+}
+
 class CountingWorkflowStore extends InMemoryAgentStore {
   listWorkflowsCalls = 0;
 
@@ -128,6 +155,7 @@ async function flushMicrotasks(): Promise<void> {
 function workflowMonitorContext(
   widgets: Array<string[] | undefined>,
   statuses: Array<string | undefined>,
+  notifications: string[] = [],
 ): ExtensionContext {
   return {
     hasUI: true,
@@ -138,6 +166,9 @@ function workflowMonitorContext(
       },
       setStatus(_key: string, text: string | undefined) {
         statuses.push(text);
+      },
+      notify(message: string, type: string) {
+        notifications.push(`${type}:${message}`);
       },
     },
   } as unknown as ExtensionContext;

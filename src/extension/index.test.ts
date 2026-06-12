@@ -202,7 +202,11 @@ test("extension session shutdown closes runtime-owned active workflow scopes", a
       ctx,
     );
 
-    for (const handler of registeredHandlers.session_shutdown ?? []) await handler({}, ctx);
+    const unhandledRejections = await captureUnhandledRejections(async () => {
+      for (const handler of registeredHandlers.session_shutdown ?? []) await handler({}, ctx);
+    });
+
+    assert.deepEqual(unhandledRejections, []);
 
     const store = createProjectSqliteAgentStore(cwd);
     try {
@@ -279,6 +283,20 @@ class FakeSession {
   dispose(): void {
     this.disposed = true;
     this.isStreaming = false;
+  }
+}
+
+async function captureUnhandledRejections(action: () => Promise<void>): Promise<unknown[]> {
+  const rejections: unknown[] = [];
+  const handler = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", handler);
+  try {
+    await action();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    return rejections;
+  } finally {
+    process.off("unhandledRejection", handler);
   }
 }
 

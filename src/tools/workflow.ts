@@ -193,12 +193,23 @@ const WorkflowToolParams = Type.Object(
 
 export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): WorkflowTool {
   const runnerTasks = new Map<string, Promise<void>>();
+  const runnerDisposeCallbacks = new Set<() => void>();
   let disposed = false;
+
+  const onRunnerDispose = (callback: () => void): (() => void) => {
+    if (disposed) {
+      callback();
+      return () => undefined;
+    }
+
+    runnerDisposeCallbacks.add(callback);
+    return () => runnerDisposeCallbacks.delete(callback);
+  };
 
   const startRunner = (workflowId: string) => {
     if (disposed || runnerTasks.has(workflowId)) return;
 
-    const task = runWorkflow(workflowId, { orchestra, store, isDisposed: () => disposed })
+    const task = runWorkflow(workflowId, { orchestra, store, isDisposed: () => disposed, onDispose: onRunnerDispose })
       .catch((error) => {
         if (disposed) return;
         failWorkflow(store, workflowId, formatError(error));
@@ -212,6 +223,8 @@ export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): Work
     formatOutput: (output) => formatWorkflowOutputMessage(output, store),
     dispose() {
       disposed = true;
+      for (const callback of Array.from(runnerDisposeCallbacks)) callback();
+      runnerDisposeCallbacks.clear();
       runnerTasks.clear();
     },
 
@@ -303,6 +316,7 @@ interface WorkflowRunnerDeps {
   orchestra: OrchestraApi;
   store: AgentStore;
   isDisposed(): boolean;
+  onDispose(callback: () => void): () => void;
 }
 
 async function startWorkflow(
@@ -364,11 +378,11 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
     if (!workflow.leaderRunId) return;
 
     const outcome = await Promise.race([
-      workflowNotRunningEvent(deps.store, workflowId).then((updatedWorkflow) => ({
+      workflowNotRunningEvent(deps, workflowId).then((updatedWorkflow) => ({
         type: "workflow" as const,
         workflow: updatedWorkflow,
       })),
-      terminalRunEvent(deps.store, workflow.leaderRunId).then((run) => ({ type: "leader" as const, run })),
+      terminalRunEvent(deps, workflow.leaderRunId).then((run) => ({ type: "leader" as const, run })),
     ]);
 
     if (deps.isDisposed()) return;
@@ -382,7 +396,9 @@ async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promis
       return;
     }
 
-    await finishWorkflowFromLeader(deps.orchestra, deps.store, latestWorkflow, outcome.run);
+    if (outcome.type === "leader" && outcome.run) {
+      await finishWorkflowFromLeader(deps.orchestra, deps.store, latestWorkflow, outcome.run);
+    }
     return;
   }
 }
@@ -919,41 +935,57 @@ function formatWorkflowWorkgroupCreatedMessage(
   ].join("\n");
 }
 
-function workflowNotRunningEvent(store: AgentStore, workflowId: string): Promise<WorkflowRun> {
-  const initialWorkflow = store.getWorkflow(workflowId);
+function workflowNotRunningEvent(deps: WorkflowRunnerDeps, workflowId: string): Promise<WorkflowRun | undefined> {
+  const initialWorkflow = deps.store.getWorkflow(workflowId);
   if (!initialWorkflow || initialWorkflow.state !== "running") {
-    return Promise.resolve(initialWorkflow ?? requireWorkflow(store, workflowId));
+    return Promise.resolve(initialWorkflow ?? requireWorkflow(deps.store, workflowId));
   }
 
   return new Promise((resolve) => {
+    let settled = false;
     let unsubscribe: () => void = () => undefined;
-    unsubscribe = store.subscribeWorkflows(
+    let unregisterDispose: () => void = () => undefined;
+    const finish = (workflow: WorkflowRun | undefined) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      unregisterDispose();
+      resolve(workflow);
+    };
+    unsubscribe = deps.store.subscribeWorkflows(
       (workflow) => {
         if (workflow.state === "running") return;
-
-        unsubscribe();
-        resolve(workflow);
+        finish(workflow);
       },
       (workflow) => workflow.id === workflowId,
     );
+    unregisterDispose = deps.onDispose(() => finish(undefined));
   });
 }
 
-function terminalRunEvent(store: AgentStore, runId: string): Promise<AgentRun> {
-  const initialRun = store.getRun(runId);
+function terminalRunEvent(deps: WorkflowRunnerDeps, runId: string): Promise<AgentRun | undefined> {
+  const initialRun = deps.store.getRun(runId);
   if (initialRun && isAgentRunFinished(initialRun)) return Promise.resolve(initialRun);
 
   return new Promise((resolve) => {
+    let settled = false;
     let unsubscribe: () => void = () => undefined;
-    unsubscribe = store.subscribeRuns(
+    let unregisterDispose: () => void = () => undefined;
+    const finish = (run: AgentRun | undefined) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      unregisterDispose();
+      resolve(run);
+    };
+    unsubscribe = deps.store.subscribeRuns(
       (run) => {
         if (!isAgentRunFinished(run)) return;
-
-        unsubscribe();
-        resolve(run);
+        finish(run);
       },
       (run) => run.id === runId,
     );
+    unregisterDispose = deps.onDispose(() => finish(undefined));
   });
 }
 

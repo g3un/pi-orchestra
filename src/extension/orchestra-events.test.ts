@@ -408,6 +408,48 @@ test("orchestra event controller falls back to main when a workflow child workgr
   assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
 });
 
+test("orchestra event controller does not route workflow workgroup leader failures as parent subagent finish", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const leaderFailures: WorkgroupLeaderFailedEvent[] = [];
+  const flowLeader = run({ id: "flow-leader", name: "flow-leader", busId: "workflow-bus", state: "running" });
+  const groupLeader = run({
+    id: "group-leader",
+    name: "group-leader",
+    busId: "child-bus",
+    parentRunId: flowLeader.id,
+    state: "running",
+  });
+  const workgroup = workgroupRun({
+    id: "child-workgroup",
+    busId: "child-bus",
+    leaderRunId: groupLeader.id,
+    state: "running",
+  });
+  store.saveRun(flowLeader);
+  store.saveRun(groupLeader);
+  store.saveWorkgroup(workgroup);
+  store.saveWorkflow(
+    workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: flowLeader.id, workgroupIds: [workgroup.id] }),
+  );
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    onWorkgroupLeaderFailed: (event) => leaderFailures.push(event),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...groupLeader, state: "failed", result: { status: "failed", summary: "Leader failed." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 0);
+  assert.equal(leaderFailures.length, 1);
+  assert.equal(leaderFailures[0]?.workgroup.id, workgroup.id);
+  assert.equal(leaderFailures[0]?.run.runId, groupLeader.id);
+});
+
 test("orchestra event controller reports running workgroup leader failures", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();
