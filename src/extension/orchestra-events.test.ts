@@ -411,6 +411,71 @@ test("orchestra event controller does not report workgroup leader completion aft
   assert.equal(sent.batches[0]?.events[0]?.type, "workgroup.finished");
 });
 
+test("orchestra event controller routes child-spawned subagent finishes to parent runs on workflow buses", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const parentRun = run({ id: "parent", name: "parent", busId: "workflow-bus", state: "running" });
+  const childRun = run({
+    id: "child",
+    name: "child",
+    busId: "workflow-bus",
+    parentRunId: parentRun.id,
+    state: "running",
+  });
+  store.saveWorkflow(workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: parentRun.id }));
+  store.saveRun(parentRun);
+  store.saveRun(childRun);
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...childRun, state: "success", result: { status: "success", summary: "Child done." } });
+
+  assert.equal(sent.batches.length, 0);
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0]?.runId, parentRun.id);
+  assert.equal(agentEvents[0]?.events[0]?.type, "subagent.finished");
+});
+
+test("orchestra event controller falls back to main for child-spawned subagents with inactive parents", () => {
+  const store = new InMemoryAgentStore();
+  const sent = createEventSink();
+  const agentEvents: Array<{ runId: string; events: OrchestraMainEvent[]; content: string }> = [];
+  const parentRun = run({
+    id: "parent",
+    name: "parent",
+    busId: "workflow-bus",
+    state: "failed",
+    result: { status: "failed", summary: "Parent failed." },
+  });
+  const childRun = run({
+    id: "child",
+    name: "child",
+    busId: "workflow-bus",
+    parentRunId: parentRun.id,
+    state: "running",
+  });
+  store.saveWorkflow(workflowRun({ state: "running", busId: "workflow-bus", leaderRunId: parentRun.id }));
+  store.saveRun(parentRun);
+  store.saveRun(childRun);
+  new OrchestraEventController({
+    store,
+    sendEvents: sent.send,
+    sendAgentEvents: (runId, events, content) => agentEvents.push({ runId, events, content }),
+    flushDelayMs: 0,
+  });
+
+  store.saveRun({ ...childRun, state: "success", result: { status: "success", summary: "Child done." } });
+
+  assert.equal(agentEvents.length, 0);
+  assert.equal(sent.batches.length, 1);
+  assert.equal(sent.batches[0]?.events[0]?.type, "subagent.finished");
+});
+
 test("orchestra event controller suppresses workflow-internal run finishes and emits workflow finish", () => {
   const store = new InMemoryAgentStore();
   const sent = createEventSink();

@@ -241,6 +241,17 @@ export class OrchestraEventController {
       return;
     }
 
+    const parentEvent = {
+      type: "subagent.finished" as const,
+      busId: run.busId,
+      run: toAgentRunResult(run),
+    };
+    if (run.parentRunId) {
+      if (this.sendParentRunEvent(run.parentRunId, parentEvent)) return;
+      this.queueEvent(parentEvent);
+      return;
+    }
+
     if (this.isWorkflowBus(run.busId)) return;
 
     const registeredWorkgroup = this.mainWorkgroupsByBusId.get(run.busId);
@@ -309,6 +320,17 @@ export class OrchestraEventController {
     if (!leaderRun || !isAgentRunActive(leaderRun) || !this.sendAgentEvents) return false;
 
     this.sendAgentEvents(leaderRunId, [event], formatOrchestraEvents([event], this.createFormatOptions()));
+    return true;
+  }
+
+  private sendParentRunEvent(
+    parentRunId: string,
+    event: Extract<OrchestraMainEvent, { type: "subagent.finished" }>,
+  ): boolean {
+    const parentRun = this.store.getRun(parentRunId);
+    if (!parentRun || !isAgentRunActive(parentRun) || !this.sendAgentEvents) return false;
+
+    this.sendAgentEvents(parentRunId, [event], formatOrchestraEvents([event], this.createFormatOptions()));
     return true;
   }
 
