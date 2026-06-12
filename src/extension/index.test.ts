@@ -2,10 +2,39 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { beforeEach, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+const codingAgentMocks = vi.hoisted(() => {
+  const state: { sessionIndex: number } = { sessionIndex: 0 };
+  return {
+    state,
+    createAgentSession: vi.fn(),
+    sessionManagerCreate: vi.fn((cwd: string, sessionDir: string) => ({
+      cwd,
+      sessionDir,
+      type: "file",
+      getSessionFile: () => `${sessionDir}/mock-session-${++state.sessionIndex}.jsonl`,
+    })),
+  };
+});
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  defineTool: (definition: ToolDefinition) => definition,
+  createAgentSession: codingAgentMocks.createAgentSession,
+  SessionManager: {
+    create: codingAgentMocks.sessionManagerCreate,
+  },
+}));
+
 import { createProjectSqliteAgentStore, getProjectSqliteStorePath } from "../adapters/sqlite-store.ts";
 import piOrchestraExtension from "./index.ts";
+
+beforeEach(() => {
+  codingAgentMocks.state.sessionIndex = 0;
+  codingAgentMocks.sessionManagerCreate.mockClear();
+  codingAgentMocks.createAgentSession.mockReset();
+  codingAgentMocks.createAgentSession.mockImplementation(async () => ({ session: new FakeSession() }));
+});
 
 test("extension registers the four target-oriented Pi tools", () => {
   const { registeredTools } = registerExtension();
@@ -123,6 +152,78 @@ test("workflow parameters use an OpenAI-compatible root object schema without wa
   assert.equal(parameters.properties.timeoutMs, undefined);
 });
 
+test("extension session shutdown closes runtime-owned active workflow scopes", async () => {
+  const { registeredTools, registeredHandlers } = registerExtension();
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-extension-"));
+  const ctx = createExtensionContext(cwd);
+  const workflow = registeredTools.find((tool) => tool.name === "workflow");
+  assert.ok(workflow);
+
+  try {
+    await workflow.execute(
+      "tool-call-1",
+      {
+        action: "create",
+        name: "shutdown-flow",
+        goal: "Keep shutdown cleanup deterministic.",
+        leader: {
+          name: "flow-leader",
+          profile: {
+            name: "flow-leader-profile",
+            systemPrompt: "Lead the workflow.",
+            tools: ["workflow"],
+          },
+          task: "Coordinate the shutdown cleanup workflow.",
+        },
+      },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+    await workflow.execute(
+      "tool-call-2",
+      {
+        action: "spawn_workgroup",
+        workflowId: "shutdown-flow",
+        name: "shutdown-group",
+        goal: "Hold an active child workgroup open.",
+        leader: {
+          name: "group-leader",
+          profile: {
+            name: "group-leader-profile",
+            systemPrompt: "Lead the workgroup.",
+            tools: ["workgroup"],
+          },
+          task: "Lead the child workgroup.",
+        },
+      },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+
+    for (const handler of registeredHandlers.session_shutdown ?? []) await handler({}, ctx);
+
+    const store = createProjectSqliteAgentStore(cwd);
+    try {
+      assert.equal(store.getWorkflowByName("shutdown-flow")?.state, "closed");
+      assert.deepEqual(store.getWorkflowByName("shutdown-flow")?.result, {
+        status: "blocked",
+        summary: "Pi session ended before this orchestration scope closed.",
+      });
+      assert.equal(store.getWorkgroupByName("shutdown-group")?.state, "closed");
+      assert.equal(store.getBusByName("shutdown-flow-flow-bus")?.state, "closed");
+      assert.equal(store.getBusByName("shutdown-flow-shutdown-group-bus")?.state, "closed");
+      assert.equal(store.getRunByName("flow-leader")?.state, "closed");
+      assert.equal(store.getRunByName("group-leader")?.state, "closed");
+    } finally {
+      store.dispose();
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("extension backs tools with a project-local SQLite store", async () => {
   const { registeredTools, registeredHandlers } = registerExtension();
   const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-extension-"));
@@ -160,6 +261,26 @@ test("extension backs tools with a project-local SQLite store", async () => {
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+class FakeSession {
+  isStreaming = true;
+  messages: unknown[] = [];
+  disposed = false;
+
+  prompt(): Promise<void> {
+    this.isStreaming = true;
+    return new Promise(() => undefined);
+  }
+
+  steer(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.isStreaming = false;
+  }
+}
 
 function assertUuid7(id: string): void {
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
