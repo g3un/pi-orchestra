@@ -91,7 +91,7 @@ export class WorkflowMonitorController {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return false;
 
-    const lines = buildWorkflowMonitorLines(this.store);
+    const lines = buildWorkflowMonitorLines(this.store, this.now());
     if (lines.length === 0) {
       this.dispose();
       return false;
@@ -115,13 +115,13 @@ export class WorkflowMonitorController {
   }
 }
 
-export function buildWorkflowMonitorLines(store: AgentStore): string[] {
+export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now()): string[] {
   const workflows = listActiveWorkflows(store);
   if (workflows.length === 0) return [];
 
   const lines: string[] = [];
   for (const workflow of workflows.slice(0, MAX_MONITORED_WORKFLOWS)) {
-    appendWorkflowLines(lines, store, workflow);
+    appendWorkflowLines(lines, store, workflow, nowMs);
     if (lines.length >= MAX_WIDGET_LINES) break;
   }
 
@@ -133,13 +133,13 @@ export function buildWorkflowMonitorLines(store: AgentStore): string[] {
   return lines.slice(0, MAX_WIDGET_LINES);
 }
 
-function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun): void {
+function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun, nowMs: number): void {
   if (lines.length >= MAX_WIDGET_LINES) return;
 
   const workgroupActivity = calculateWorkgroupActivity(store, workflow);
   const agentActivity = calculateAgentActivity(store, workflow);
   lines.push(
-    `${workflow.name} | workgroups (${workgroupActivity.done}/${workgroupActivity.total}) | agents (${agentActivity.done}/${agentActivity.total}) | ${formatWorkflowStatusLine(workflow)}`,
+    `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}] | workgroups (${workgroupActivity.done}/${workgroupActivity.total}) | agents (${agentActivity.done}/${agentActivity.total}) | ${formatWorkflowStatusLine(workflow)}`,
   );
 }
 
@@ -200,4 +200,20 @@ function collectWorkflowRuns(store: AgentStore, workflow: WorkflowRun): AgentRun
   }
 
   return [...runsById.values()];
+}
+
+function formatUptimeSince(startedAtMs: number, nowMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1_000));
+  const seconds = elapsedSeconds % 60;
+  const totalMinutes = Math.floor(elapsedSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
+  if (totalMinutes > 0) return `${totalMinutes}m ${pad2(seconds)}s`;
+  return `${seconds}s`;
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, "0");
 }

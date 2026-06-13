@@ -85,7 +85,8 @@ Workflow flow:
 1. `workflow create` creates a private workflow bus and spawns the flow leader.
 2. The flow leader uses `workflow update_status` with `workflowId` to maintain a
    one-line current status for monitors. The monitor displays this value as-is
-   alongside workflow name and derived done/total workgroup and agent counts.
+   alongside workflow name, uptime, and derived done/total workgroup and agent
+   counts.
 3. The flow leader uses `workflow spawn_workgroup` with `workflowId` to create
    the next child workgroup when current evidence shows it is useful, or several
    child workgroups in parallel when the goal has independent tracks whose

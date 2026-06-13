@@ -29,8 +29,8 @@ test("workflow monitor renders workflow status, group activity, and agent activi
     }),
   );
 
-  assert.deepEqual(buildWorkflowMonitorLines(store), [
-    "Research Flow | workgroups (0/1) | agents (1/4) | Analyzing child workgroup results.",
+  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
+    "Research Flow [10s] | workgroups (0/1) | agents (1/4) | Analyzing child workgroup results.",
   ]);
 });
 
@@ -43,8 +43,8 @@ test("workflow monitor counts closed workgroups and falls back before status is 
   store.saveWorkgroup(workgroupRun({ state: "closed", memberRunIds: ["collector"] }));
   store.saveWorkflow(workflowRun({ leaderRunId: "flow-leader", workgroupIds: ["workgroup-1"], statusLine: null }));
 
-  assert.deepEqual(buildWorkflowMonitorLines(store), [
-    "workflow | workgroups (1/1) | agents (1/2) | waiting for flow leader status",
+  assert.deepEqual(buildWorkflowMonitorLines(store, MONITOR_NOW_MS), [
+    "workflow [10s] | workgroups (1/1) | agents (1/2) | waiting for flow leader status",
   ]);
 });
 
@@ -59,13 +59,13 @@ test("workflow monitor controller updates the widget and clears it when workflow
   const monitor = new WorkflowMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
 
   assert.equal(monitor.show(ctx), true);
-  assert.deepEqual(widgets[0], ["workflow | workgroups (0/0) | agents (0/1) | waiting for flow leader status"]);
+  assert.deepEqual(widgets[0], ["workflow [10s] | workgroups (0/0) | agents (0/1) | waiting for flow leader status"]);
   assert.deepEqual(statuses, []);
 
   store.saveWorkflow({ ...workflow, statusLine: "Collecting implementation evidence." });
   await flushMicrotasks();
   assert.deepEqual(widgets.at(-1), [
-    "workflow | workgroups (0/0) | agents (0/1) | Collecting implementation evidence.",
+    "workflow [10s] | workgroups (0/0) | agents (0/1) | Collecting implementation evidence.",
   ]);
 
   store.saveWorkflow({ ...workflow, state: "closed" });
@@ -111,7 +111,7 @@ test("workflow monitor coalesces store updates before rerendering", async () => 
   await flushMicrotasks();
 
   assert.equal(store.listWorkflowsCalls, listCallsAfterShow + 1);
-  assert.deepEqual(widgets.at(-1), ["workflow | workgroups (0/0) | agents (0/1) | Second update."]);
+  assert.deepEqual(widgets.at(-1), ["workflow [10s] | workgroups (0/0) | agents (0/1) | Second update."]);
 });
 
 test("workflow monitor returns no lines when there are no active workflows", () => {
