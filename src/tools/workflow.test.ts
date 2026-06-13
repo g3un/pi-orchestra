@@ -404,6 +404,46 @@ test("workflow cancel closes active workflow resources with a cancellation resul
   assert.equal(orchestra.runs.get("collect-lead")?.state, "closed");
 });
 
+test("workflow runner dispose prevents terminal events from touching workflow state", async () => {
+  const store = new CountingWorkflowLookupStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+
+  store.countWorkflowLookups = true;
+  workflowTool.dispose();
+  await flushMicrotasks();
+  const leader = store.getRunByName("flow-lead");
+  assert.ok(leader);
+  store.saveRun({ ...leader, state: "success", result: { status: "success", summary: "Leader done." } });
+  await flushMicrotasks();
+
+  assert.equal(store.workflowLookupsAfterCountStarted, 0);
+});
+
+test("workflow runner catch ignores failures after dispose without failing the workflow", async () => {
+  const store = new InMemoryAgentStore();
+  const orchestra = new FakeOrchestra(store);
+  const workflowTool = createWorkflowTool({ orchestra, store });
+  await startWorkflow(workflowTool);
+  const closeGate = createDeferred();
+  orchestra.closeAgentDelay = closeGate.promise;
+
+  await workflowTool.execute({
+    action: "finish",
+    workflowId: "research-flow",
+    result: { status: "success", summary: "Done before dispose." },
+  });
+  workflowTool.dispose();
+  orchestra.throwOnCloseBus = true;
+  closeGate.resolve();
+  await flushMicrotasks();
+
+  const workflow = findWorkflowByName(store, "research-flow");
+  assert.equal(workflow?.state, "closing");
+  assert.deepEqual(workflow?.result, { status: "success", summary: "Done before dispose." });
+});
+
 test("workflow cancel finishes cleanup for closing workflows", async () => {
   const store = new InMemoryAgentStore();
   const orchestra = new FakeOrchestra(store);
@@ -589,12 +629,24 @@ test("workflow marks start failure when the flow leader cannot spawn", async () 
   assert.equal(store.getBus("broken-flow-flow-bus")?.state, "closed");
 });
 
+class CountingWorkflowLookupStore extends InMemoryAgentStore {
+  countWorkflowLookups = false;
+  workflowLookupsAfterCountStarted = 0;
+
+  override getWorkflow(id: string): WorkflowRun | undefined {
+    if (this.countWorkflowLookups) this.workflowLookupsAfterCountStarted++;
+    return super.getWorkflow(id);
+  }
+}
+
 class FakeOrchestra implements OrchestraApi {
   buses = new Map<string, Bus>();
   runs: SyncedRunMap;
   spawned: Array<{ profile: AgentProfile; task: string; busId: string; name: string }> = [];
   spawnDelay: Promise<void> | undefined;
+  closeAgentDelay: Promise<void> | undefined;
   onSpawnStarted: (() => void) | undefined;
+  throwOnCloseBus = false;
 
   constructor(private readonly store: InMemoryAgentStore) {
     this.runs = new SyncedRunMap(store);
@@ -613,6 +665,7 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   closeBus(id: string): Bus | undefined {
+    if (this.throwOnCloseBus) throw new Error("closeBus failed.");
     const bus = this.getBus(id);
     if (!bus) return undefined;
     const closedBus: Bus = { ...bus, state: "closed" };
@@ -667,6 +720,7 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
+    if (this.closeAgentDelay) await this.closeAgentDelay;
     const run = this.runs.get(id);
     if (!run) return undefined;
 
@@ -685,6 +739,11 @@ class SyncedRunMap extends Map<string, AgentRun> {
     this.store.saveRun(value);
     return super.set(key, value);
   }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
 }
 
 function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
