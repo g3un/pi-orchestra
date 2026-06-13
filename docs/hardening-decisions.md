@@ -8,4 +8,4 @@ Pi-orchestra rejects new entity names that match any persisted entity id in the 
 
 ## Recovery report includes current-session runs
 
-`/orchestra-recovery` reports persisted active records from the local store only. It does not attempt to distinguish records owned by the current live Pi session from records left by an abandoned session, because multiple Pi sessions can share a project cwd. The command text warns that active records may belong to another live session and requires explicit user action for cleanup.
+`/orchestra-recovery` reports persisted active records from the local store and labels records tied to the current runtime with `session=current` when live run ids are available. It still does not auto-clean those records or treat current-session ownership as exclusive, because multiple Pi sessions can share a project cwd. The command text warns that active records may belong to another live session and requires explicit user action for cleanup.
