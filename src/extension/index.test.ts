@@ -45,13 +45,36 @@ test("extension registers the four target-oriented Pi tools", () => {
   );
 });
 
-test("extension registers a workflow monitor command", () => {
+test("extension registers orchestra commands", () => {
   const { registeredCommands } = registerExtension();
 
   assert.deepEqual(
     registeredCommands.map((command) => command.name),
-    ["orchestra-workflows", "orchestra-recovery"],
+    ["orchestra-workflows", "orchestra-recovery", "orchestra-models"],
   );
+});
+
+test("orchestra-models command reports available model ids and strength guidance", async () => {
+  const { registeredCommands, sentMessages } = registerExtension();
+  const command = registeredCommands.find((current) => current.name === "orchestra-models");
+  assert.ok(command);
+
+  await command.handler(
+    "",
+    createExtensionContext("/workspace", {
+      model: { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+      availableModels: [
+        { provider: "anthropic", id: "claude-haiku", name: "Claude Haiku" },
+        { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+      ],
+    }),
+  );
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0]?.message.customType, "pi-orchestra.models");
+  assert.match(sentMessages[0]?.message.content ?? "", /Current model: anthropic\/claude-sonnet/);
+  assert.match(sentMessages[0]?.message.content ?? "", /anthropic\/claude-haiku/);
+  assert.match(sentMessages[0]?.message.content ?? "", /stronger\/deeper models/);
 });
 
 test("bus parameters use an OpenAI-compatible root object schema without wait actions", () => {
@@ -308,10 +331,12 @@ function registerExtension(): {
   registeredTools: ToolDefinition[];
   registeredCommands: RegisteredCommand[];
   registeredHandlers: Record<string, RegisteredEventHandler[]>;
+  sentMessages: SentMessage[];
 } {
   const registeredTools: ToolDefinition[] = [];
   const registeredCommands: RegisteredCommand[] = [];
   const registeredHandlers: Record<string, RegisteredEventHandler[]> = {};
+  const sentMessages: SentMessage[] = [];
 
   piOrchestraExtension({
     registerTool(tool: ToolDefinition) {
@@ -325,18 +350,51 @@ function registerExtension(): {
       registeredHandlers[eventName].push(handler);
       return undefined;
     },
-    sendMessage() {
+    sendMessage(message: SentMessage["message"], options: SentMessage["options"]) {
+      sentMessages.push({ message, options });
       return undefined;
     },
   } as unknown as ExtensionAPI);
 
-  return { registeredTools, registeredCommands, registeredHandlers };
+  return { registeredTools, registeredCommands, registeredHandlers, sentMessages };
 }
 
 type RegisteredEventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 
-function createExtensionContext(cwd: string): ExtensionContext {
-  return { cwd } as unknown as ExtensionContext;
+interface TestModel {
+  provider: string;
+  id: string;
+  name?: string;
+}
+
+interface CreateExtensionContextOptions {
+  model?: TestModel;
+  availableModels?: TestModel[];
+}
+
+interface SentMessage {
+  message: {
+    customType?: string;
+    content?: string;
+    display?: boolean;
+    details?: unknown;
+  };
+  options?: {
+    deliverAs?: string;
+    triggerTurn?: boolean;
+  };
+}
+
+function createExtensionContext(cwd: string, options: CreateExtensionContextOptions = {}): ExtensionContext {
+  return {
+    cwd,
+    model: options.model,
+    modelRegistry: {
+      getAvailable: () => options.availableModels ?? [],
+      find: (provider: string, modelId: string) =>
+        options.availableModels?.find((model) => model.provider === provider && model.id === modelId),
+    },
+  } as unknown as ExtensionContext;
 }
 
 interface RegisteredCommand extends RegisteredCommandOptions {

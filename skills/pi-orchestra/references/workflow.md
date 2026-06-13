@@ -107,3 +107,7 @@ A supervising parent owns `workflow cancel`:
   default way to create every possible group up front.
 - Main receives `workflow.finished`; workflow-internal `workgroup.finished`
   events route to the flow leader.
+- For flow leader and child group leader `profile.model`, usually omit it to
+  inherit the current Pi model. If a leader needs a different strength, run
+  `/orchestra-models` and copy an exact `provider/model` id; use stronger models
+  for broad planning, high-risk review, or synthesis-heavy workflow leadership.

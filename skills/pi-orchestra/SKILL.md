@@ -75,7 +75,7 @@ Profile options:
   tool names for research/browser work. Do not include `bus`; child agents get
   `publish_bus` automatically for shared context. Use `[]` for
   supplied-context-only roles.
-- `model`: omit unless the task needs a specific provider/model.
+- `model`: usually omit so the child inherits the current Pi model. If a task needs a different strength model, first use `/orchestra-models` to see available exact `provider/model` ids. Choose lighter/faster models for simple checks or formatting, standard models for normal coding/review/research, and stronger/deeper models for broad architecture, high-risk review, ambiguous planning, or synthesis-heavy work.
 
 ## Detailed call examples
 

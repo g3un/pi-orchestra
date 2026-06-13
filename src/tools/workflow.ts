@@ -292,6 +292,7 @@ export function defineWorkflowPiTool(
       "The flow leader uses workflow spawn_workgroup and workflow finish.",
       "Spawn multiple child workgroups in parallel only for independent tracks.",
       "Give child workgroup leaders the workgroup tool.",
+      "For leader.profile.model, normally omit it to inherit the current Pi model. When choosing one, use an exact provider/model from /orchestra-models and match model strength to workflow or workgroup difficulty.",
       "Only the supervising parent uses workflow cancel.",
     ],
     parameters: WorkflowToolParams,

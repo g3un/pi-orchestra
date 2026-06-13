@@ -3,7 +3,12 @@ import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
 import { createProjectSqliteAgentStore } from "../adapters/sqlite-store.ts";
 import { Orchestra } from "../core/orchestra.ts";
 import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
-import { createSubagentTool, defineSubagentPiTool, type SubagentTool } from "../tools/subagent.ts";
+import {
+  createSubagentTool,
+  defineSubagentPiTool,
+  formatAvailableModelSelectionGuide,
+  type SubagentTool,
+} from "../tools/subagent.ts";
 import { createWorkflowTool, defineWorkflowPiTool, type WorkflowTool } from "../tools/workflow.ts";
 import {
   closeWorkgroupRun,
@@ -58,6 +63,13 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
       const bundle = getToolBundle(ctx);
       const report = formatOrchestraRecoveryReport(bundle.store, { liveRunIds: bundle.runtime.listRunIds() });
       sendOrchestraRecoveryReport(pi, report);
+    },
+  });
+
+  pi.registerCommand("orchestra-models", {
+    description: "Show available Pi models and pi-orchestra child model selection guidance.",
+    handler: async (_args, ctx) => {
+      sendOrchestraModelGuide(pi, formatAvailableModelSelectionGuide(ctx));
     },
   });
 
@@ -145,6 +157,17 @@ function defineBundlePiTools(bundle: ToolBundle, parentRunId: string): ToolDefin
       onWorkflowOutput: (ctx) => bundle.workflowMonitor.show(ctx),
     }),
   ];
+}
+
+function sendOrchestraModelGuide(pi: ExtensionAPI, content: string): void {
+  pi.sendMessage(
+    {
+      customType: "pi-orchestra.models",
+      content,
+      display: true,
+    },
+    { deliverAs: "steer" },
+  );
 }
 
 function sendOrchestraRecoveryReport(pi: ExtensionAPI, content: string): void {

@@ -57,7 +57,8 @@ const AgentProfileToolsParam = Type.Array(Type.String(), {
 
 const AgentProfileModelParam = Type.Optional(
   Type.String({
-    description: "Optional provider/model id.",
+    description:
+      "Optional exact provider/model id from /orchestra-models. Omit to inherit the current Pi model; choose cheaper/faster models for simple work and stronger models for broad, risky, or ambiguous work.",
   }),
 );
 
@@ -188,6 +189,7 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     promptGuidelines: [
       "Use subagent spawn on an existing bus; related agents can share a bus.",
       "Use subagent status/message/close with the returned run name.",
+      "For profile.model, normally omit it to inherit the current Pi model. When choosing one, use an exact provider/model from /orchestra-models and match model strength to task difficulty.",
     ],
     parameters: SubagentToolParams,
     executionMode: "parallel",
@@ -248,7 +250,7 @@ export function toSubagentSpawnInput(
 }
 
 function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): SubagentInput {
-  if (input.action !== "spawn" || input.profile.model || !ctx.model) return input;
+  if (input.action !== "spawn") return input;
   return {
     ...input,
     profile: withDefaultProfileModel(input.profile, ctx),
@@ -285,7 +287,8 @@ export function toAgentProfile(profile: RawAgentProfileParams): AgentProfile {
 }
 
 export function withDefaultProfileModel(profile: AgentProfile, ctx: ExtensionContext): AgentProfile {
-  if (profile.model || !ctx.model) return profile;
+  if (profile.model) return { ...profile, model: resolveAvailableModelId(profile.model, ctx) };
+  if (!ctx.model) return profile;
   return {
     ...profile,
     model: formatModelId(ctx.model),
@@ -297,6 +300,36 @@ export function withDefaultProfileModelInput<T extends { profile: AgentProfile }
     ...input,
     profile: withDefaultProfileModel(input.profile, ctx),
   };
+}
+
+export function formatAvailableModelSelectionGuide(ctx: ExtensionContext): string {
+  const models = getAvailableModels(ctx);
+  const currentModel = ctx.model ? formatModelId(ctx.model) : "none";
+  const header = [
+    "Pi-orchestra model selection guide:",
+    "",
+    "- Omit profile.model to inherit the current Pi model.",
+    "- Use lighter/faster models for simple, well-scoped checks or formatting.",
+    "- Use standard models for normal coding, review, and research tasks.",
+    "- Use stronger/deeper models for broad architecture, high-risk code review, ambiguous planning, or synthesis across many files/agents.",
+    "- When setting profile.model, copy an exact provider/model id from the available list below.",
+    "",
+    `Current model: ${currentModel}`,
+    "",
+  ];
+
+  if (models.length === 0) {
+    return [
+      ...header,
+      "No configured available models were reported by Pi. Omit profile.model or configure/login to a provider.",
+    ].join("\n");
+  }
+
+  return [
+    ...header,
+    `Available models (${models.length}):`,
+    ...models.map((model) => `- ${formatModelId(model)}${model.name ? ` — ${model.name}` : ""}`),
+  ].join("\n");
 }
 
 function formatMissingSubagentMessage(id: string): string {
@@ -316,6 +349,58 @@ function formatRunMessage(run: AgentRun, headline = `Subagent ${run.name} is ${r
 export function formatResultData(data: unknown): string {
   if (typeof data === "string") return data;
   return JSON.stringify(data, null, 2) ?? String(data);
+}
+
+function resolveAvailableModelId(modelReference: string, ctx: ExtensionContext): string {
+  const normalizedReference = modelReference.trim();
+  if (!normalizedReference) throw new Error("profile.model must not be empty.");
+
+  const models = getAvailableModels(ctx);
+  if (models.length === 0) {
+    throw new Error(
+      `No available Pi models are configured for pi-orchestra. Omit profile.model to use the current session model, or configure/login to a provider before choosing a child model.`,
+    );
+  }
+
+  const exact = findModelByReference(normalizedReference, models);
+  if (exact) return formatModelId(exact);
+
+  throw new Error(
+    [
+      `Model "${modelReference}" is not available to pi-orchestra.`,
+      "Use an exact provider/model id from /orchestra-models, or omit profile.model to inherit the current Pi model.",
+      `Available models: ${formatAvailableModelIdList(models)}`,
+    ].join(" "),
+  );
+}
+
+function findModelByReference(modelReference: string, models: AgentProfileModel[]): AgentProfileModel | undefined {
+  const normalizedReference = modelReference.toLowerCase();
+  const canonical = models.find((model) => formatModelId(model).toLowerCase() === normalizedReference);
+  if (canonical) return canonical;
+
+  const slashIndex = modelReference.indexOf("/");
+  if (slashIndex >= 0) {
+    const provider = modelReference.slice(0, slashIndex).trim().toLowerCase();
+    const modelId = modelReference
+      .slice(slashIndex + 1)
+      .trim()
+      .toLowerCase();
+    return models.find((model) => model.provider.toLowerCase() === provider && model.id.toLowerCase() === modelId);
+  }
+
+  const idMatches = models.filter(
+    (model) => model.id.toLowerCase() === normalizedReference || model.name?.toLowerCase() === normalizedReference,
+  );
+  return idMatches.length === 1 ? idMatches[0] : undefined;
+}
+
+function formatAvailableModelIdList(models: AgentProfileModel[]): string {
+  return models.map(formatModelId).join(", ");
+}
+
+function getAvailableModels(ctx: ExtensionContext): AgentProfileModel[] {
+  return ctx.modelRegistry.getAvailable();
 }
 
 function formatModelId(model: AgentProfileModel): string {

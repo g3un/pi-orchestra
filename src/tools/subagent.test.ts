@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
-import { createSubagentTool, toAgentProfile, type RawAgentProfileParams } from "./subagent.ts";
+import {
+  createSubagentTool,
+  formatAvailableModelSelectionGuide,
+  toAgentProfile,
+  withDefaultProfileModel,
+  type RawAgentProfileParams,
+} from "./subagent.ts";
 
 const profile: AgentProfile = {
   name: "researcher",
@@ -24,6 +31,40 @@ test("agent profile params resolve presets with overrides", () => {
   assert.equal(resolvedProfile.model, "mock/model");
   assert.deepEqual(resolvedProfile.tools, ["read"]);
   assert.match(resolvedProfile.systemPrompt, /source-code QA agent/);
+});
+
+test("profile model selection normalizes available Pi model ids", () => {
+  const ctx = modelContext({
+    model: { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+    availableModels: [
+      { provider: "anthropic", id: "claude-haiku", name: "Claude Haiku" },
+      { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+    ],
+  });
+
+  assert.equal(withDefaultProfileModel({ ...profile, model: undefined }, ctx).model, "anthropic/claude-sonnet");
+  assert.equal(withDefaultProfileModel({ ...profile, model: "claude-haiku" }, ctx).model, "anthropic/claude-haiku");
+  assert.equal(
+    withDefaultProfileModel({ ...profile, model: "ANTHROPIC/CLAUDE-HAIKU" }, ctx).model,
+    "anthropic/claude-haiku",
+  );
+});
+
+test("profile model selection rejects unavailable models with available choices", () => {
+  assert.throws(
+    () => withDefaultProfileModel({ ...profile, model: "missing-model" }, modelContext()),
+    /Model "missing-model" is not available.*Available models: anthropic\/claude-haiku/,
+  );
+});
+
+test("available model selection guide lists exact ids and task-strength guidance", () => {
+  const guide = formatAvailableModelSelectionGuide(
+    modelContext({ model: { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" } }),
+  );
+
+  assert.match(guide, /Current model: anthropic\/claude-sonnet/);
+  assert.match(guide, /Use lighter\/faster models/);
+  assert.match(guide, /anthropic\/claude-haiku/);
 });
 
 test("agent profile params require explicit tools", () => {
@@ -262,6 +303,25 @@ class FakeOrchestra implements OrchestraApi {
     this.runs.set(id, closedRun);
     return closedRun;
   }
+}
+
+interface TestModel {
+  provider: string;
+  id: string;
+  name?: string;
+}
+
+function modelContext(options: { model?: TestModel; availableModels?: TestModel[] } = {}): ExtensionContext {
+  const availableModels = options.availableModels ?? [
+    { provider: "anthropic", id: "claude-haiku", name: "Claude Haiku" },
+    { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
+  ];
+  return {
+    model: options.model,
+    modelRegistry: {
+      getAvailable: () => availableModels,
+    },
+  } as unknown as ExtensionContext;
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {

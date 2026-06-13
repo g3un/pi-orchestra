@@ -83,3 +83,6 @@ Only the workgroup leader should finish the group result.
 - Do not finish a workgroup from outside its leader; cancel instead when a parent
   needs cleanup.
 - Prefer 2-4 well-briefed members over many vague members.
+- For member `profile.model`, usually omit it to inherit the current Pi model.
+  If member tasks differ in difficulty, run `/orchestra-models` and copy exact
+  `provider/model` ids for lighter/simple members or stronger/high-risk members.

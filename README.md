@@ -27,6 +27,8 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
   `/orchestra-workflows`.
 - Use `/orchestra-recovery` after a restart to inspect persisted active records
   before explicitly cancelling or closing abandoned scopes.
+- Use `/orchestra-models` to list available Pi model ids and choose child models
+  by task difficulty; omit `profile.model` to inherit the current model.
 - Child profiles can use presets such as `source-code-qa`,
   `external-researcher`, and `code-reviewer`, or provide a custom role prompt.
 

@@ -34,9 +34,11 @@ A subagent is an `AgentRun`: a child agent with a profile, task, bus id, state,
 and optional result.
 
 Profiles define the child agent's `systemPrompt`, explicit tool allowlist, and
-optional model. The runtime creates a bus subscription for each spawned subagent;
-`AgentRun.busId` remains the lifecycle/query scope, not the context delivery
-path.
+optional model. Omit `profile.model` to inherit the current Pi model; when a
+child needs a different model strength, use `/orchestra-models` and copy an exact
+available `provider/model` id. The runtime creates a bus subscription for each
+spawned subagent; `AgentRun.busId` remains the lifecycle/query scope, not the
+context delivery path.
 
 Every subagent is the effective owner of its own run result and must call the
 `finish` tool with:
