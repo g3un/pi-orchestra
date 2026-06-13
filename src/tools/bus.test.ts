@@ -16,7 +16,7 @@ test("bus create allocates a standalone bus through orchestra", async () => {
   assert.equal(output.bus.id, "bus-1");
   assert.deepEqual(output.bus.messages, []);
   assert.deepEqual(orchestra.getBus(output.bus.id), output.bus);
-  assert.equal(output.message, "Created bus bus-1.\nState: open");
+  assert.equal(output.message, "Created bus bus-1.\nState: open\nSubscribers: 0\nCompactable messages: 0");
 });
 
 test("bus status returns stored bus messages", async () => {
@@ -34,6 +34,14 @@ test("bus status returns stored bus messages", async () => {
   };
   orchestra.buses.set(bus.id, bus);
   store.saveRun(run({ id: "agent-1", name: "Researcher A" }));
+  store.saveBusSubscription({
+    id: createBusSubscriptionId(bus.id, "main", "main"),
+    busId: bus.id,
+    subscriberId: "main",
+    subscriberKind: "main",
+    lastDeliveredMessageId: "message-1",
+    deliveredMessageIds: [],
+  });
 
   const output = await tool.execute({ action: "status", name: bus.name });
   const missingOutput = await tool.execute({ action: "status", name: "missing" });
@@ -44,6 +52,8 @@ test("bus status returns stored bus messages", async () => {
     [
       "Bus bus-1 has 2 message(s).",
       "State: open",
+      "Subscribers: 1",
+      "Compactable messages: 1",
       "",
       "Messages:",
       "- from main:",
@@ -73,7 +83,7 @@ test("bus publish delegates with the bus name", async () => {
   assert.deepEqual(orchestra.getBus(bus.id)?.messages, [{ id: "message-1", message: "New constraint.", from: "main" }]);
   assert.equal(
     output.message,
-    "Published message to bus Shared Context.\nState: open\n\nMessages:\n- from main:\nNew constraint.",
+    "Published message to bus Shared Context.\nState: open\nSubscribers: 0\nCompactable messages: 0\n\nMessages:\n- from main:\nNew constraint.",
   );
 });
 
@@ -95,7 +105,7 @@ test("bus publish preserves an explicit sender", async () => {
   assert.deepEqual(output.busMessage, { id: "message-1", message: "Peer context.", from: "agent-1" });
   assert.equal(
     output.message,
-    "Published message to bus bus-1.\nState: open\n\nMessages:\n- from Researcher A:\nPeer context.",
+    "Published message to bus bus-1.\nState: open\nSubscribers: 0\nCompactable messages: 0\n\nMessages:\n- from Researcher A:\nPeer context.",
   );
 });
 

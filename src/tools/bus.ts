@@ -227,12 +227,28 @@ function formatBusStatus(
   store: AgentStore,
   headline = `Bus ${formatBusLabel(bus)} has ${bus.messages.length} message(s).`,
 ): string {
-  const statusHeadline = `${headline}\nState: ${bus.state}`;
+  const subscriptions = store.listBusSubscriptions({
+    busId: bus.id,
+    subscriberId: undefined,
+    subscriberKind: undefined,
+  });
+  const compactableCount = countCompactableBusMessages(bus, subscriptions);
+  const statusHeadline = [
+    headline,
+    `State: ${bus.state}`,
+    `Subscribers: ${subscriptions.length}`,
+    `Compactable messages: ${compactableCount}`,
+  ].join("\n");
   if (bus.messages.length === 0) return statusHeadline;
 
   return [statusHeadline, "", "Messages:", ...bus.messages.map((message) => formatBusMessage(message, store))].join(
     "\n",
   );
+}
+
+function countCompactableBusMessages(bus: Bus, subscriptions: BusSubscription[]): number {
+  if (subscriptions.length === 0) return 0;
+  return bus.messages.filter((message) => isBusMessageCompactable(message, subscriptions)).length;
 }
 
 function formatBusMessage(message: BusMessage, store: AgentStore): string {
