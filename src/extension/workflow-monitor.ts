@@ -11,7 +11,7 @@ const DEFAULT_TICK_MS = 1_000;
 
 export interface WorkflowMonitorControllerOptions {
   now: (() => number) | undefined;
-  /** Defaults to 1000 ms when undefined. Use 0 to disable uptime ticks in tests. */
+  /** Defaults to 1000 ms when undefined. Use 0 to disable periodic refreshes in tests. */
   tickMs: number | undefined;
 }
 
@@ -91,7 +91,7 @@ export class WorkflowMonitorController {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return false;
 
-    const lines = buildWorkflowMonitorLines(this.store, this.now());
+    const lines = buildWorkflowMonitorLines(this.store);
     if (lines.length === 0) {
       this.dispose();
       return false;
@@ -115,13 +115,13 @@ export class WorkflowMonitorController {
   }
 }
 
-export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now()): string[] {
+export function buildWorkflowMonitorLines(store: AgentStore): string[] {
   const workflows = listActiveWorkflows(store);
   if (workflows.length === 0) return [];
 
   const lines: string[] = [];
   for (const workflow of workflows.slice(0, MAX_MONITORED_WORKFLOWS)) {
-    appendWorkflowLines(lines, store, workflow, nowMs);
+    appendWorkflowLines(lines, store, workflow);
     if (lines.length >= MAX_WIDGET_LINES) break;
   }
 
@@ -133,14 +133,13 @@ export function buildWorkflowMonitorLines(store: AgentStore, nowMs = Date.now())
   return lines.slice(0, MAX_WIDGET_LINES);
 }
 
-function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun, nowMs: number): void {
+function appendWorkflowLines(lines: string[], store: AgentStore, workflow: WorkflowRun): void {
   if (lines.length >= MAX_WIDGET_LINES) return;
 
   const workgroupActivity = calculateWorkgroupActivity(store, workflow);
   const agentActivity = calculateAgentActivity(store, workflow);
   lines.push(
-    `${workflow.name} [${formatUptimeSince(workflow.startedAtMs, nowMs)}] — ${formatWorkflowStatusLine(workflow)}`,
-    `  groups active ${workgroupActivity.active}, done ${workgroupActivity.done}; agents active ${agentActivity.active}, done ${agentActivity.done}`,
+    `${workflow.name} | workgroups (${workgroupActivity.done}/${workgroupActivity.total}) | agents (${agentActivity.done}/${agentActivity.total}) | ${formatWorkflowStatusLine(workflow)}`,
   );
 }
 
@@ -152,19 +151,19 @@ function formatWorkflowStatusLine(workflow: WorkflowRun): string {
   return workflow.statusLine ?? "waiting for flow leader status";
 }
 
-function calculateWorkgroupActivity(store: AgentStore, workflow: WorkflowRun): { active: number; done: number } {
+function calculateWorkgroupActivity(store: AgentStore, workflow: WorkflowRun): { done: number; total: number } {
   const workgroups = workflow.workgroupIds.flatMap((workgroupId) => {
     const workgroup = store.getWorkgroup(workgroupId);
     return workgroup ? [workgroup] : [];
   });
   const done = workgroups.filter((workgroup) => workgroup.state === "closed").length;
-  return { active: workgroups.length - done, done };
+  return { done, total: workgroups.length };
 }
 
-function calculateAgentActivity(store: AgentStore, workflow: WorkflowRun): { active: number; done: number } {
+function calculateAgentActivity(store: AgentStore, workflow: WorkflowRun): { done: number; total: number } {
   const runs = collectWorkflowRuns(store, workflow);
   const done = runs.filter(isAgentRunFinished).length;
-  return { active: runs.length - done, done };
+  return { done, total: runs.length };
 }
 
 function collectWorkflowRuns(store: AgentStore, workflow: WorkflowRun): AgentRun[] {
@@ -201,20 +200,4 @@ function collectWorkflowRuns(store: AgentStore, workflow: WorkflowRun): AgentRun
   }
 
   return [...runsById.values()];
-}
-
-function formatUptimeSince(startedAtMs: number, nowMs: number): string {
-  const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1_000));
-  const seconds = elapsedSeconds % 60;
-  const totalMinutes = Math.floor(elapsedSeconds / 60);
-  const minutes = totalMinutes % 60;
-  const hours = Math.floor(totalMinutes / 60);
-
-  if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
-  if (totalMinutes > 0) return `${totalMinutes}m ${pad2(seconds)}s`;
-  return `${seconds}s`;
-}
-
-function pad2(value: number): string {
-  return value.toString().padStart(2, "0");
 }
