@@ -43,6 +43,59 @@ test("recovery report lists active records without mutating them", () => {
   assert.equal(store.getRun("child")?.state, "running");
 });
 
+test("recovery report includes non-closed runs, current session ownership, and stale-scope hints", () => {
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "closed-bus", name: "Closed Bus", state: "closed", messages: [] });
+  store.saveBus({ id: "workflow-bus", name: "Workflow Bus", state: "open", messages: [] });
+  store.saveRun(
+    run({
+      id: "failed-leader",
+      name: "Failed Leader",
+      busId: "closed-bus",
+      state: "failed",
+      result: { status: "failed", summary: "Crashed before cleanup." },
+    }),
+  );
+  store.saveRun(run({ id: "child", name: "Child", busId: "missing-bus", parentRunId: "missing-parent" }));
+  store.saveWorkgroup(
+    workgroupRun({
+      id: "stale-group",
+      name: "stale-group",
+      busId: "closed-bus",
+      leaderRunId: "missing-leader",
+      state: "closing",
+    }),
+  );
+  store.saveWorkflow(
+    workflowRun({
+      id: "stale-flow",
+      name: "stale-flow",
+      busId: "workflow-bus",
+      leaderRunId: "failed-leader",
+      workgroupIds: ["stale-group", "missing-group"],
+      state: "closing",
+    }),
+  );
+
+  assert.equal(
+    formatOrchestraRecoveryReport(store, { liveRunIds: ["failed-leader"] }),
+    [
+      "Pi-orchestra recovery report:",
+      "",
+      "These persisted records are active in the local store. They may still belong to another live Pi session; pi-orchestra does not auto-close them.",
+      "If they belong to an abandoned session, recover explicitly with subagent close, workgroup cancel, or workflow cancel.",
+      "",
+      "Runs:",
+      "- Failed Leader (failed, bus=Closed Bus, parent=main, session=current, hints=bus closed)",
+      "- Child (running, bus=missing-bus, parent=missing-parent, hints=bus missing; parent missing)",
+      "Workgroups:",
+      "- stale-group (closing, bus=Closed Bus, leader=missing-leader, members=0, hints=bus closed; closing cleanup incomplete; leader missing)",
+      "Workflows:",
+      "- stale-flow (closing, bus=Workflow Bus, leader=Failed Leader, workgroups=2, session=current, hints=closing cleanup incomplete; workgroup missing:missing-group)",
+    ].join("\n"),
+  );
+});
+
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   const id = overrides.id ?? "agent-1";
   return {

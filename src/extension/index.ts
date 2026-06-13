@@ -55,7 +55,8 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   pi.registerCommand("orchestra-recovery", {
     description: "Show persisted active pi-orchestra records for explicit recovery.",
     handler: async (_args, ctx) => {
-      const report = formatOrchestraRecoveryReport(getToolBundle(ctx).store);
+      const bundle = getToolBundle(ctx);
+      const report = formatOrchestraRecoveryReport(bundle.store, { liveRunIds: bundle.runtime.listRunIds() });
       sendOrchestraRecoveryReport(pi, report);
     },
   });
