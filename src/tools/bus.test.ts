@@ -137,6 +137,40 @@ test("bus compact removes messages delivered to all current subscribers", async 
   );
 });
 
+test("bus compact removes out-of-order delivered messages without deleting earlier unread messages", async () => {
+  const orchestra = new FakeOrchestra();
+  const store = new InMemoryAgentStore();
+  const tool = createBusTool({ orchestra, store });
+  const bus: Bus = {
+    id: "bus-1",
+    name: "bus-1",
+    state: "open",
+    messages: [
+      { id: "message-1", from: "main", message: "Unread earlier fact." },
+      { id: "message-2", from: "main", message: "Delivered later fact." },
+      { id: "message-3", from: "main", message: "Unread later fact." },
+    ],
+  };
+  orchestra.buses.set(bus.id, bus);
+  store.saveBus(bus);
+  store.saveBusSubscription({
+    id: createBusSubscriptionId(bus.id, "agent", "agent-1"),
+    busId: bus.id,
+    subscriberId: "agent-1",
+    subscriberKind: "agent",
+    lastDeliveredMessageId: null,
+    deliveredMessageIds: ["message-2"],
+  });
+
+  const output = await tool.execute({ action: "compact", name: bus.name });
+
+  assert.equal(output.message, "Compacted bus bus-1; removed 1 delivered message(s), kept 2.");
+  assert.deepEqual(
+    output.bus?.messages.map((message) => message.id),
+    ["message-1", "message-3"],
+  );
+});
+
 test("bus compact keeps messages when there are no current subscribers", async () => {
   const orchestra = new FakeOrchestra();
   const store = new InMemoryAgentStore();
