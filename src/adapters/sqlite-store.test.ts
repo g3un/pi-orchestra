@@ -297,6 +297,24 @@ test("SQLite store rejects older schemas and tells the user to recreate the stor
   }
 });
 
+test("SQLite store rejects schema v7 stores after the v8 delivery/index layout change", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
+  try {
+    createProjectSqliteAgentStore(cwd).dispose();
+
+    const db = new DatabaseSync(getProjectSqliteStorePath(cwd));
+    db.exec("PRAGMA user_version = 7");
+    db.close();
+
+    assert.throws(
+      () => createProjectSqliteAgentStore(cwd),
+      /Unsupported pi-orchestra SQLite store schema version 7; expected 8\..*Delete .*store\.db and run the command again/,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("SQLite store rejects a database written by a newer schema version", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-store-"));
   try {
