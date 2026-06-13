@@ -427,13 +427,16 @@ test("workflow runner catch ignores failures after dispose without failing the w
   const workflowTool = createWorkflowTool({ orchestra, store });
   await startWorkflow(workflowTool);
   const closeGate = createDeferred();
+  const closeStarted = createDeferred();
   orchestra.closeAgentDelay = closeGate.promise;
+  orchestra.onCloseAgentStarted = () => closeStarted.resolve();
 
   await workflowTool.execute({
     action: "finish",
     workflowId: "research-flow",
     result: { status: "success", summary: "Done before dispose." },
   });
+  await closeStarted.promise;
   workflowTool.dispose();
   orchestra.throwOnCloseBus = true;
   closeGate.resolve();
@@ -646,6 +649,7 @@ class FakeOrchestra implements OrchestraApi {
   spawnDelay: Promise<void> | undefined;
   closeAgentDelay: Promise<void> | undefined;
   onSpawnStarted: (() => void) | undefined;
+  onCloseAgentStarted: (() => void) | undefined;
   throwOnCloseBus = false;
 
   constructor(private readonly store: InMemoryAgentStore) {
@@ -720,6 +724,7 @@ class FakeOrchestra implements OrchestraApi {
   }
 
   async closeAgent(id: string, _options: { busId: string | undefined }): Promise<AgentRun | undefined> {
+    this.onCloseAgentStarted?.();
     if (this.closeAgentDelay) await this.closeAgentDelay;
     const run = this.runs.get(id);
     if (!run) return undefined;
