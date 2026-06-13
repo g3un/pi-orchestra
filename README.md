@@ -32,6 +32,9 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
 
 ## Core concepts
 
+Implementation hardening trade-offs that affect recovery and compatibility are
+recorded in [docs/hardening-decisions.md](docs/hardening-decisions.md).
+
 ### Bus
 
 A bus is shared reference context for standalone subagents. Create one when

@@ -115,4 +115,7 @@ the flow leader, then emits one `workflow.finished` event to main. Standalone
 workgroup events still go to main; workflow-internal workgroup events stay inside
 the workflow control loop. Child subagents spawned by another subagent route
 `subagent.finished` to the active parent run; if that parent is inactive inside a
-workflow bus, the event is suppressed rather than leaking to main.
+workflow bus, the event is suppressed rather than leaking to main. Routed child
+events are best-effort: a synchronous routing refusal can fall back to main when
+that is safe, while asynchronous parent-message failures are swallowed to avoid
+crashing store subscribers.

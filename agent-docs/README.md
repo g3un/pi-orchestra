@@ -28,3 +28,4 @@ local conventions and actionable rules tailored to this codebase.
 - `src/profiles/` → [profile-writing.md](./profile-writing.md) + [prompt-engineering.md](./prompt-engineering.md) + [context-engineering.md](./context-engineering.md)
 - Future skill packages → [skill-writing.md](./skill-writing.md) + [tool-design.md](./tool-design.md)
 - `src/core/` (orchestra, subagent, workgroup, workflow, bus) → [docs/orchestration-model.md](../docs/orchestration-model.md)
+- Hardening trade-offs and accepted LOW findings → [docs/hardening-decisions.md](../docs/hardening-decisions.md)
