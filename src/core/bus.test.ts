@@ -48,6 +48,18 @@ test("bus delivery watermark compresses exceptions once gaps are filled", () => 
   assert.deepEqual(compressed.deliveredMessageIds, []);
 });
 
+test("bus delivery treats replaced messages with the same id as the same delivery", () => {
+  const originalBusMessages = [busMessage("message-1")];
+  const delivered = markBusMessagesDelivered(busSubscription(), originalBusMessages[0]!, originalBusMessages);
+  const replacedMessage = { ...busMessage("message-1"), message: "Replacement body." };
+
+  const afterReplacement = markBusMessagesDelivered(delivered, replacedMessage, [replacedMessage]);
+
+  assert.equal(afterReplacement.lastDeliveredMessageId, "message-1");
+  assert.deepEqual(afterReplacement.deliveredMessageIds, []);
+  assert.equal(isBusMessageDelivered(afterReplacement, replacedMessage.id), true);
+});
+
 test("bus delivery ignores exception ids at or below the watermark", () => {
   const subscription = busSubscription({
     lastDeliveredMessageId: "message-2",
