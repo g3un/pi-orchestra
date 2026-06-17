@@ -1,0 +1,74 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: docker
+    container:
+      image: node:24-bookworm
+
+    steps:
+      - name: Check out repository
+        uses: https://data.forgejo.org/actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Check tag matches package version
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME:-${GITHUB_REF#refs/tags/}}"
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v${VERSION}"
+
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "Tag must match package.json version."
+            echo "Tag:      $TAG_NAME"
+            echo "Expected: $EXPECTED_TAG"
+            exit 1
+          fi
+
+      - name: Check formatting
+        run: corepack pnpm fmt:check
+
+      - name: Lint
+        run: corepack pnpm lint
+
+      - name: Test
+        run: corepack pnpm test
+
+      - name: Check package contents
+        run: corepack pnpm pack --dry-run
+
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "NPM_TOKEN secret is required."
+            exit 1
+          fi
+
+          PKG="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "$PKG@$VERSION is already published."
+            exit 1
+          fi
+
+          if printf "%s" "$VERSION" | grep -q -- "-"; then
+            DIST_TAG="next"
+          else
+            DIST_TAG="latest"
+          fi
+
+          echo "Publishing $PKG@$VERSION with npm dist-tag '$DIST_TAG'."
+          printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
+          corepack pnpm publish --access public --tag "$DIST_TAG" --no-git-checks

@@ -36,7 +36,10 @@
 ## Commits
 
 - Do not create commits unless the user explicitly asks
-- When code changes are included, bump the package version in `package.json` before committing
+- Do not bump `package.json` for every code change; bump only for release/publish work or when the user asks
+- Use CalVer release versions without leading zeroes: stable `YYYY.M.D` (`2026.6.17`), prerelease `YYYY.M.D-N` (`2026.6.17-0`)
+- Release tags are only for publish releases and must be `v${package.version}`; no hyphen publishes to npm `latest`, hyphenated prereleases publish to `next`
+- Do not create release tags unless the user explicitly asks, and keep npm versions SemVer-compatible; avoid forms like `2026.06.17`, `2026.06.17.00`, or `2026.6.17-00`
 - One logical change per commit
 - Use Conventional Commits, such as `feat(tool): add subagent tool`
 - Avoid overly granular scopes unless they clarify ownership or impact
