@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    runs-on: docker
+    runs-on: codeberg-tiny
     container:
       image: node:24-bookworm
 
