@@ -10,6 +10,9 @@ jobs:
     runs-on: codeberg-small
     container:
       image: node:24-alpine
+    defaults:
+      run:
+        shell: sh
 
     steps:
       - name: Check out repository
@@ -58,17 +61,21 @@ jobs:
           PKG="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
 
-          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
-            echo "$PKG@$VERSION is already published."
-            exit 1
-          fi
-
           if printf "%s" "$VERSION" | grep -q -- "-"; then
             DIST_TAG="next"
           else
             DIST_TAG="latest"
           fi
 
-          echo "Publishing $PKG@$VERSION with npm dist-tag '$DIST_TAG'."
-          printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
-          corepack pnpm publish --access public --tag "$DIST_TAG" --no-git-checks
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "$PKG@$VERSION is already published; skipping npm publish."
+          else
+            echo "Publishing $PKG@$VERSION with npm dist-tag '$DIST_TAG'."
+            printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
+            corepack pnpm publish --access public --tag "$DIST_TAG" --no-git-checks
+          fi
+
+      - name: Create Codeberg release
+        env:
+          FORGEJO_TOKEN: ${{ forgejo.token }}
+        run: node scripts/create-forgejo-release.mjs

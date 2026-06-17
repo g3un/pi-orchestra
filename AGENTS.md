@@ -20,6 +20,7 @@
 - `src/profiles/` contains reusable agent profile presets used by orchestration flows.
 - `docs/` holds project architecture notes.
 - `agent-docs/` holds agent-facing implementation notes.
+- `scripts/` holds repository maintenance and release automation used by CI.
 - Root-level configuration files define package metadata, TypeScript, linting, formatting, and test setup.
 
 ## Agent Docs

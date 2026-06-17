@@ -11,6 +11,9 @@ jobs:
     runs-on: codeberg-small
     container:
       image: node:24-alpine
+    defaults:
+      run:
+        shell: sh
 
     steps:
       - name: Check out repository
