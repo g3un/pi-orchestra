@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    runs-on: codeberg-tiny
+    runs-on: codeberg-small
     container:
       image: node:24-alpine
 

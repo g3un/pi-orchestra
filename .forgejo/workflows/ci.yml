@@ -8,7 +8,7 @@ on:
 
 jobs:
   checks:
-    runs-on: codeberg-tiny
+    runs-on: codeberg-small
     container:
       image: node:24-alpine
 
