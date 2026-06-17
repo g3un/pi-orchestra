@@ -9,7 +9,7 @@ jobs:
   publish:
     runs-on: codeberg-tiny
     container:
-      image: node:24-bookworm
+      image: node:24-alpine
 
     steps:
       - name: Check out repository
