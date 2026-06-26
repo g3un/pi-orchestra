@@ -61,18 +61,12 @@ jobs:
           PKG="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
 
-          if printf "%s" "$VERSION" | grep -q -- "-"; then
-            DIST_TAG="next"
-          else
-            DIST_TAG="latest"
-          fi
-
           if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
             echo "$PKG@$VERSION is already published; skipping npm publish."
           else
-            echo "Publishing $PKG@$VERSION with npm dist-tag '$DIST_TAG'."
+            echo "Publishing $PKG@$VERSION."
             printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
-            corepack pnpm publish --access public --tag "$DIST_TAG" --no-git-checks
+            corepack pnpm publish --access public --no-git-checks
           fi
 
       - name: Create Codeberg release

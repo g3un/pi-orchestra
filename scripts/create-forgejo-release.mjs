@@ -12,8 +12,6 @@ const token = process.env.FORGEJO_TOKEN ?? process.env.GITHUB_TOKEN;
 const tagName = process.env.GITHUB_REF_NAME ?? parseTagName(process.env.GITHUB_REF);
 const version = packageJson.version;
 const packageName = packageJson.name;
-const prerelease = version.includes("-");
-const distTag = prerelease ? "next" : "latest";
 
 if (!repository) {
   fail("FORGEJO_REPOSITORY or GITHUB_REPOSITORY is required.");
@@ -55,9 +53,8 @@ const createRelease = await request(releasesUrl, {
   body: JSON.stringify({
     tag_name: tagName,
     name: tagName,
-    body: `Published ${packageName}@${version} to npm.\n\nnpm dist-tag: ${distTag}`,
+    body: `Published ${packageName}@${version} to npm.`,
     draft: false,
-    prerelease,
   }),
 });
 
