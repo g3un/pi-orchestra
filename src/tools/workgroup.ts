@@ -421,7 +421,6 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
     promptGuidelines: [
       "Use workgroup create first; it creates the private bus.",
       "Use workgroup add_members with member profile/task/name only.",
-      "For each member profile.model, normally omit it to inherit the current Pi model. When choosing one, use an exact provider/model from /orchestra-models and match model strength to task difficulty.",
       "Only the workgroup leader calls workgroup finish.",
       "Use workgroup cancel from a supervising parent scope to abort a workgroup and dispose all resources.",
     ],
@@ -629,8 +628,12 @@ function formatWorkgroupStatusMessage(store: AgentStore, workgroup: WorkgroupRun
     `Leader: ${formatWorkgroupLeaderName(store, workgroup)}`,
     "",
     `Members (${runs.length}):`,
-    ...(runs.length > 0 ? runs.map((run) => `- ${run.name}: ${run.state}`) : ["- none"]),
+    ...(runs.length > 0 ? runs.map(formatWorkgroupMemberStatusLine) : ["- none"]),
   ].join("\n");
+}
+
+function formatWorkgroupMemberStatusLine(run: AgentRun): string {
+  return `- ${run.name}: ${run.state} — ${run.profile.model ?? "inherited model"}`;
 }
 
 function formatWorkgroupLeaderName(store: AgentStore, workgroup: WorkgroupRun): string {

@@ -67,9 +67,9 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("orchestra-models", {
-    description: "Show available Pi models and pi-orchestra child model selection guidance.",
-    handler: async (_args, ctx) => {
-      sendOrchestraModelGuide(pi, formatAvailableModelSelectionGuide(ctx));
+    description: "Show available Pi model ids for pi-orchestra child profiles.",
+    handler: async (args, ctx) => {
+      sendOrchestraModelGuide(pi, formatAvailableModelSelectionGuide(ctx, args));
     },
   });
 

@@ -57,8 +57,7 @@ const AgentProfileToolsParam = Type.Array(Type.String(), {
 
 const AgentProfileModelParam = Type.Optional(
   Type.String({
-    description:
-      "Optional exact provider/model id from /orchestra-models. Omit to inherit the current Pi model; choose cheaper/faster models for simple work and stronger models for broad, risky, or ambiguous work.",
+    description: "Optional exact provider/model id from /orchestra-models. Omit to inherit the current Pi model.",
   }),
 );
 
@@ -189,7 +188,6 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     promptGuidelines: [
       "Use subagent spawn on an existing bus; related agents can share a bus.",
       "Use subagent status/message/close with the returned run name.",
-      "For profile.model, normally omit it to inherit the current Pi model. When choosing one, use an exact provider/model from /orchestra-models and match model strength to task difficulty.",
     ],
     parameters: SubagentToolParams,
     executionMode: "parallel",
@@ -302,17 +300,16 @@ export function withDefaultProfileModelInput<T extends { profile: AgentProfile }
   };
 }
 
-export function formatAvailableModelSelectionGuide(ctx: ExtensionContext): string {
+export function formatAvailableModelSelectionGuide(ctx: ExtensionContext, query = ""): string {
   const models = getAvailableModels(ctx);
+  const normalizedQuery = normalizeModelQuery(query);
   const currentModel = ctx.model ? formatModelId(ctx.model) : "none";
   const header = [
-    "Pi-orchestra model selection guide:",
+    "Pi-orchestra available models:",
     "",
     "- Omit profile.model to inherit the current Pi model.",
-    "- Use lighter/faster models for simple, well-scoped checks or formatting.",
-    "- Use standard models for normal coding, review, and research tasks.",
-    "- Use stronger/deeper models for broad architecture, high-risk code review, ambiguous planning, or synthesis across many files/agents.",
-    "- When setting profile.model, copy an exact provider/model id from the available list below.",
+    "- Set profile.model only with an exact provider/model id from this guide.",
+    "- Use /orchestra-models <query> to filter or drill down, e.g. openai-codex or openrouter/openai.",
     "",
     `Current model: ${currentModel}`,
     "",
@@ -325,11 +322,26 @@ export function formatAvailableModelSelectionGuide(ctx: ExtensionContext): strin
     ].join("\n");
   }
 
-  return [
-    ...header,
-    `Available models (${models.length}):`,
-    ...models.map((model) => `- ${formatModelId(model)}${model.name ? ` — ${model.name}` : ""}`),
-  ].join("\n");
+  const entries = models.map(toModelPathEntry);
+  const prefixMatches = normalizedQuery
+    ? entries.filter((entry) => isModelPathPrefixMatch(entry.normalizedPath, normalizedQuery))
+    : entries;
+
+  if (prefixMatches.length > 0) {
+    return [...header, ...formatModelDrilldown(prefixMatches, normalizedQuery)].join("\n");
+  }
+
+  const searchMatches = entries.filter((entry) => isModelSearchMatch(entry, normalizedQuery));
+  if (searchMatches.length === 0) {
+    return [
+      ...header,
+      `Filter: ${query.trim()}`,
+      `No matching models among ${models.length} available models.`,
+      `Available providers: ${formatAvailableModelProviderSummary(models)}.`,
+    ].join("\n");
+  }
+
+  return [...header, ...formatModelSearchGroups(searchMatches, normalizedQuery, models.length)].join("\n");
 }
 
 function formatMissingSubagentMessage(id: string): string {
@@ -368,9 +380,12 @@ function resolveAvailableModelId(modelReference: string, ctx: ExtensionContext):
   throw new Error(
     [
       `Model "${modelReference}" is not available to pi-orchestra.`,
-      "Use an exact provider/model id from /orchestra-models, or omit profile.model to inherit the current Pi model.",
-      `Available models: ${formatAvailableModelIdList(models)}`,
-    ].join(" "),
+      formatRequestedProviderHint(normalizedReference, models),
+      "Run /orchestra-models to copy an exact provider/model id, or omit profile.model to inherit the current Pi model.",
+      `Available providers: ${formatAvailableModelProviderSummary(models)}.`,
+    ]
+      .filter((part) => part.length > 0)
+      .join(" "),
   );
 }
 
@@ -395,8 +410,129 @@ function findModelByReference(modelReference: string, models: AgentProfileModel[
   return idMatches.length === 1 ? idMatches[0] : undefined;
 }
 
-function formatAvailableModelIdList(models: AgentProfileModel[]): string {
-  return models.map(formatModelId).join(", ");
+interface ModelPathEntry {
+  model: AgentProfileModel;
+  path: string;
+  normalizedPath: string;
+  segments: string[];
+  normalizedSegments: string[];
+}
+
+function toModelPathEntry(model: AgentProfileModel): ModelPathEntry {
+  const path = formatModelId(model);
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  return {
+    model,
+    path,
+    normalizedPath: path.toLowerCase(),
+    segments,
+    normalizedSegments: segments.map((segment) => segment.toLowerCase()),
+  };
+}
+
+function normalizeModelQuery(query: string): string {
+  return query
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function isModelPathPrefixMatch(path: string, query: string): boolean {
+  return path === query || path.startsWith(`${query}/`);
+}
+
+function isModelSearchMatch(entry: ModelPathEntry, query: string): boolean {
+  const haystack = [entry.normalizedPath, entry.model.provider, entry.model.id, entry.model.name ?? ""]
+    .join("\n")
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
+function formatModelDrilldown(entries: ModelPathEntry[], normalizedPrefix: string): string[] {
+  const prefixSegments = normalizedPrefix ? normalizedPrefix.split("/") : [];
+  const depth = prefixSegments.length;
+  const groups = new Map<string, number>();
+  const leaves: ModelPathEntry[] = [];
+
+  for (const entry of entries) {
+    const remaining = entry.segments.slice(depth);
+    if (remaining.length > 1) {
+      const group = entry.segments.slice(0, depth + 1).join("/");
+      groups.set(group, (groups.get(group) ?? 0) + 1);
+    } else {
+      leaves.push(entry);
+    }
+  }
+
+  if (groups.size > 0 && leaves.length === 0) {
+    return [
+      normalizedPrefix ? `Filter: ${normalizedPrefix}` : "Available model groups:",
+      `Groups (${groups.size}, ${entries.length} models):`,
+      ...formatModelGroupLines(groups),
+    ];
+  }
+
+  return [
+    normalizedPrefix ? `Filter: ${normalizedPrefix}` : "Available models:",
+    `Models (${entries.length}):`,
+    ...entries.map(formatModelPathEntryLine),
+  ];
+}
+
+function formatModelSearchGroups(entries: ModelPathEntry[], query: string, totalModelCount: number): string[] {
+  const groups = new Map<string, number>();
+  const leaves: ModelPathEntry[] = [];
+
+  for (const entry of entries) {
+    const matchingSegmentIndex = entry.normalizedSegments.findIndex((segment) => segment.includes(query));
+    if (matchingSegmentIndex < 0 || matchingSegmentIndex === entry.segments.length - 1) {
+      leaves.push(entry);
+      continue;
+    }
+
+    const group = entry.segments.slice(0, matchingSegmentIndex + 1).join("/");
+    groups.set(group, (groups.get(group) ?? 0) + 1);
+  }
+
+  const lines = [`Filter: ${query}`, `Matching groups/models (${entries.length} of ${totalModelCount}):`];
+  lines.push(...formatModelGroupLines(groups));
+  lines.push(...leaves.map(formatModelPathEntryLine));
+  return lines;
+}
+
+function formatModelGroupLines(groups: Map<string, number>): string[] {
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([group, count]) => `- ${group}: ${count} ${count === 1 ? "model" : "models"} — use /orchestra-models ${group}`,
+    );
+}
+
+function formatModelPathEntryLine(entry: ModelPathEntry): string {
+  return `- ${entry.path}${entry.model.name ? ` — ${entry.model.name}` : ""}`;
+}
+
+function formatRequestedProviderHint(modelReference: string, models: AgentProfileModel[]): string {
+  const slashIndex = modelReference.indexOf("/");
+  if (slashIndex < 0) return "";
+
+  const requestedProvider = modelReference.slice(0, slashIndex).trim();
+  if (!requestedProvider) return "";
+
+  const hasProvider = models.some((model) => model.provider.toLowerCase() === requestedProvider.toLowerCase());
+  return hasProvider
+    ? `Provider "${requestedProvider}" is available, but that model id was not found.`
+    : `Provider "${requestedProvider}" is not available.`;
+}
+
+function formatAvailableModelProviderSummary(models: AgentProfileModel[]): string {
+  const counts = new Map<string, number>();
+  for (const model of models) counts.set(model.provider, (counts.get(model.provider) ?? 0) + 1);
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([provider, count]) => `${provider} (${count} ${count === 1 ? "model" : "models"})`)
+    .join(", ");
 }
 
 function getAvailableModels(ctx: ExtensionContext): AgentProfileModel[] {

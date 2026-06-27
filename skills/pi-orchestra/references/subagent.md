@@ -79,6 +79,5 @@ Custom profiles need a readable role/profile `name` and a `systemPrompt`.
 - Reuse a bus only for agents working on the same delegated work item.
 - Child agents receive `finish` and `publish_bus` automatically; do not include
   `bus` in profile tools.
-- Omit `profile.model` unless you intentionally want a different child model. If
-  selecting one, run `/orchestra-models` and copy an exact `provider/model` id;
-  match model strength to task difficulty.
+- Omit `profile.model` unless intentionally overriding. The supervising caller
+  chooses before spawn; see `model-selection.md`.

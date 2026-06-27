@@ -97,6 +97,33 @@ test("workgroup creates an internal bus and launches members on it", async () =>
   );
 });
 
+test("workgroup status shows member models", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const created = await tool.execute({
+    action: "create",
+    name: "model-debug-workgroup",
+    goal: "Debug member model choices.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [
+      {
+        name: "codex-mini-medium",
+        profile: { ...backendProfile, model: "openai-codex/gpt-5.4-mini" },
+        task: "Inspect model selection.",
+      },
+    ],
+  });
+
+  const status = await tool.execute({ action: "status", id: workgroup.id });
+
+  assert.equal(status.action, "status");
+  assert.match(status.message, /- codex-mini-medium: running — openai-codex\/gpt-5\.4-mini/);
+});
+
 test("workgroup member task guides members to share useful context", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));

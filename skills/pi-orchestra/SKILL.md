@@ -1,6 +1,6 @@
 ---
 name: pi-orchestra
-description: "Use when delegating work with Pi-Orchestra tools: bus, subagent, workgroup, or workflow. Helps choose the right orchestration primitive, brief child agents, coordinate led workgroups, react to completion events, and avoid polling or over-delegation."
+description: "Use whenever using Pi-Orchestra: bus, subagent, workgroup, workflow, child agents, or model overrides."
 ---
 
 # Pi-Orchestra
@@ -66,8 +66,9 @@ Profile options:
 
 - Prefer a built-in `preset` when it fits: `source-code-qa`,
   `external-researcher`, or `code-reviewer`.
-- With a preset, provide `tools` explicitly and optionally override `name` or
-  `model`; do not write a duplicate `systemPrompt`.
+- With a preset, provide `tools` explicitly and optionally override `name`;
+  override `model` only after reading `references/model-selection.md`. Do not
+  write a duplicate `systemPrompt`.
 - For custom roles, provide `name`, `systemPrompt`, `tools`, and optionally
   `model`.
 - `tools`: always inject an explicit allowlist from the tools available to the
@@ -75,7 +76,7 @@ Profile options:
   tool names for research/browser work. Do not include `bus`; child agents get
   `publish_bus` automatically for shared context. Use `[]` for
   supplied-context-only roles.
-- `model`: usually omit so the child inherits the current Pi model. If a task needs a different strength model, first use `/orchestra-models` to see available exact `provider/model` ids. Choose lighter/faster models for simple checks or formatting, standard models for normal coding/review/research, and stronger/deeper models for broad architecture, high-risk review, ambiguous planning, or synthesis-heavy work.
+- `model`: usually omit. If overriding, read `references/model-selection.md` first.
 
 ## Detailed call examples
 
@@ -85,6 +86,7 @@ Read the reference that matches the primitive you are about to use:
 - `references/workgroup.md` for workgroup create/add_members/finish/cancel calls.
 - `references/workflow.md` for workflow create/spawn_workgroup/finish/cancel calls,
   including leader run names vs profile names.
+- `references/model-selection.md` for optional `profile.model` overrides.
 
 ## Patterns
 

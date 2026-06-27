@@ -54,7 +54,7 @@ test("extension registers orchestra commands", () => {
   );
 });
 
-test("orchestra-models command reports available model ids and strength guidance", async () => {
+test("orchestra-models command reports available model groups", async () => {
   const { registeredCommands, sentMessages } = registerExtension();
   const command = registeredCommands.find((current) => current.name === "orchestra-models");
   assert.ok(command);
@@ -72,9 +72,33 @@ test("orchestra-models command reports available model ids and strength guidance
 
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0]?.message.customType, "pi-orchestra.models");
-  assert.match(sentMessages[0]?.message.content ?? "", /Current model: anthropic\/claude-sonnet/);
-  assert.match(sentMessages[0]?.message.content ?? "", /anthropic\/claude-haiku/);
-  assert.match(sentMessages[0]?.message.content ?? "", /stronger\/deeper models/);
+  const content = sentMessages[0]?.message.content ?? "";
+  assert.match(content, /Current model: anthropic\/claude-sonnet/);
+  assert.match(content, /Omit profile\.model to inherit/);
+  assert.match(content, /- anthropic: 2 models/);
+  assert.doesNotMatch(content, /anthropic\/claude-haiku/);
+  assert.doesNotMatch(content, /Artificial Analysis|flagship|mid-tier|lower-tier/);
+});
+
+test("orchestra-models command filters available model ids", async () => {
+  const { registeredCommands, sentMessages } = registerExtension();
+  const command = registeredCommands.find((current) => current.name === "orchestra-models");
+  assert.ok(command);
+
+  await command.handler(
+    "openrouter/openai",
+    createExtensionContext("/workspace", {
+      availableModels: [
+        { provider: "openrouter", id: "openai/gpt-4.1-nano", name: "GPT 4.1 Nano" },
+        { provider: "openrouter", id: "anthropic/claude-opus", name: "Claude Opus" },
+      ],
+    }),
+  );
+
+  const content = sentMessages[0]?.message.content ?? "";
+  assert.match(content, /Filter: openrouter\/openai/);
+  assert.match(content, /openrouter\/openai\/gpt-4\.1-nano/);
+  assert.doesNotMatch(content, /openrouter\/anthropic\/claude-opus/);
 });
 
 test("bus parameters use an OpenAI-compatible root object schema without wait actions", () => {

@@ -50,21 +50,67 @@ test("profile model selection normalizes available Pi model ids", () => {
   );
 });
 
-test("profile model selection rejects unavailable models with available choices", () => {
+test("profile model selection rejects unavailable models with compact provider guidance", () => {
   assert.throws(
-    () => withDefaultProfileModel({ ...profile, model: "missing-model" }, modelContext()),
-    /Model "missing-model" is not available.*Available models: anthropic\/claude-haiku/,
+    () => withDefaultProfileModel({ ...profile, model: "openai/missing-model" }, modelContext()),
+    /Model "openai\/missing-model" is not available.*Provider "openai" is not available.*Run \/orchestra-models.*Available providers: anthropic \(2 models\)/,
   );
 });
 
-test("available model selection guide lists exact ids and task-strength guidance", () => {
+test("available model guide summarizes providers until filtered", () => {
   const guide = formatAvailableModelSelectionGuide(
     modelContext({ model: { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" } }),
   );
 
   assert.match(guide, /Current model: anthropic\/claude-sonnet/);
-  assert.match(guide, /Use lighter\/faster models/);
+  assert.match(guide, /Omit profile\.model to inherit/);
+  assert.match(guide, /exact provider\/model id/);
+  assert.match(guide, /- anthropic: 2 models/);
+  assert.doesNotMatch(guide, /anthropic\/claude-haiku/);
+  assert.doesNotMatch(guide, /Artificial Analysis|flagship|mid-tier|lower-tier/);
+});
+
+test("available model guide filters to exact model ids", () => {
+  const guide = formatAvailableModelSelectionGuide(modelContext(), "anthropic");
+
+  assert.match(guide, /Filter: anthropic/);
+  assert.match(guide, /Models \(2\):/);
   assert.match(guide, /anthropic\/claude-haiku/);
+  assert.match(guide, /anthropic\/claude-sonnet/);
+});
+
+test("available model guide drills into slash-delimited model groups", () => {
+  const guide = formatAvailableModelSelectionGuide(
+    modelContext({
+      availableModels: [
+        { provider: "openrouter", id: "openai/gpt-4.1-nano", name: "GPT 4.1 Nano" },
+        { provider: "openrouter", id: "anthropic/claude-opus", name: "Claude Opus" },
+        { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT 5.4 Mini" },
+      ],
+    }),
+    "openrouter",
+  );
+
+  assert.match(guide, /Filter: openrouter/);
+  assert.match(guide, /- openrouter\/anthropic: 1 model — use \/orchestra-models openrouter\/anthropic/);
+  assert.match(guide, /- openrouter\/openai: 1 model — use \/orchestra-models openrouter\/openai/);
+  assert.doesNotMatch(guide, /openrouter\/openai\/gpt-4\.1-nano/);
+});
+
+test("available model guide groups broad substring searches", () => {
+  const guide = formatAvailableModelSelectionGuide(
+    modelContext({
+      availableModels: [
+        { provider: "openrouter", id: "openai/gpt-4.1-nano", name: "GPT 4.1 Nano" },
+        { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT 5.4 Mini" },
+      ],
+    }),
+    "openai",
+  );
+
+  assert.match(guide, /Filter: openai/);
+  assert.match(guide, /- openai-codex: 1 model — use \/orchestra-models openai-codex/);
+  assert.match(guide, /- openrouter\/openai: 1 model — use \/orchestra-models openrouter\/openai/);
 });
 
 test("agent profile params require explicit tools", () => {
