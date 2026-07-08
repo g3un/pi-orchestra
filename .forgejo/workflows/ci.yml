@@ -10,29 +10,25 @@ jobs:
   checks:
     runs-on: codeberg-small
     container:
-      image: node:24-alpine
+      image: node:lts-slim
     defaults:
       run:
         shell: sh
 
     steps:
+      - name: Install CI prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git xz-utils
+          rm -rf /var/lib/apt/lists/*
+          install -d -m 0755 /nix
+          mkdir -p /etc/nix
+          printf '%s\n' 'build-users-group =' 'experimental-features = nix-command flakes' > /etc/nix/nix.conf
+          curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install | sh -s -- --no-daemon
+          ln -sf /root/.nix-profile/bin/nix /usr/local/bin/nix
+
       - name: Check out repository
         uses: https://data.forgejo.org/actions/checkout@v4
 
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Install dependencies
-        run: corepack pnpm install --frozen-lockfile
-
-      - name: Check formatting
-        run: corepack pnpm fmt:check
-
-      - name: Lint
-        run: corepack pnpm lint
-
-      - name: Test
-        run: corepack pnpm test
-
-      - name: Check package contents
-        run: corepack pnpm pack --dry-run
+      - name: Run checks
+        run: nix flake check path:$PWD

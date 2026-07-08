@@ -1,3 +1,25 @@
+# Pi local state
 .pi/
 
+# Dependencies / package manager caches
 node_modules/
+.pnpm-store/
+
+# direnv / Nix
+.direnv/
+result
+result-*
+
+# Build / test outputs
+dist/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store

@@ -34,6 +34,20 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
 - Child profiles can use presets such as `source-code-qa`,
   `external-researcher`, and `code-reviewer`, or provide a custom role prompt.
 
+## Development
+
+Use the Nix flake for local development and CI parity:
+
+```bash
+nix develop
+corepack pnpm install
+nix flake check
+```
+
+The devcontainer also enters the flake shell and installs dependencies with
+Corepack/pnpm after creation. Forgejo CI and publishing run the same
+`nix flake check` entrypoint.
+
 ## Core concepts
 
 Implementation hardening trade-offs that affect recovery and compatibility are

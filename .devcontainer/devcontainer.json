@@ -1,0 +1,9 @@
+{
+  "name": "pi-orchestra",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "dev",
+  "updateRemoteUserUID": false,
+  "postCreateCommand": "cd ${containerWorkspaceFolder} && nix develop path:${containerWorkspaceFolder} --command corepack pnpm install"
+}
