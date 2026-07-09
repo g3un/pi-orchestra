@@ -1,5 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
-import { v7 as uuid7 } from "uuid";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -18,12 +18,14 @@ import {
 import {
   createBusSubscription,
   isBusMessageDelivered,
+  markBusMessageDeliveredForSubscriber,
   markBusMessagesDelivered,
   type Bus,
   type BusMessage,
   type BusSubscription,
 } from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
+import { formatBusMessageText } from "../formatting.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
 import { resolveBusName, resolveRunName } from "../utils.ts";
@@ -34,6 +36,16 @@ export interface PiAgentRuntimeOptions {
   resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
   resolveCustomTools: ((runId: string) => ToolDefinition[]) | undefined;
   onPromptTaskError?: (runId: string, error: unknown) => void;
+  onSpawnRollback?: (runId: string) => void;
+  ownerSessionId: string;
+}
+
+function safeDisposeSession(session: AgentSession): void {
+  try {
+    session.dispose();
+  } catch {
+    // Cleanup errors must not block store/runtime disposal.
+  }
 }
 
 interface RuntimeEntry {
@@ -72,7 +84,10 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
   private readonly resolveCustomTools: NonNullable<PiAgentRuntimeOptions["resolveCustomTools"]>;
   private readonly onPromptTaskError: PiAgentRuntimeOptions["onPromptTaskError"];
+  private readonly onSpawnRollback: PiAgentRuntimeOptions["onSpawnRollback"];
+  private readonly ownerSessionId: string;
   private readonly pendingBusDeliveryIds = new Set<string>();
+  private readonly activeToolRunId = new AsyncLocalStorage<string>();
   private disposed = false;
 
   constructor(options: PiAgentRuntimeOptions) {
@@ -81,6 +96,8 @@ export class PiAgentRuntime implements AgentRuntime {
     this.resolveModel = options.resolveModel;
     this.resolveCustomTools = options.resolveCustomTools ?? ((_runId: string) => []);
     this.onPromptTaskError = options.onPromptTaskError;
+    this.onSpawnRollback = options.onSpawnRollback;
+    this.ownerSessionId = options.ownerSessionId;
   }
 
   async spawn(
@@ -104,6 +121,7 @@ export class PiAgentRuntime implements AgentRuntime {
       profile,
       task,
       busId,
+      ownerSessionId: this.ownerSessionId,
       sessionFile,
       parentRunId: options.parentRunId,
       state: "running",
@@ -111,7 +129,7 @@ export class PiAgentRuntime implements AgentRuntime {
     };
 
     const childTools = this.createChildTools(run.id);
-    const customTools = this.selectCustomTools(baseTools, childTools, run.id);
+    const customTools = this.wrapToolExecutors(run.id, this.selectCustomTools(baseTools, childTools, run.id));
     const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
     const { session } = await createAgentSession({
       cwd: this.cwd,
@@ -121,16 +139,34 @@ export class PiAgentRuntime implements AgentRuntime {
       sessionManager,
     });
 
-    this.store.saveRun(run);
-    this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
-    const entry: RuntimeEntry = { session };
-    this.entries.set(run.id, entry);
-    this.startPromptTask(
-      run.id,
-      entry,
-      this.withSubscribedBusMessages(run.id, buildInitialPrompt(profile, task, run.name)),
-    );
-    return run;
+    let savedRun = false;
+    try {
+      this.store.saveRun(run);
+      savedRun = true;
+      this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
+      const entry: RuntimeEntry = { session };
+      this.entries.set(run.id, entry);
+      this.startPromptTask(
+        run.id,
+        entry,
+        this.withSubscribedBusMessages(run.id, buildInitialPrompt(profile, task, run.name)),
+      );
+      return run;
+    } catch (error) {
+      safeDisposeSession(session);
+      this.entries.delete(run.id);
+      this.deleteAgentBusSubscriptions(run.id);
+      if (savedRun) {
+        try {
+          // Store run notifications are synchronous; suppress them before saving the rollback close.
+          this.onSpawnRollback?.(run.id);
+          this.store.saveRun({ ...run, state: "closed" });
+        } catch {
+          // Keep the original spawn failure.
+        }
+      }
+      throw error;
+    }
   }
 
   async message(id: string, message: string): Promise<AgentRun> {
@@ -160,22 +196,27 @@ export class PiAgentRuntime implements AgentRuntime {
   async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
     this.assertNotDisposed();
     this.requireBus(busId);
-    const busMessage: BusMessage = {
-      id: uuid7(),
+    const busMessage = {
+      id: crypto.randomUUID(),
       message,
       from,
     };
 
-    this.store.addBusMessage(busId, busMessage);
+    const savedBusMessage = this.store.addBusMessage(busId, busMessage);
+    if (from === "main") markBusMessageDeliveredForSubscriber(this.store, busId, "main", "main", savedBusMessage);
 
-    const steeringMessage = this.formatBusMessagesForPrompt([busMessage]);
+    const steeringMessage = this.formatBusMessagesForPrompt([savedBusMessage]);
     const steerTasks: Array<Promise<void>> = [];
     for (const subscription of this.store.listBusSubscriptions({
       busId,
       subscriberId: undefined,
       subscriberKind: "agent",
     })) {
-      if (subscription.subscriberId === from || isBusMessageDelivered(subscription, busMessage.id)) continue;
+      if (subscription.subscriberId === from) {
+        this.markSubscriptionMessagesDelivered(subscription, savedBusMessage);
+        continue;
+      }
+      if (isBusMessageDelivered(subscription, savedBusMessage)) continue;
 
       const run = this.store.getRun(subscription.subscriberId);
       const entry = this.entries.get(subscription.subscriberId);
@@ -184,12 +225,12 @@ export class PiAgentRuntime implements AgentRuntime {
       steerTasks.push(
         entry.session
           .steer(steeringMessage)
-          .then(() => this.markSubscriptionMessagesDelivered(subscription, busMessage)),
+          .then(() => this.markSubscriptionMessagesDelivered(subscription, savedBusMessage)),
       );
     }
 
     await Promise.all(steerTasks);
-    return busMessage;
+    return savedBusMessage;
   }
 
   listRunIds(): string[] {
@@ -202,7 +243,8 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const entry = this.entries.get(id);
     if (run.state === "closed") {
-      entry?.session.dispose();
+      if (entry) safeDisposeSession(entry.session);
+      if (this.activeToolRunId.getStore() !== id) await this.waitForPromptTask(entry);
       this.entries.delete(id);
       return run;
     }
@@ -210,9 +252,10 @@ export class PiAgentRuntime implements AgentRuntime {
     const closedRun: AgentRun = { ...run, state: "closed" };
     this.store.saveRun(closedRun);
     this.deleteAgentBusSubscriptions(id);
-    entry?.session.dispose();
+    if (entry) safeDisposeSession(entry.session);
+    if (this.activeToolRunId.getStore() !== id) await this.waitForPromptTask(entry);
     this.entries.delete(id);
-    return closedRun;
+    return this.store.getRun(id) ?? closedRun;
   }
 
   dispose(): void {
@@ -228,8 +271,16 @@ export class PiAgentRuntime implements AgentRuntime {
       this.deleteAgentBusSubscriptions(id);
     }
 
-    for (const [, entry] of entries) entry.session.dispose();
+    for (const [, entry] of entries) safeDisposeSession(entry.session);
     this.entries.clear();
+  }
+
+  private async waitForPromptTask(entry: RuntimeEntry | undefined): Promise<void> {
+    if (!entry?.promptTask) return;
+    await Promise.race([
+      entry.promptTask.catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    ]);
   }
 
   private startPromptTask(id: string, entry: RuntimeEntry, message: PromptMessage): void {
@@ -292,6 +343,14 @@ export class PiAgentRuntime implements AgentRuntime {
     return dedupeToolsByName([...requestedCustomTools, ...childTools]);
   }
 
+  private wrapToolExecutors(runId: string, tools: ToolDefinition[]): ToolDefinition[] {
+    return tools.map((tool) => ({
+      ...tool,
+      execute: async (...args: Parameters<ToolDefinition["execute"]>) =>
+        await this.activeToolRunId.run(runId, async () => await tool.execute(...args)),
+    }));
+  }
+
   private createChildTools(runId: string): ToolDefinition[] {
     const finishAgent = {
       name: "finish",
@@ -348,7 +407,7 @@ export class PiAgentRuntime implements AgentRuntime {
               text: `Published message to bus ${this.formatBusName(run.busId)}.`,
             },
           ],
-          details: busMessage,
+          details: { ...busMessage, message: formatBusMessageText(busMessage.message) },
         };
       },
     } satisfies ToolDefinition<typeof PublishBusParams, BusMessage>;
@@ -380,7 +439,7 @@ export class PiAgentRuntime implements AgentRuntime {
     try {
       this.onPromptTaskError?.(runId, error);
     } catch {
-      // Prompt task failures are already terminal for that task; the observer must not create another rejection.
+      // Prompt task failures are already terminal; the observer must not create another rejection.
     }
   }
 
@@ -393,16 +452,11 @@ export class PiAgentRuntime implements AgentRuntime {
     return run !== undefined && isRunningWithoutResult(run);
   }
 
-  private findRunningLedScope(runId: string): { type: "workgroup" | "workflow"; name: string } | undefined {
+  private findRunningLedScope(runId: string): { type: "workgroup"; name: string } | undefined {
     const workgroup = this.store
       .listWorkgroups()
       .find((current) => current.leaderRunId === runId && current.state === "running");
-    if (workgroup) return { type: "workgroup", name: workgroup.name };
-
-    const workflow = this.store
-      .listWorkflows()
-      .find((current) => current.leaderRunId === runId && current.state === "running");
-    return workflow ? { type: "workflow", name: workflow.name } : undefined;
+    return workgroup ? { type: "workgroup", name: workgroup.name } : undefined;
   }
 
   private requireBus(id: string): Bus {
@@ -439,7 +493,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
       const subscriptionUnreadMessages = bus.messages.filter((message) => {
         if (message.from === runId) return false;
-        if (isBusMessageDelivered(subscription, message.id)) return false;
+        if (isBusMessageDelivered(subscription, message)) return false;
         return !this.isPendingBusDelivery(subscription.id, message.id);
       });
       if (subscriptionUnreadMessages.length === 0) continue;
@@ -477,9 +531,9 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   private markSubscriptionMessagesDelivered(subscription: BusSubscription, messages: BusMessage | BusMessage[]): void {
-    const latestSubscription = this.store.getBusSubscription(subscription.id) ?? subscription;
-    const busMessages = this.store.getBus(latestSubscription.busId)?.messages ?? [];
-    this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages, busMessages));
+    const latestSubscription = this.store.getBusSubscription(subscription.id);
+    if (!latestSubscription) return;
+    this.store.saveBusSubscription(markBusMessagesDelivered(latestSubscription, messages));
   }
 
   private formatBusMessagesForPrompt(messages: BusMessage[]): string {
@@ -531,7 +585,6 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     "## Completion",
     "- End with exactly one finalization path; never stop text-only.",
     "- If you lead a running workgroup, use workgroup action=finish before calling finish for your own run.",
-    "- If you lead a running workflow, use workflow action=finish before calling finish for your own run.",
     "- Otherwise call finish exactly once with status, summary, and useful data.",
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
     "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
@@ -562,8 +615,8 @@ function createAgentBusSubscription(runId: string, busId: string): BusSubscripti
     busId,
     subscriberId: runId,
     subscriberKind: "agent",
-    lastDeliveredMessageId: null,
-    deliveredMessageIds: [],
+    lastDeliveredSeq: 0,
+    deliveredSeqs: [],
   });
 }
 

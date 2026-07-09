@@ -1,4 +1,4 @@
-# Pi-Orchestra: Agent Guide
+# Pi-Orchestra: agent guide
 
 ## Coding guidelines
 
@@ -10,24 +10,23 @@
 - Prefer explicit inputs over implicit defaults when behavior affects runtime capabilities, tools, permissions, or public API contracts.
 - Treat LLM-facing tool parameter schemas as a boundary exception: when complex `anyOf`/`oneOf` unions would hurt provider/tool-calling compatibility or model usability, use a simple input shape with actionable runtime validation, then normalize immediately into strict core/runtime types.
 
-## Project Structure
+## Project structure
 
-- `src/` contains all TypeScript source for the package and Pi extension.
-- `src/core/` holds the orchestration domain model and runtime-independent logic: subagents, workgroups, workflows, the event bus, store/runtime contracts, and core tests.
+- `src/` contains the TypeScript source for the package and Pi extension.
+- `src/core/` holds the orchestration domain model and runtime-independent logic: subagents, workgroups, the event bus, store/runtime contracts, and core tests.
 - `src/adapters/` bridges core abstractions to concrete implementations, including the in-memory store and Pi runtime integration.
 - `src/tools/` contains tool implementations exposed to agents, plus their Pi tool definitions and colocated tests.
 - `src/extension/` is the Pi extension entry point; it wires stores, runtime adapters, the orchestra, and registered tools together.
-- `src/profiles/` contains reusable agent profile presets used by orchestration flows.
 - `docs/` holds project architecture notes.
 - `agent-docs/` holds agent-facing implementation notes.
 - `scripts/` holds repository maintenance and release automation used by CI.
 - Root-level configuration files define package metadata, TypeScript, linting, formatting, and test setup.
 
-## Agent Docs
+## Agent docs
 
-- Start from `agent-docs/README.md` before making agent-facing changes; it maps the detailed guidance to the codebase.
+- Start with `agent-docs/README.md` before making agent-facing changes; it maps the detailed guidance to the codebase.
 
-## Development Tools
+## Development tools
 
 - Use `corepack pnpm` to manage dependencies and run scripts
 - Use `oxlint` for linting and type checking

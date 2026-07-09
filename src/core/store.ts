@@ -1,7 +1,14 @@
 import type { AgentRun } from "./subagent.ts";
-import type { Bus, BusMessage, BusMessageEvent, BusSubscription, ListBusSubscriptionsOptions } from "./bus.ts";
-import type { WorkflowRun } from "./workflow.ts";
+import type {
+  Bus,
+  BusMessage,
+  BusMessageEvent,
+  BusSubscription,
+  ListBusSubscriptionsOptions,
+  NewBusMessage,
+} from "./bus.ts";
 import type { WorkgroupRun } from "./workgroup.ts";
+import type { WorkflowRun } from "./workflow.ts";
 
 export interface AgentStore {
   saveRun(run: AgentRun): void;
@@ -16,8 +23,8 @@ export interface AgentStore {
   listBuses(): Bus[];
   /** Update a bus payload from the latest stored value. */
   updateBus(busId: string, update: (bus: Bus) => Bus): Bus | undefined;
-  /** Add or replace a bus message by id. */
-  addBusMessage(busId: string, message: BusMessage): void;
+  /** Add or replace a bus message by id; appended messages receive the next per-bus seq. */
+  addBusMessage(busId: string, message: NewBusMessage | BusMessage): BusMessage;
   subscribeBusMessages(
     listener: (event: BusMessageEvent) => void,
     filter: ((event: BusMessageEvent) => boolean) | undefined,

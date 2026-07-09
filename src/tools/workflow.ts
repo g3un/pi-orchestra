@@ -1,5 +1,6 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createBusSubscription, maxMessageSeq, type Bus } from "../core/bus.ts";
 import {
   AGENT_RESULT_STATUS_VALUES,
   type AgentProfile,
@@ -7,1002 +8,425 @@ import {
   type AgentResultStatus,
   type AgentRun,
 } from "../core/subagent.ts";
-import { BUS_NAME_MAX_LENGTH, type Bus } from "../core/bus.ts";
-import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
-import type { WorkflowRun } from "../core/workflow.ts";
-import { createWorkgroupIdentity, createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
 import {
-  closeAgentRuns,
-  createEntityIdentity,
-  findWorkflow,
-  formatError,
-  isAgentRunFinished,
-  normalizeEntityName,
-  requireWorkflow,
-  resolveBusName,
-  resolveRunName,
-  resolveWorkgroupName,
-  type NamedEntity,
-} from "../utils.ts";
+  createWorkflowIdentity,
+  createWorkflowRun,
+  WORKFLOW_NAME_MAX_LENGTH,
+  type WorkflowRun,
+} from "../core/workflow.ts";
+import type { OrchestraApi } from "../core/orchestra.ts";
+import { createBusNameFromOwnerName, createPrefixedName } from "../naming.ts";
+import { boundResultData } from "../formatting.ts";
+import { closeAgentRuns, findEntity, requireParam, resolveRunName, resolveWorkgroupName } from "../utils.ts";
+import { subscribeMainToBus } from "./bus.ts";
 import {
   AgentProfileParams,
-  formatResultData,
+  spawnSubagent,
   SubagentRunNameParam,
   toAgentProfile,
-  type RawAgentProfileParams,
-  type SubagentSpawnInput,
   withDefaultProfileModelInput,
+  type RawAgentProfileParams,
 } from "./subagent.ts";
-import { closeWorkgroupRun } from "./workgroup.ts";
-
-type WorkflowLeaderInput = Omit<SubagentSpawnInput, "action" | "busId">;
+import {
+  cancelWorkgroup,
+  createAndLaunchWorkgroup,
+  type WorkgroupMemberInput,
+  type WorkgroupToolDeps,
+} from "./workgroup.ts";
 
 export type WorkflowInput =
-  | {
-      action: "create";
-      name: string;
-      goal: string;
-      leader: WorkflowLeaderInput;
-    }
-  | {
-      action: "spawn_workgroup";
-      workflowId: string;
-      name: string;
-      goal: string;
-      leader: WorkflowLeaderInput;
-    }
-  | {
-      action: "update_status";
-      workflowId: string;
-      statusLine: string;
-    }
-  | {
-      action: "finish";
-      workflowId: string;
-      result: AgentResult;
-    }
-  | {
-      action: "status";
-      workflowId: string;
-    }
-  | {
-      action: "cancel";
-      workflowId: string;
-    };
+  | { action: "create"; name: string; goal: string }
+  | { action: "add_workgroup"; id: string; name: string; goal: string; members: WorkgroupMemberInput[] }
+  | { action: "finish"; id: string; result: AgentResult }
+  | { action: "cancel"; id: string }
+  | { action: "status"; id: string };
 
-export type WorkflowToolOutput =
-  | {
-      action: "create";
-      workflow: WorkflowRun;
-      bus: Bus;
-    }
-  | {
-      action: "spawn_workgroup";
-      workflow: WorkflowRun;
-      workgroup: WorkgroupRun;
-      bus: Bus;
-    }
-  | {
-      action: "update_status";
-      workflow: WorkflowRun;
-    }
-  | {
-      action: "finish";
-      workflow: WorkflowRun;
-    }
-  | {
-      action: "status";
-      workflow: WorkflowRun;
-    }
-  | {
-      action: "cancel";
-      workflow: WorkflowRun;
-    }
-  | {
-      action: "not_found";
-      workflowId: string;
-    };
+export type WorkflowOutput =
+  | { action: "create"; workflow: WorkflowRun; bus: Bus; coordinator: AgentRun; message: string }
+  | { action: "add_workgroup"; workflow: WorkflowRun; workgroupId: string; runIds: string[]; message: string }
+  | { action: "finish"; workflow: WorkflowRun; message: string }
+  | { action: "cancel"; workflow: WorkflowRun; alreadyClosed: boolean; message: string }
+  | { action: "status"; workflow: WorkflowRun; coordinator: AgentRun | undefined; message: string }
+  | { action: "not_found"; id: string; message: string };
 
 export interface WorkflowTool {
   name: "workflow";
-  execute(input: WorkflowInput): Promise<WorkflowToolOutput>;
-  formatOutput(output: WorkflowToolOutput): string;
-  dispose(): void;
+  execute(input: WorkflowInput): Promise<WorkflowOutput>;
 }
 
-export interface WorkflowToolDeps {
-  orchestra: OrchestraApi;
-  store: AgentStore;
+export interface WorkflowToolDeps extends Omit<WorkgroupToolDeps, "parentRunId"> {
+  parentRunId: string | null;
 }
-
-export interface WorkflowPiToolOptions {
-  onWorkflowInput: ((ctx: ExtensionContext, input: WorkflowInput) => void) | undefined;
-  onWorkflowOutput: ((ctx: ExtensionContext, output: WorkflowToolOutput) => void) | undefined;
-}
-
-const WORKFLOW_STATUS_LINE_MAX_LENGTH = 160;
-const INTERNAL_BUS_NAME_MAX_LENGTH = BUS_NAME_MAX_LENGTH;
-const WORKFLOW_FLOW_BUS_SUFFIX = "-flow-bus";
-const WORKFLOW_CHILD_BUS_SUFFIX = "-bus";
-
-const WorkflowLeaderParams = Type.Object(
-  {
-    profile: AgentProfileParams,
-    task: Type.String({
-      description: "Leader task.",
-    }),
-    name: SubagentRunNameParam,
-  },
-  {
-    additionalProperties: false,
-    description: "Required for create/spawn_workgroup. Leader spec.",
-  },
-);
-
-const WorkflowActionParams = Type.String({
-  enum: ["create", "spawn_workgroup", "update_status", "finish", "status", "cancel"],
-  description: "create/spawn_workgroup/update_status/finish/status/cancel a workflow.",
-});
 
 const WorkflowToolParams = Type.Object(
   {
-    action: WorkflowActionParams,
+    action: Type.String({ enum: ["create", "add_workgroup", "finish", "cancel", "status"] }),
+    id: Type.Optional(Type.String({ description: "Required except create. Workflow name." })),
     name: Type.Optional(
-      Type.String({
-        description: "Required for create/spawn_workgroup. Unique name.",
-      }),
+      Type.String({ description: "Required for create/add_workgroup. Workflow or child workgroup name." }),
     ),
-    workflowId: Type.Optional(
-      Type.String({
-        description: "Required for spawn_workgroup/update_status/finish/status/cancel. Workflow name.",
-      }),
+    goal: Type.Optional(Type.String({ description: "Required for create/add_workgroup. Goal to accomplish." })),
+    members: Type.Optional(
+      Type.Array(
+        Type.Object(
+          { profile: AgentProfileParams, task: Type.String(), name: SubagentRunNameParam },
+          { additionalProperties: false },
+        ),
+        { minItems: 1, description: "Required for add_workgroup. Workgroup members." },
+      ),
     ),
-    goal: Type.Optional(
-      Type.String({
-        description: "Required for create/spawn_workgroup. Goal.",
-      }),
-    ),
-    statusLine: Type.Optional(
-      Type.String({
-        maxLength: WORKFLOW_STATUS_LINE_MAX_LENGTH,
-        description:
-          "Required for update_status. One-line current workflow status authored by the flow leader and shown verbatim in the monitor.",
-      }),
-    ),
-    leader: Type.Optional(WorkflowLeaderParams),
-    status: Type.Optional(
-      Type.String({
-        enum: [...AGENT_RESULT_STATUS_VALUES],
-        description: "Required for finish. Result status.",
-      }),
-    ),
-    summary: Type.Optional(
-      Type.String({
-        description: "Required for finish. Concise summary.",
-      }),
-    ),
-    data: Type.Optional(
-      Type.Unknown({
-        description: "Optional finish data.",
-      }),
-    ),
+    status: Type.Optional(Type.String({ enum: [...AGENT_RESULT_STATUS_VALUES] })),
+    summary: Type.Optional(Type.String()),
+    data: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
 
-export function createWorkflowTool({ orchestra, store }: WorkflowToolDeps): WorkflowTool {
-  const runnerTasks = new Map<string, Promise<void>>();
-  const runnerDisposeCallbacks = new Set<() => void>();
-  let disposed = false;
+const WORKFLOW_CANCELLED_SUMMARY = "Workflow cancelled.";
 
-  const onRunnerDispose = (callback: () => void): (() => void) => {
-    if (disposed) {
-      callback();
-      return () => undefined;
-    }
-
-    runnerDisposeCallbacks.add(callback);
-    return () => runnerDisposeCallbacks.delete(callback);
-  };
-
-  const startRunner = (workflowId: string) => {
-    if (disposed || runnerTasks.has(workflowId)) return;
-
-    const task = runWorkflow(workflowId, { orchestra, store, isDisposed: () => disposed, onDispose: onRunnerDispose })
-      .catch((error) => {
-        if (disposed) return;
-        failWorkflow(store, workflowId, formatError(error));
-      })
-      .finally(() => runnerTasks.delete(workflowId));
-    runnerTasks.set(workflowId, task);
-  };
-
+export function createWorkflowTool(deps: WorkflowToolDeps): WorkflowTool {
+  const { orchestra, store, parentRunId, ownerSessionId } = deps;
   return {
     name: "workflow",
-    formatOutput: (output) => formatWorkflowOutputMessage(output, store),
-    dispose() {
-      disposed = true;
-      for (const callback of Array.from(runnerDisposeCallbacks)) callback();
-      runnerDisposeCallbacks.clear();
-      runnerTasks.clear();
-    },
-
     async execute(input) {
       if (input.action === "create") {
-        const { workflow, bus } = await startWorkflow(input, { orchestra, store });
-        startRunner(workflow.id);
-        return { action: "create", workflow, bus };
+        if (
+          parentRunId &&
+          store
+            .listWorkflows()
+            .some((workflow) => workflow.coordinatorRunId === parentRunId && workflow.state !== "closed")
+        )
+          throw new Error("Workflow coordinators cannot create nested workflows.");
+        const flowName = createPrefixedName("flow", input.name, "Workflow", WORKFLOW_NAME_MAX_LENGTH);
+        const identity = createWorkflowIdentity(flowName, store.listWorkflows());
+        const bus = orchestra.createBus({ name: createBusNameFromOwnerName(identity.name) });
+        let coordinator: AgentRun | undefined;
+        try {
+          subscribeWorkflowBusOwner(store, bus, parentRunId);
+          const coordinatorName = createPrefixedName("agent", `${identity.name}-coordinator`, "Workflow coordinator");
+          coordinator = await spawnSubagent(
+            orchestra,
+            {
+              action: "spawn",
+              busId: bus.id,
+              name: coordinatorName,
+              profile: createWorkflowCoordinatorProfile(),
+              task: formatWorkflowCoordinatorTask(identity.name, input.goal),
+            },
+            parentRunId,
+          );
+          const workflow = createWorkflowRun({
+            identity,
+            busId: bus.id,
+            ownerSessionId,
+            goal: input.goal,
+            ownerRunId: parentRunId,
+            coordinatorRunId: coordinator.id,
+          });
+          store.saveWorkflow(workflow);
+          await orchestra
+            .messageAgent(coordinator.id, formatWorkflowRegisteredMessage(workflow), { busId: undefined })
+            .catch(() => undefined);
+          return { action: "create", workflow, bus, coordinator, message: formatWorkflowStatus(store, workflow) };
+        } catch (error) {
+          if (coordinator) await orchestra.closeAgent(coordinator.id, { busId: undefined });
+          orchestra.closeBus(bus.id);
+          throw error;
+        }
       }
 
-      const workflow = findWorkflow(store, input.workflowId);
-      if (!workflow) {
-        return {
-          action: "not_found",
-          workflowId: input.workflowId,
-        };
-      }
+      const workflow = findWorkflow(store, input.id);
+      if (!workflow) return { action: "not_found", id: input.id, message: `Workflow ${input.id} not found.` };
 
-      if (input.action === "status") return { action: "status", workflow };
-
-      if (input.action === "update_status") {
-        const updatedWorkflow = updateWorkflowStatusLine(store, workflow, input.statusLine);
+      if (input.action === "status") {
+        requireWorkflowParticipant(store, workflow, parentRunId, "status");
         return {
-          action: "update_status",
-          workflow: updatedWorkflow,
+          action: "status",
+          workflow,
+          coordinator: store.getRun(workflow.coordinatorRunId),
+          message: formatWorkflowStatus(store, workflow),
         };
       }
 
       if (input.action === "cancel") {
-        const closedWorkflow = await closeWorkflow(orchestra, store, workflow);
+        requireWorkflowSupervisor(store, workflow, parentRunId, "cancel");
+        const cancellation = await cancelWorkflow(orchestra, store, workflow);
         return {
           action: "cancel",
-          workflow: closedWorkflow,
+          ...cancellation,
+          message: formatWorkflowTerminal("Cancelled", cancellation.workflow),
         };
       }
 
-      if (input.action === "finish") {
-        const closingWorkflow = requestWorkflowFinish(store, workflow, input.result);
-        startRunner(closingWorkflow.id);
+      requireWorkflowCoordinator(workflow, parentRunId, input.action);
+      if (workflow.state !== "running") throw new Error(`Workflow ${workflow.name} is ${workflow.state}.`);
+
+      if (input.action === "add_workgroup") {
+        const launched = await createAndLaunchWorkgroup({
+          ...deps,
+          parentRunId: workflow.coordinatorRunId,
+          name: input.name,
+          goal: input.goal,
+          members: input.members,
+        });
+        const latest = store.getWorkflow(workflow.id) ?? workflow;
+        const updated = { ...latest, workgroupIds: [...new Set([...latest.workgroupIds, launched.workgroup.id])] };
+        store.saveWorkflow(updated);
         return {
-          action: "finish",
-          workflow: closingWorkflow,
+          action: "add_workgroup",
+          workflow: updated,
+          workgroupId: launched.workgroup.id,
+          runIds: launched.runs.map((run) => run.id),
+          message: `Added workgroup ${launched.workgroup.name} to workflow ${updated.name}.`,
         };
       }
 
-      const output = await spawnWorkflowWorkgroup(workflow, input, { orchestra, store });
-      startRunner(output.workflow.id);
-      return output;
+      const openWorkgroups = workflow.workgroupIds.flatMap((id) => {
+        const workgroup = store.getWorkgroup(id);
+        return workgroup && workgroup.state !== "closed" ? [workgroup] : [];
+      });
+      if (openWorkgroups.length > 0)
+        throw new Error(
+          `Workflow ${workflow.name} still has running workgroups: ${openWorkgroups.map((w) => w.name).join(", ")}.`,
+        );
+      const closed = await closeWorkflowRun(orchestra, store, workflow, {
+        includeCoordinator: false,
+        result: input.result,
+      });
+      return { action: "finish", workflow: closed, message: formatWorkflowTerminal("Finished", closed) };
     },
   };
 }
 
-export function defineWorkflowPiTool(
-  resolveTool: (ctx: ExtensionContext) => WorkflowTool,
-  options: WorkflowPiToolOptions = { onWorkflowInput: undefined, onWorkflowOutput: undefined },
-) {
+export async function closeWorkflowRun(
+  orchestra: OrchestraApi,
+  store: AgentStore,
+  workflow: WorkflowRun,
+  options: { includeCoordinator: boolean; result: AgentResult | null | undefined },
+): Promise<WorkflowRun> {
+  const latest = store.getWorkflow(workflow.id) ?? workflow;
+  if (latest.state === "closed") {
+    await cleanupWorkflowResources(orchestra, store, latest, options.includeCoordinator);
+    return latest;
+  }
+  const result = options.result === undefined ? latest.result : options.result;
+  const closing: WorkflowRun = { ...latest, state: "closing", result };
+  store.saveWorkflow(closing);
+  await cleanupWorkflowResources(orchestra, store, closing, options.includeCoordinator);
+  const closed: WorkflowRun = { ...(store.getWorkflow(workflow.id) ?? closing), state: "closed", result };
+  store.saveWorkflow(closed);
+  return closed;
+}
+
+function createWorkflowCoordinatorProfile(): AgentProfile {
+  return {
+    name: "workflow-coordinator",
+    systemPrompt:
+      "You are the workflow coordinator. Use only workflow add_workgroup to create child workgroups, wait for workflow.workgroup_finished events before deciding the next step, and call workflow finish when the goal is complete.",
+    tools: ["workflow", "publish_bus"],
+    model: undefined,
+  };
+}
+
+function formatWorkflowCoordinatorTask(name: string, goal: string): string {
+  return [
+    `Coordinate workflow ${name}.`,
+    "",
+    "Wait for the workflow registered instruction before calling workflow tools.",
+    "",
+    `Goal: ${goal}`,
+  ].join("\n");
+}
+
+function formatWorkflowRegisteredMessage(workflow: WorkflowRun): string {
+  return `Workflow ${workflow.name} is registered. You may now use workflow add_workgroup/status/finish for this workflow.`;
+}
+
+async function cleanupWorkflowResources(
+  orchestra: OrchestraApi,
+  store: AgentStore,
+  workflow: WorkflowRun,
+  includeCoordinator: boolean,
+): Promise<void> {
+  await Promise.allSettled(
+    workflow.workgroupIds.map(async (id) => {
+      const workgroup = store.getWorkgroup(id);
+      if (workgroup) await cancelWorkgroup(orchestra, store, workgroup);
+    }),
+  );
+  if (includeCoordinator) await closeAgentRuns(orchestra, [workflow.coordinatorRunId]);
+  orchestra.closeBus(workflow.busId);
+}
+
+async function cancelWorkflow(orchestra: OrchestraApi, store: AgentStore, workflow: WorkflowRun) {
+  const latest = store.getWorkflow(workflow.id) ?? workflow;
+  const alreadyClosed = latest.state === "closed";
+  const result = latest.result ?? { status: "blocked" as const, summary: WORKFLOW_CANCELLED_SUMMARY };
+  return {
+    workflow: await closeWorkflowRun(orchestra, store, latest, { includeCoordinator: true, result }),
+    alreadyClosed,
+  };
+}
+
+function subscribeWorkflowBusOwner(store: AgentStore, bus: Bus, parentRunId: string | null): void {
+  if (!parentRunId) {
+    subscribeMainToBus(store, bus);
+    return;
+  }
+  store.saveBusSubscription(
+    createBusSubscription({
+      busId: bus.id,
+      subscriberId: parentRunId,
+      subscriberKind: "agent",
+      lastDeliveredSeq: maxMessageSeq(bus.messages),
+      deliveredSeqs: [],
+    }),
+  );
+}
+
+function findWorkflow(store: AgentStore, id: string): WorkflowRun | undefined {
+  return findEntity(
+    id,
+    "flow",
+    (workflowId) => store.getWorkflow(workflowId),
+    () => store.listWorkflows(),
+    (workflow) => workflow.state !== "closed",
+  );
+}
+
+function requireWorkflowCoordinator(workflow: WorkflowRun, parentRunId: string | null, action: string): void {
+  if (parentRunId === workflow.coordinatorRunId) return;
+  throw new Error(`Only coordinator ${workflow.coordinatorRunId} can ${action} workflow ${workflow.name}.`);
+}
+
+function requireWorkflowParticipant(
+  store: AgentStore,
+  workflow: WorkflowRun,
+  parentRunId: string | null,
+  action: string,
+): void {
+  if (parentRunId === null || parentRunId === workflow.ownerRunId || parentRunId === workflow.coordinatorRunId) return;
+  requireWorkflowSupervisor(store, workflow, parentRunId, action);
+}
+
+function requireWorkflowSupervisor(
+  store: AgentStore,
+  workflow: WorkflowRun,
+  parentRunId: string | null,
+  action: string,
+): void {
+  if (parentRunId === null || parentRunId === workflow.ownerRunId) return;
+  if (!workflow.ownerRunId) throw new Error(`Only a supervising parent can ${action} workflow ${workflow.name}.`);
+  const owner = store.getRun(workflow.ownerRunId);
+  if (owner && owner.parentRunId === parentRunId) return;
+  throw new Error(`Only a supervising parent can ${action} workflow ${workflow.name}.`);
+}
+
+function formatWorkflowStatus(store: AgentStore, workflow: WorkflowRun): string {
+  const coordinator = store.getRun(workflow.coordinatorRunId);
+  const workgroups = workflow.workgroupIds.map((id) => store.getWorkgroup(id));
+  return [
+    `Workflow ${workflow.name}.`,
+    "",
+    `Goal: ${workflow.goal}`,
+    `State: ${workflow.state}`,
+    `Result: ${workflow.result ? `${workflow.result.status} — ${workflow.result.summary}` : "none"}`,
+    `Coordinator: ${coordinator ? `${coordinator.name}: ${coordinator.state}` : resolveRunName(store, workflow.coordinatorRunId)}`,
+    "",
+    `Workgroups (${workgroups.filter(Boolean).length}):`,
+    ...workgroups.map((workgroup, index) =>
+      workgroup
+        ? `- ${workgroup.name}: ${workgroup.state}`
+        : `- ${resolveWorkgroupName(store, workflow.workgroupIds[index])}: missing`,
+    ),
+  ].join("\n");
+}
+
+function formatWorkflowTerminal(verb: string, workflow: WorkflowRun): string {
+  return [
+    `${verb} workflow ${workflow.name}.`,
+    "",
+    `Status: ${workflow.result?.status ?? "unknown"}`,
+    `Summary: ${workflow.result?.summary ?? "None."}`,
+  ].join("\n");
+}
+
+export function defineWorkflowPiTool(resolveTool: (ctx: ExtensionContext) => WorkflowTool) {
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description: "Run an adaptive led workflow.",
-    promptSnippet: "Create a workflow; its leader updates status, spawns workgroups, and finishes.",
+    description: "Coordinate sequential workgroups with a workflow coordinator.",
+    promptSnippet: "Create a workflow, add child workgroups, then finish or cancel it.",
     promptGuidelines: [
-      "Use workflow create with one flow leader.",
-      "The flow leader uses workflow update_status for one-line monitor status when focus changes.",
-      "The flow leader uses workflow spawn_workgroup and workflow finish.",
-      "Spawn multiple child workgroups in parallel only for independent tracks.",
-      "Give child workgroup leaders the workgroup tool.",
-      "Only the supervising parent uses workflow cancel.",
+      "Use workflow create to start a native workflow with a coordinator.",
+      "Workflow coordinators must use workflow add_workgroup instead of workgroup/subagent directly.",
+      "Only the workflow coordinator calls workflow add_workgroup or workflow finish.",
     ],
     parameters: WorkflowToolParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const input = withDefaultModels(toWorkflowInput(params as RawWorkflowParams), ctx);
-      options.onWorkflowInput?.(ctx, input);
-
-      const tool = resolveTool(ctx);
-      const output = await tool.execute(input);
-      if (output.action !== "not_found") options.onWorkflowOutput?.(ctx, output);
-
-      return {
-        content: [{ type: "text", text: tool.formatOutput(output) }],
-        details: output,
-      };
+      const input = withDefaultModelsForWorkflow(toWorkflowInput(params as RawWorkflowParams), ctx);
+      const output = await resolveTool(ctx).execute(input);
+      return { content: [{ type: "text", text: output.message }], details: boundWorkflowOutputDetails(output) };
     },
   });
-}
-
-interface WorkflowRunnerDeps {
-  orchestra: OrchestraApi;
-  store: AgentStore;
-  isDisposed(): boolean;
-  onDispose(callback: () => void): () => void;
-}
-
-async function startWorkflow(
-  input: Extract<WorkflowInput, { action: "create" }>,
-  deps: WorkflowToolDeps,
-): Promise<{ workflow: WorkflowRun; bus: Bus }> {
-  validateLeaderName(input.leader.name, "Workflow leader", deps.store.listRuns());
-  validateLeaderTool(input.leader.profile, "workflow", "Workflow leader");
-
-  const workflows = deps.store.listWorkflows();
-  const identity = createEntityIdentity(
-    input.name,
-    "workflow",
-    workflows.filter((currentWorkflow) => currentWorkflow.state !== "closed"),
-    "Workflow",
-    undefined,
-    workflows,
-  );
-  const busName = createWorkflowFlowBusName(identity.name);
-  const bus = deps.orchestra.createBus({ name: busName });
-  const workflow = createWorkflowRun(input, identity, bus.id);
-  deps.store.saveWorkflow(workflow);
-
-  try {
-    const leaderRun = await deps.orchestra.spawnAgent(
-      input.leader.profile,
-      buildFlowLeaderTask(workflow, input.leader.task),
-      workflow.busId,
-      { name: input.leader.name, parentRunId: null },
-    );
-    const workflowWithLeader: WorkflowRun = { ...requireWorkflow(deps.store, workflow.id), leaderRunId: leaderRun.id };
-    deps.store.saveWorkflow(workflowWithLeader);
-    return { workflow: workflowWithLeader, bus };
-  } catch (error) {
-    deps.orchestra.closeBus(workflow.busId);
-    const failedWorkflow: WorkflowRun = {
-      ...workflow,
-      state: "closed",
-      error: formatError(error),
-      result: {
-        status: "failed",
-        summary: formatError(error),
-      },
-    };
-    deps.store.saveWorkflow(failedWorkflow);
-    throw error;
-  }
-}
-
-async function runWorkflow(workflowId: string, deps: WorkflowRunnerDeps): Promise<void> {
-  for (;;) {
-    if (deps.isDisposed()) return;
-    const workflow = deps.store.getWorkflow(workflowId);
-    if (!workflow || workflow.state === "closed") return;
-    if (workflow.state === "closing") {
-      if (workflow.result) await finalizeClosingWorkflow(deps.orchestra, deps.store, workflow);
-      return;
-    }
-    if (!workflow.leaderRunId) return;
-
-    const outcome = await Promise.race([
-      workflowNotRunningEvent(deps, workflowId).then((updatedWorkflow) => ({
-        type: "workflow" as const,
-        workflow: updatedWorkflow,
-      })),
-      terminalRunEvent(deps, workflow.leaderRunId).then((run) => ({ type: "leader" as const, run })),
-    ]);
-
-    if (deps.isDisposed()) return;
-    const latestWorkflow = deps.store.getWorkflow(workflowId);
-    if (!latestWorkflow || latestWorkflow.state === "closed") return;
-
-    if (outcome.type === "workflow" || latestWorkflow.state === "closing") {
-      if (latestWorkflow.state === "closing" && latestWorkflow.result) {
-        await finalizeClosingWorkflow(deps.orchestra, deps.store, latestWorkflow);
-      }
-      return;
-    }
-
-    if (outcome.type === "leader" && outcome.run) {
-      await finishWorkflowFromLeader(deps.orchestra, deps.store, latestWorkflow, outcome.run);
-    }
-    return;
-  }
-}
-
-async function spawnWorkflowWorkgroup(
-  workflow: WorkflowRun,
-  input: Extract<WorkflowInput, { action: "spawn_workgroup" }>,
-  deps: WorkflowToolDeps,
-): Promise<Extract<WorkflowToolOutput, { action: "spawn_workgroup" }>> {
-  if (workflow.state !== "running") throw new Error(`Workflow ${workflow.name} is ${workflow.state}.`);
-
-  validateLeaderName(input.leader.name, "Workflow workgroup leader", deps.store.listRuns());
-  validateLeaderTool(input.leader.profile, "workgroup", "Workflow workgroup leader");
-  const identity = createWorkgroupIdentity(input.name, deps.store.listWorkgroups(), "Workflow workgroup");
-  const busName = createWorkflowWorkgroupBusName(workflow.name, identity.name);
-
-  const bus = deps.orchestra.createBus({ name: busName });
-  const workgroup = createWorkgroupRun({
-    identity,
-    busId: bus.id,
-    goal: buildWorkflowWorkgroupGoal(deps.store, workflow, input.goal),
-    leaderRunId: null,
-  });
-  deps.store.saveWorkgroup(workgroup);
-
-  const workflowWithWorkgroup = appendWorkflowWorkgroupId(deps.store, workflow, workgroup.id);
-  let leaderRun: AgentRun;
-  try {
-    leaderRun = await deps.orchestra.spawnAgent(
-      input.leader.profile,
-      buildWorkgroupLeaderTask(deps.store, workflowWithWorkgroup, workgroup, input.goal, input.leader.task),
-      bus.id,
-      { name: input.leader.name, parentRunId: workflow.leaderRunId },
-    );
-  } catch (error) {
-    await closeWorkgroupRun(deps.orchestra, deps.store, workgroup, {
-      includeLeader: true,
-      result: { status: "failed", summary: formatError(error) },
-    });
-    throw error;
-  }
-
-  const latestWorkflow = deps.store.getWorkflow(workflow.id);
-  const latestWorkgroup = deps.store.getWorkgroup(workgroup.id) ?? workgroup;
-  if (!latestWorkflow || latestWorkflow.state !== "running" || latestWorkgroup.state !== "running") {
-    const ledWorkgroup: WorkgroupRun = { ...latestWorkgroup, leaderRunId: leaderRun.id };
-    deps.store.saveWorkgroup(ledWorkgroup);
-    const closedWorkgroup = await closeWorkgroupRun(deps.orchestra, deps.store, ledWorkgroup, {
-      includeLeader: true,
-      result: undefined,
-    });
-    return {
-      action: "spawn_workgroup",
-      workflow: latestWorkflow ?? workflowWithWorkgroup,
-      workgroup: closedWorkgroup,
-      bus,
-    };
-  }
-
-  const ledWorkgroup: WorkgroupRun = { ...latestWorkgroup, leaderRunId: leaderRun.id };
-  deps.store.saveWorkgroup(ledWorkgroup);
-  const latestWorkflowWithLeader = deps.store.getWorkflow(workflow.id) ?? latestWorkflow;
-  return {
-    action: "spawn_workgroup",
-    workflow: latestWorkflowWithLeader,
-    workgroup: ledWorkgroup,
-    bus,
-  };
-}
-
-function createWorkflowFlowBusName(workflowName: string): string {
-  const maxWorkflowNameLength = INTERNAL_BUS_NAME_MAX_LENGTH - WORKFLOW_FLOW_BUS_SUFFIX.length;
-  if (workflowName.length > maxWorkflowNameLength) {
-    throw new Error(
-      `Workflow name must be ${maxWorkflowNameLength} characters or fewer to leave room for the internal flow bus.`,
-    );
-  }
-  return `${workflowName}${WORKFLOW_FLOW_BUS_SUFFIX}`;
-}
-
-function createWorkflowWorkgroupBusName(workflowName: string, workgroupName: string): string {
-  const busName = `${workflowName}-${workgroupName}${WORKFLOW_CHILD_BUS_SUFFIX}`;
-  if (busName.length > INTERNAL_BUS_NAME_MAX_LENGTH) {
-    const maxWorkgroupNameLength = getWorkflowWorkgroupNameMaxLength(workflowName);
-    throw new Error(
-      `Workflow ${workflowName} and workgroup ${workgroupName} names combine to an internal bus name longer than ${INTERNAL_BUS_NAME_MAX_LENGTH} characters; use a workgroup name ${maxWorkgroupNameLength} characters or fewer for this workflow.`,
-    );
-  }
-  return busName;
-}
-
-function getWorkflowWorkgroupNameMaxLength(workflowName: string): number {
-  return INTERNAL_BUS_NAME_MAX_LENGTH - workflowName.length - 1 - WORKFLOW_CHILD_BUS_SUFFIX.length;
-}
-
-function updateWorkflowStatusLine(store: AgentStore, workflow: WorkflowRun, statusLine: string): WorkflowRun {
-  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
-  if (latestWorkflow.state !== "running")
-    throw new Error(`Workflow ${latestWorkflow.name} is ${latestWorkflow.state}.`);
-
-  const updatedWorkflow: WorkflowRun = {
-    ...latestWorkflow,
-    statusLine: normalizeWorkflowStatusLine(statusLine),
-  };
-  store.saveWorkflow(updatedWorkflow);
-  return updatedWorkflow;
-}
-
-async function finishWorkflowFromLeader(
-  orchestra: OrchestraApi,
-  store: AgentStore,
-  workflow: WorkflowRun,
-  leaderRun: AgentRun,
-): Promise<WorkflowRun> {
-  const result = leaderRun.result ?? {
-    status: "failed" as const,
-    summary: `Flow leader ${leaderRun.name} reached ${leaderRun.state} without a result payload.`,
-  };
-  const closingWorkflow = requestWorkflowFinish(store, workflow, result);
-  return await finalizeClosingWorkflow(orchestra, store, closingWorkflow);
-}
-
-function requestWorkflowFinish(store: AgentStore, workflow: WorkflowRun, result: AgentResult): WorkflowRun {
-  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
-  if (latestWorkflow.state === "closed") return latestWorkflow;
-  if (latestWorkflow.state === "closing") return latestWorkflow;
-
-  const closingWorkflow: WorkflowRun = {
-    ...latestWorkflow,
-    state: "closing",
-    result,
-  };
-  store.saveWorkflow(closingWorkflow);
-  return closingWorkflow;
-}
-
-async function finalizeClosingWorkflow(
-  orchestra: OrchestraApi,
-  store: AgentStore,
-  workflow: WorkflowRun,
-): Promise<WorkflowRun> {
-  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
-  if (latestWorkflow.state === "closed") return latestWorkflow;
-
-  const result = latestWorkflow.result ?? {
-    status: "failed" as const,
-    summary: `Workflow ${latestWorkflow.name} entered closing without a result payload.`,
-  };
-  const closingWorkflow: WorkflowRun = { ...latestWorkflow, state: "closing", result };
-  store.saveWorkflow(closingWorkflow);
-  await closeWorkflowResources(orchestra, store, closingWorkflow);
-
-  const afterClose = store.getWorkflow(workflow.id) ?? closingWorkflow;
-  const finishedWorkflow: WorkflowRun = {
-    ...afterClose,
-    state: "closed",
-    result,
-  };
-  store.saveWorkflow(finishedWorkflow);
-  return finishedWorkflow;
-}
-
-async function closeWorkflow(orchestra: OrchestraApi, store: AgentStore, workflow: WorkflowRun): Promise<WorkflowRun> {
-  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
-  if (latestWorkflow.state === "closed") return latestWorkflow;
-
-  const result = latestWorkflow.result ?? { status: "blocked" as const, summary: "Workflow cancelled." };
-  if (latestWorkflow.state === "closing") {
-    const closingWorkflow: WorkflowRun = { ...latestWorkflow, result };
-    if (!latestWorkflow.result) store.saveWorkflow(closingWorkflow);
-    return await finalizeClosingWorkflow(orchestra, store, closingWorkflow);
-  }
-
-  const closingWorkflow: WorkflowRun = { ...latestWorkflow, state: "closing", result };
-  store.saveWorkflow(closingWorkflow);
-  await closeWorkflowResources(orchestra, store, closingWorkflow);
-
-  const afterClose = store.getWorkflow(workflow.id) ?? closingWorkflow;
-  const closedWorkflow: WorkflowRun = { ...afterClose, state: "closed", result: afterClose.result ?? result };
-  store.saveWorkflow(closedWorkflow);
-  return closedWorkflow;
-}
-
-async function closeWorkflowResources(
-  orchestra: OrchestraApi,
-  store: AgentStore,
-  workflow: WorkflowRun,
-): Promise<void> {
-  const latestWorkflow = store.getWorkflow(workflow.id) ?? workflow;
-  const extraRunIds = new Set<string>();
-
-  for (const workgroupId of latestWorkflow.workgroupIds) {
-    const workgroup = store.getWorkgroup(workgroupId);
-    if (!workgroup) continue;
-
-    for (const run of orchestra.listRuns({ busId: workgroup.busId })) extraRunIds.add(run.id);
-    await closeWorkgroupRun(orchestra, store, workgroup, { includeLeader: true, result: undefined });
-  }
-
-  for (const run of orchestra.listRuns({ busId: latestWorkflow.busId })) extraRunIds.add(run.id);
-  if (latestWorkflow.leaderRunId) extraRunIds.add(latestWorkflow.leaderRunId);
-  await closeAgentRuns(orchestra, [...extraRunIds]);
-
-  orchestra.closeBus(latestWorkflow.busId);
-}
-
-function createWorkflowRun(
-  input: Extract<WorkflowInput, { action: "create" }>,
-  identity: NamedEntity,
-  busId: string,
-): WorkflowRun {
-  return {
-    ...identity,
-    goal: input.goal,
-    startedAtMs: Date.now(),
-    state: "running",
-    busId,
-    leaderRunId: null,
-    workgroupIds: [],
-    statusLine: null,
-    result: null,
-  };
-}
-
-function validateLeaderName(name: string, label: string, existingRuns: AgentRun[]): void {
-  const normalizedName = normalizeEntityName(name, label);
-
-  for (const run of existingRuns) {
-    if (run.state === "closed") continue;
-    if (run.id === normalizedName || run.name === normalizedName) {
-      throw new Error(`${label} name "${normalizedName}" is already in use.`);
-    }
-  }
-}
-
-function validateLeaderTool(profile: AgentProfile, toolName: "workflow" | "workgroup", label: string): void {
-  if (!profile.tools.includes(toolName)) throw new Error(`${label} profile must include ${toolName} tool.`);
-}
-
-function normalizeWorkflowStatusLine(statusLine: string): string {
-  const normalizedStatusLine = statusLine.trim();
-  if (!normalizedStatusLine) throw new Error("workflow action=update_status requires a non-empty statusLine.");
-  if (/\r|\n/.test(normalizedStatusLine)) throw new Error("workflow statusLine must be one line.");
-  if (normalizedStatusLine.length > WORKFLOW_STATUS_LINE_MAX_LENGTH) {
-    throw new Error(`workflow statusLine must be at most ${WORKFLOW_STATUS_LINE_MAX_LENGTH} characters.`);
-  }
-  return normalizedStatusLine;
 }
 
 function toWorkflowInput(params: RawWorkflowParams): WorkflowInput {
-  if (params.action === "create") {
-    if (!params.name) throw new Error("workflow action=create requires name.");
-    if (!params.goal) throw new Error("workflow action=create requires goal.");
-    if (!params.leader) throw new Error("workflow action=create requires leader.");
+  if (params.action === "create")
     return {
       action: "create",
-      name: params.name,
-      goal: params.goal,
-      leader: toWorkflowLeaderInput(params.leader, "workflow leader"),
+      name: requireParam(params, "name", "workflow action=create"),
+      goal: requireParam(params, "goal", "workflow action=create"),
     };
-  }
-
-  if (params.action === "spawn_workgroup") {
-    if (!params.workflowId) throw new Error("workflow action=spawn_workgroup requires workflowId.");
-    if (!params.name) throw new Error("workflow action=spawn_workgroup requires name.");
-    if (!params.goal) throw new Error("workflow action=spawn_workgroup requires goal.");
-    if (!params.leader) throw new Error("workflow action=spawn_workgroup requires leader.");
+  if (params.action === "add_workgroup")
     return {
-      action: "spawn_workgroup",
-      workflowId: params.workflowId,
-      name: params.name,
-      goal: params.goal,
-      leader: toWorkflowLeaderInput(params.leader, "workflow workgroup leader"),
+      action: "add_workgroup",
+      id: requireParam(params, "id", "workflow action=add_workgroup"),
+      name: requireParam(params, "name", "workflow action=add_workgroup"),
+      goal: requireParam(params, "goal", "workflow action=add_workgroup"),
+      members: requireParam(params, "members", "workflow action=add_workgroup").map(toWorkflowMemberInput),
     };
-  }
-
-  if (params.action === "update_status") {
-    if (!params.workflowId) throw new Error("workflow action=update_status requires workflowId.");
-    if (params.statusLine === undefined) throw new Error("workflow action=update_status requires statusLine.");
-    return {
-      action: "update_status",
-      workflowId: params.workflowId,
-      statusLine: normalizeWorkflowStatusLine(params.statusLine),
-    };
-  }
-
   if (params.action === "finish") {
-    if (!params.workflowId) throw new Error("workflow action=finish requires workflowId.");
-    if (!params.status) throw new Error("workflow action=finish requires status.");
-    if (!params.summary) throw new Error("workflow action=finish requires summary.");
-    const result: AgentResult = { status: params.status, summary: params.summary };
+    const result: AgentResult = {
+      status: requireParam(params, "status", "workflow action=finish"),
+      summary: requireParam(params, "summary", "workflow action=finish"),
+    };
     if (params.data !== undefined) result.data = params.data;
-    return { action: "finish", workflowId: params.workflowId, result };
+    return { action: "finish", id: requireParam(params, "id", "workflow action=finish"), result };
   }
-
-  if (!params.workflowId) throw new Error(`workflow action=${params.action} requires workflowId.`);
-  return { action: params.action, workflowId: params.workflowId };
+  if (params.action === "cancel") return { action: "cancel", id: requireParam(params, "id", "workflow action=cancel") };
+  return { action: "status", id: requireParam(params, "id", "workflow action=status") };
 }
 
-function toWorkflowLeaderInput(leader: RawWorkflowLeaderParams, label: string): WorkflowLeaderInput {
-  if (!leader.profile) throw new Error(`${label} requires profile.`);
-  if (!leader.task) throw new Error(`${label} requires task.`);
-  if (!leader.name) throw new Error(`${label} requires name.`);
-  return { profile: toAgentProfile(leader.profile), task: leader.task, name: leader.name };
-}
-
-function withDefaultModels(input: WorkflowInput, ctx: ExtensionContext): WorkflowInput {
-  if (input.action !== "create" && input.action !== "spawn_workgroup") return input;
+function toWorkflowMemberInput(member: RawWorkflowMemberParams): WorkgroupMemberInput {
   return {
-    ...input,
-    leader: withDefaultProfileModelInput(input.leader, ctx),
+    profile: toAgentProfile(requireParam(member, "profile", "workflow member")),
+    task: requireParam(member, "task", "workflow member"),
+    name: requireParam(member, "name", "workflow member"),
   };
 }
 
-function appendWorkflowWorkgroupId(store: AgentStore, workflow: WorkflowRun, workgroupId: string): WorkflowRun {
-  const latestWorkflow = requireWorkflow(store, workflow.id);
-  if (latestWorkflow.workgroupIds.includes(workgroupId)) return latestWorkflow;
-
-  const updatedWorkflow = { ...latestWorkflow, workgroupIds: [...latestWorkflow.workgroupIds, workgroupId] };
-  store.saveWorkflow(updatedWorkflow);
-  return updatedWorkflow;
+function withDefaultModelsForWorkflow(input: WorkflowInput, ctx: ExtensionContext): WorkflowInput {
+  if (input.action === "create") return input;
+  if (input.action !== "add_workgroup") return input;
+  return { ...input, members: input.members.map((member) => withDefaultProfileModelInput(member, ctx)) };
 }
 
-function failWorkflow(store: AgentStore, workflowId: string, error: string): void {
-  const workflow = store.getWorkflow(workflowId);
-  if (!workflow || workflow.state === "closed") return;
-
-  const failedWorkflow: WorkflowRun = {
-    ...workflow,
-    state: "closed",
-    error,
-    result: {
-      status: "failed",
-      summary: error,
-    },
-  };
-  store.saveWorkflow(failedWorkflow);
-}
-
-function buildFlowLeaderTask(workflow: WorkflowRun, leaderTask: string): string {
-  return [
-    "You are the flow leader for an adaptive workflow.",
-    "Plan the next useful workgroup, inspect child workgroup results, and decide when the overall goal is done.",
-    "",
-    "Assigned task:",
-    leaderTask,
-    "Do not create all groups up front unless the goal clearly requires parallel independent tracks.",
-    "Spawn multiple child workgroups in parallel only when their outputs do not depend on one another.",
-    "Otherwise, use one workgroup when one focused group is enough; create another only when the previous result shows it is useful.",
-    "",
-    "Workflow goal:",
-    workflow.goal,
-    "",
-    `Workflow name for workflowId: ${workflow.name}`,
-    "Use workflow action=update_status with this workflow name to set the one-line monitor status when your current focus changes.",
-    "The monitor displays statusLine verbatim, so keep it concise, human-readable, and one line; do not update it for every minor thought.",
-    "Use workflow action=spawn_workgroup with this workflow name to spawn a child workgroup led by a group leader.",
-    "Each spawn_workgroup call needs name, goal, and leader. Give the group leader the workgroup tool.",
-    "Child workgroup buses are created internally. Workgroup member events go to the group leader; workgroup.finished events come back to you.",
-    "Use workflow action=finish with this workflow name when the final goal is achieved, blocked, or failed.",
-    "Do not call workflow action=cancel for your own workflow; cancellation is reserved for the supervising parent/main.",
-    "",
-    "Finalization rules:",
-    "- Base the workflow final output on child workgroup results and your own reasoning.",
-    "- Prefer status=success if the goal has a useful answer; blocked if external input is required; failed if execution failed.",
-    "- Do not call your own finish until the workflow has been finished or closed.",
-  ].join("\n");
-}
-
-function buildWorkflowWorkgroupGoal(store: AgentStore, workflow: WorkflowRun, workgroupGoal: string): string {
-  return [
-    "Workflow child workgroup",
-    "",
-    "Workflow goal:",
-    workflow.goal,
-    "",
-    "Workgroup goal:",
-    workgroupGoal,
-    "",
-    "Completed workgroup outputs so far:",
-    "<completed_workgroups>",
-    formatCompletedWorkgroupOutputs(store, workflow),
-    "</completed_workgroups>",
-  ].join("\n");
-}
-
-function buildWorkgroupLeaderTask(
-  store: AgentStore,
-  workflow: WorkflowRun,
-  workgroup: WorkgroupRun,
-  workgroupGoal: string,
-  leaderTask: string,
-): string {
-  return [
-    "You are the leader for a workflow child workgroup.",
-    "Create and coordinate member subagents only within this workgroup.",
-    "",
-    "Assigned task:",
-    leaderTask,
-    "",
-    "Workflow goal:",
-    workflow.goal,
-    "",
-    "Your workgroup goal:",
-    workgroupGoal,
-    "",
-    `Workgroup name for the id parameter: ${workgroup.name}`,
-    "Use workgroup action=add_members with this workgroup name whenever you need member subagents.",
-    "For add_members, each member needs profile, task, and name only; do not provide subagent action or busId.",
-    "Use workgroup action=finish with this workgroup name as your final group output when the group has enough evidence.",
-    "Only you, the workgroup leader, should finish this workgroup; the flow leader receives the final workgroup.finished event instead of finishing it for you.",
-    "After workgroup action=finish succeeds, call finish for your own run with the same status and summary.",
-    "Member finish events are routed to you. The flow leader receives only the final workgroup.finished event.",
-    "",
-    "Completed workflow workgroups before this one:",
-    "<completed_workgroups>",
-    formatCompletedWorkgroupOutputs(store, workflow),
-    "</completed_workgroups>",
-  ].join("\n");
-}
-
-function formatCompletedWorkgroupOutputs(store: AgentStore, workflow: WorkflowRun): string {
-  const outputs = collectWorkflowWorkgroups(store, workflow).filter((workgroup) => workgroup.result !== null);
-  return outputs.length > 0
-    ? outputs.map((workgroup) => formatWorkflowWorkgroupForPrompt(workgroup)).join("\n\n")
-    : "None.";
-}
-
-function formatWorkflowWorkgroupForPrompt(workgroup: WorkgroupRun): string {
-  const parts = [
-    `<workgroup_output name="${workgroup.name}">`,
-    `status: ${workgroup.result?.status ?? workgroup.state}`,
-    "summary:",
-    workgroup.result?.summary ?? "No result payload.",
-  ];
-  if (workgroup.result?.data !== undefined) parts.push("data_json:", formatJsonData(workgroup.result.data));
-  parts.push("</workgroup_output>");
-  return parts.join("\n");
-}
-
-function collectWorkflowWorkgroups(store: AgentStore, workflow: WorkflowRun): WorkgroupRun[] {
-  return workflow.workgroupIds.flatMap((workgroupId) => {
-    const workgroup = store.getWorkgroup(workgroupId);
-    return workgroup ? [workgroup] : [];
-  });
-}
-
-function formatWorkflowOutputMessage(output: WorkflowToolOutput, store: AgentStore): string {
-  if (output.action === "create") {
-    return [
-      `Created workflow ${output.workflow.name} on bus ${output.bus.name}.`,
-      "",
-      `Goal: ${output.workflow.goal}`,
-      `Flow leader: ${formatOptionalRunName(store, output.workflow.leaderRunId)}`,
-      "",
-      "The flow leader will spawn child workgroups and finish the workflow.",
-    ].join("\n");
-  }
-
-  if (output.action === "spawn_workgroup") return formatWorkflowWorkgroupCreatedMessage(output, store);
-  if (output.action === "update_status") return formatWorkflowStatusLineUpdatedMessage(output.workflow);
-  if (output.action === "finish")
-    return formatWorkflowSummary(store, output.workflow, "Workflow final output recorded; closing resources.");
-  if (output.action === "cancel") return formatWorkflowSummary(store, output.workflow, "Workflow cancelled.");
-  if (output.action === "status") return formatWorkflowSummary(store, output.workflow);
-  return formatWorkflowNotFound(output.workflowId);
-}
-
-function formatWorkflowNotFound(id: string): string {
-  return `Workflow ${id} not found.`;
-}
-
-function formatWorkflowStatusLineUpdatedMessage(workflow: WorkflowRun): string {
-  return [`Updated workflow ${workflow.name} monitor status.`, "", workflow.statusLine ?? "not set"].join("\n");
-}
-
-function formatWorkflowSummary(
-  store: AgentStore,
-  workflow: WorkflowRun,
-  headline = `Workflow ${workflow.name} is ${workflow.state}.`,
-): string {
-  const parts = [
-    headline,
-    "",
-    `Goal: ${workflow.goal}`,
-    `Monitor status: ${workflow.statusLine ?? "not set"}`,
-    "",
-    `Flow leader: ${formatOptionalRunName(store, workflow.leaderRunId)}`,
-    `Workflow bus: ${formatBusName(store, workflow.busId)}`,
-    "",
-    `Workgroups: ${formatWorkflowWorkgroupNames(store, workflow)}`,
-  ];
-
-  if (workflow.result) parts.push("", "Result:", formatWorkflowResult(workflow.result));
-  if (workflow.error) parts.push("", `Error: ${workflow.error}`);
-  return parts.join("\n");
-}
-
-function formatOptionalRunName(store: AgentStore, runId: string | null): string {
-  if (!runId) return "pending";
-  return resolveRunName(store, runId);
-}
-
-function formatBusName(store: AgentStore, busId: string): string {
-  return resolveBusName(store, busId);
-}
-
-function formatWorkflowWorkgroupNames(store: AgentStore, workflow: WorkflowRun): string {
-  if (workflow.workgroupIds.length === 0) return "none";
-  return workflow.workgroupIds.map((workgroupId) => resolveWorkgroupName(store, workgroupId)).join(", ");
-}
-
-function formatWorkflowResult(result: AgentResult): string {
-  const parts = [`status: ${result.status}`, `summary: ${result.summary}`];
-  if (result.data !== undefined) parts.push("data:", formatJsonData(result.data));
-  return parts.join("\n");
-}
-
-function formatJsonData(data: unknown): string {
-  return formatResultData(data);
-}
-
-function formatWorkflowWorkgroupCreatedMessage(
-  output: Extract<WorkflowToolOutput, { action: "spawn_workgroup" }>,
-  store: AgentStore,
-): string {
-  return [
-    `Spawned workflow workgroup ${output.workgroup.name} for workflow ${output.workflow.name}.`,
-    "",
-    `Bus: ${output.bus.name}`,
-    `Leader: ${formatOptionalRunName(store, output.workgroup.leaderRunId)}`,
-    "",
-    "The group leader will receive member finish events. The flow leader will receive a workgroup.finished event when the group closes.",
-  ].join("\n");
-}
-
-function workflowNotRunningEvent(deps: WorkflowRunnerDeps, workflowId: string): Promise<WorkflowRun | undefined> {
-  const initialWorkflow = deps.store.getWorkflow(workflowId);
-  if (!initialWorkflow || initialWorkflow.state !== "running") {
-    return Promise.resolve(initialWorkflow ?? requireWorkflow(deps.store, workflowId));
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let unsubscribe: () => void = () => undefined;
-    let unregisterDispose: () => void = () => undefined;
-    const finish = (workflow: WorkflowRun | undefined) => {
-      if (settled) return;
-      settled = true;
-      unsubscribe();
-      unregisterDispose();
-      resolve(workflow);
-    };
-    unsubscribe = deps.store.subscribeWorkflows(
-      (workflow) => {
-        if (workflow.state === "running") return;
-        finish(workflow);
-      },
-      (workflow) => workflow.id === workflowId,
-    );
-    unregisterDispose = deps.onDispose(() => finish(undefined));
-  });
-}
-
-function terminalRunEvent(deps: WorkflowRunnerDeps, runId: string): Promise<AgentRun | undefined> {
-  const initialRun = deps.store.getRun(runId);
-  if (initialRun && isAgentRunFinished(initialRun)) return Promise.resolve(initialRun);
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let unsubscribe: () => void = () => undefined;
-    let unregisterDispose: () => void = () => undefined;
-    const finish = (run: AgentRun | undefined) => {
-      if (settled) return;
-      settled = true;
-      unsubscribe();
-      unregisterDispose();
-      resolve(run);
-    };
-    unsubscribe = deps.store.subscribeRuns(
-      (run) => {
-        if (!isAgentRunFinished(run)) return;
-        finish(run);
-      },
-      (run) => run.id === runId,
-    );
-    unregisterDispose = deps.onDispose(() => finish(undefined));
-  });
+function boundWorkflowOutputDetails(output: WorkflowOutput): unknown {
+  return "workflow" in output ? { ...output, workflow: boundResultData(output.workflow) } : output;
 }
 
 type RawWorkflowParams = {
-  action: "create" | "spawn_workgroup" | "update_status" | "finish" | "status" | "cancel";
+  action: "create" | "add_workgroup" | "finish" | "cancel" | "status";
+  id?: string;
   name?: string;
-  workflowId?: string;
   goal?: string;
-  statusLine?: string;
-  leader?: RawWorkflowLeaderParams;
+  members?: RawWorkflowMemberParams[];
   status?: AgentResultStatus;
   summary?: string;
   data?: unknown;
 };
 
-type RawWorkflowLeaderParams = {
-  profile?: RawAgentProfileParams;
-  task?: string;
-  name?: string;
-};
+type RawWorkflowMemberParams = { profile?: RawAgentProfileParams; task?: string; name?: string };

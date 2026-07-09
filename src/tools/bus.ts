@@ -3,15 +3,15 @@ import { Type } from "typebox";
 import {
   createBusSubscription,
   createBusSubscriptionId,
-  isBusMessageDelivered,
-  maxMessageId,
+  maxMessageSeq,
   type Bus,
   type BusMessage,
   type BusSubscription,
 } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
-import { resolveRunName } from "../utils.ts";
+import { requireParam, resolveRunName } from "../utils.ts";
+import { DETAIL_MAX_COLLECTION_ITEMS, formatBusMessageText } from "../formatting.ts";
 
 export type BusInput =
   | {
@@ -35,10 +35,6 @@ export type BusInput =
   | {
       action: "unsubscribe";
       name: string;
-    }
-  | {
-      action: "compact";
-      name: string;
     };
 
 export interface BusOutput {
@@ -59,8 +55,8 @@ export interface BusToolDeps {
 }
 
 const BusActionParams = Type.String({
-  enum: ["create", "status", "publish", "subscribe", "unsubscribe", "compact"],
-  description: "Manage shared buses: create/status/publish/subscribe/unsubscribe/compact.",
+  enum: ["create", "status", "publish", "subscribe", "unsubscribe"],
+  description: "Manage shared buses: create/status/publish/subscribe/unsubscribe.",
 });
 
 const BusToolParams = Type.Object(
@@ -68,7 +64,7 @@ const BusToolParams = Type.Object(
     action: BusActionParams,
     name: Type.Optional(
       Type.String({
-        description: "Bus name. Optional for create; required for status/publish/subscribe/unsubscribe/compact.",
+        description: "Bus name. Optional for create; required for status/publish/subscribe/unsubscribe.",
       }),
     ),
     message: Type.Optional(
@@ -109,14 +105,6 @@ export function createBusTool({ orchestra, store }: BusToolDeps): BusTool {
         return { bus, message: `Unsubscribed main from bus ${formatBusLabel(bus)}.` };
       }
 
-      if (input.action === "compact") {
-        const compacted = compactDeliveredBusMessages(store, bus);
-        return {
-          bus: compacted.bus,
-          message: `Compacted bus ${formatBusLabel(bus)}; removed ${compacted.removedCount} delivered message(s), kept ${compacted.bus.messages.length}.`,
-        };
-      }
-
       const published = await orchestra.publishBus(input.name, input.message, input.from ?? "main");
       return {
         bus: published.bus,
@@ -140,45 +128,60 @@ export function defineBusPiTool(resolveTool: (ctx: ExtensionContext) => BusTool)
     parameters: BusToolParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const output = await resolveTool(ctx).execute(toBusInput(params as RawBusParams));
+      const input = toBusInput(params as RawBusParams);
+      const output = await resolveTool(ctx).execute(input);
 
       return {
         content: [{ type: "text", text: output.message }],
-        details: output,
+        details: boundBusOutputDetails(output),
       };
     },
   });
 }
 
+function boundBusOutputDetails(output: BusOutput): unknown {
+  return {
+    ...output,
+    bus: output.bus ? boundBusDetails(output.bus) : undefined,
+    busMessage: output.busMessage ? boundBusMessageDetails(output.busMessage) : undefined,
+  };
+}
+
+type BoundedBusDetails = Bus & { omittedMessagesCount: number };
+
+export function boundBusDetails(bus: Bus): BoundedBusDetails {
+  const visible = latestBusMessages(bus);
+  return {
+    ...bus,
+    messages: visible.map(boundBusMessageDetails),
+    omittedMessagesCount: bus.messages.length - visible.length,
+  };
+}
+
+function boundBusMessageDetails(message: BusMessage): BusMessage {
+  return { ...message, message: formatBusMessageText(message.message) };
+}
+
 function toBusInput(params: RawBusParams): BusInput {
   if (params.action === "create") return { action: "create", name: params.name };
 
-  if (params.action === "status") {
-    if (!params.name) throw new Error("bus action=status requires name.");
-    return { action: "status", name: params.name };
-  }
+  if (params.action === "status") return { action: "status", name: requireParam(params, "name", "bus action=status") };
 
-  if (params.action === "subscribe") {
-    if (!params.name) throw new Error("bus action=subscribe requires name.");
-    return { action: "subscribe", name: params.name };
-  }
+  if (params.action === "subscribe")
+    return { action: "subscribe", name: requireParam(params, "name", "bus action=subscribe") };
 
-  if (params.action === "unsubscribe") {
-    if (!params.name) throw new Error("bus action=unsubscribe requires name.");
-    return { action: "unsubscribe", name: params.name };
-  }
+  if (params.action === "unsubscribe")
+    return { action: "unsubscribe", name: requireParam(params, "name", "bus action=unsubscribe") };
 
-  if (params.action === "compact") {
-    if (!params.name) throw new Error("bus action=compact requires name.");
-    return { action: "compact", name: params.name };
-  }
-
-  if (!params.name) throw new Error("bus action=publish requires name.");
-  if (!params.message) throw new Error("bus action=publish requires message.");
-  return { action: "publish", name: params.name, message: params.message, from: "main" };
+  return {
+    action: "publish",
+    name: requireParam(params, "name", "bus action=publish"),
+    message: requireParam(params, "message", "bus action=publish"),
+    from: "main",
+  };
 }
 
-function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
+export function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
   const id = createBusSubscriptionId(bus.id, "main", "main");
   const subscription =
     store.getBusSubscription(id) ??
@@ -186,41 +189,18 @@ function subscribeMainToBus(store: AgentStore, bus: Bus): BusSubscription {
       busId: bus.id,
       subscriberId: "main",
       subscriberKind: "main",
-      lastDeliveredMessageId: maxMessageId(bus.messages.map((message) => message.id)),
-      deliveredMessageIds: [],
+      lastDeliveredSeq: maxMessageSeq(bus.messages),
+      deliveredSeqs: [],
     });
   store.saveBusSubscription(subscription);
   return subscription;
 }
 
-function compactDeliveredBusMessages(store: AgentStore, bus: Bus): { bus: Bus; removedCount: number } {
-  let removedCount = 0;
-  const compactedBus =
-    store.updateBus(bus.id, (latestBus) => {
-      const subscriptions = store.listBusSubscriptions({
-        busId: bus.id,
-        subscriberId: undefined,
-        subscriberKind: undefined,
-      });
-      if (subscriptions.length === 0) return latestBus;
-
-      const messages = latestBus.messages.filter((message) => !isBusMessageCompactable(message, subscriptions));
-      removedCount = latestBus.messages.length - messages.length;
-      return removedCount === 0 ? latestBus : { ...latestBus, messages };
-    }) ?? bus;
-  return { bus: compactedBus, removedCount };
-}
-
-function isBusMessageCompactable(message: BusMessage, subscriptions: BusSubscription[]): boolean {
-  return subscriptions.every((subscription) => {
-    if (subscription.subscriberId === message.from) return true;
-    return isBusMessageDelivered(subscription, message.id);
-  });
-}
-
 function formatBusNotFound(name: string): string {
   return `Bus ${name} not found.`;
 }
+
+const BUS_STATUS_MAX_MESSAGES = DETAIL_MAX_COLLECTION_ITEMS;
 
 function formatBusStatus(
   bus: Bus,
@@ -232,27 +212,21 @@ function formatBusStatus(
     subscriberId: undefined,
     subscriberKind: undefined,
   });
-  const compactableCount = countCompactableBusMessages(bus, subscriptions);
-  const statusHeadline = [
-    headline,
-    `State: ${bus.state}`,
-    `Subscribers: ${subscriptions.length}`,
-    `Compactable messages: ${compactableCount}`,
-  ].join("\n");
+  const statusHeadline = [headline, `State: ${bus.state}`, `Subscribers: ${subscriptions.length}`].join("\n");
   if (bus.messages.length === 0) return statusHeadline;
 
-  return [statusHeadline, "", "Messages:", ...bus.messages.map((message) => formatBusMessage(message, store))].join(
-    "\n",
-  );
+  const visible = latestBusMessages(bus);
+  const omitted = bus.messages.length - visible.length;
+  const heading = omitted > 0 ? `Messages (latest ${visible.length} of ${bus.messages.length}):` : "Messages:";
+  return [statusHeadline, "", heading, ...visible.map((message) => formatBusMessage(message, store))].join("\n");
 }
 
-function countCompactableBusMessages(bus: Bus, subscriptions: BusSubscription[]): number {
-  if (subscriptions.length === 0) return 0;
-  return bus.messages.filter((message) => isBusMessageCompactable(message, subscriptions)).length;
+function latestBusMessages(bus: Bus): BusMessage[] {
+  return bus.messages.slice(Math.max(0, bus.messages.length - BUS_STATUS_MAX_MESSAGES));
 }
 
 function formatBusMessage(message: BusMessage, store: AgentStore): string {
-  return [`- from ${formatBusMessageFrom(message.from, store)}:`, message.message].join("\n");
+  return [`- from ${formatBusMessageFrom(message.from, store)}:`, formatBusMessageText(message.message)].join("\n");
 }
 
 function formatBusMessageFrom(from: string, store: AgentStore): string {
@@ -265,7 +239,7 @@ function formatBusLabel(bus: Bus): string {
 }
 
 type RawBusParams = {
-  action: "create" | "status" | "publish" | "subscribe" | "unsubscribe" | "compact";
+  action: "create" | "status" | "publish" | "subscribe" | "unsubscribe";
   name?: string;
   message?: string;
 };

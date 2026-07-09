@@ -1,113 +1,101 @@
 # Workflow Calls
 
-Use a workflow when a flow leader should decide which child workgroups are useful
-and synthesize their results.
+Use a workflow when a coordinator should run workgroups sequentially and decide
+the next workgroup from previous results.
+
+Public tool/action names use `workflow`. Generated entity names use the shorter
+`flow` prefix.
 
 ## Basic flow
 
-1. A supervising parent calls `workflow create` with one flow leader.
-2. The flow leader calls `workflow spawn_workgroup` for useful child groups.
-3. The flow leader consumes `workgroup.finished` events.
-4. The flow leader calls `workflow finish` exactly once.
-5. The supervising parent may call `workflow cancel` to abort and clean up.
+1. `workflow create` stores the workflow as `flow-{name}`, creates `bus-flow-{name}`, and spawns `agent-flow-{name}-coordinator`.
+2. The workflow coordinator calls `workflow add_workgroup` to create one child workgroup at a time.
+3. The coordinator consumes `workflow.workgroup_finished` events.
+4. The coordinator calls `workflow finish` after all child workgroups are closed.
+5. A supervising parent may call `workflow cancel` to abort and clean up.
 
-## Example: create with a custom flow leader
+The coordinator's tools are only `workflow` and `publish_bus`. Do not use
+`workgroup` or `subagent` directly inside a workflow; `workflow add_workgroup`
+tracks child workgroups for cleanup and events.
 
-The workflow `name` is the scope name for later lookup. `leader.name` is the run
-name for the flow leader agent. `leader.profile.name` is the custom role/profile
-name.
-
-```json
-{
-  "action": "create",
-  "name": "research-workflow",
-  "goal": "Research and summarize the architecture options.",
-  "leader": {
-    "name": "research-flow-leader",
-    "profile": {
-      "name": "Research Flow Leader",
-      "systemPrompt": "Coordinate child workgroups and synthesize their results.",
-      "tools": ["workflow"]
-    },
-    "task": "Plan independent tracks, spawn useful workgroups, and finish with the final synthesis."
-  }
-}
-```
-
-## Example: create with a preset flow leader
-
-With presets, omit `profile.name` unless you want to override the preset role
-name.
+## Example: create a workflow
 
 ```json
 {
   "action": "create",
-  "name": "code-review-workflow",
-  "goal": "Review the proposed changes and synthesize the risks.",
-  "leader": {
-    "name": "review-flow-leader",
-    "profile": {
-      "preset": "source-code-qa",
-      "tools": ["workflow", "read", "bash"]
-    },
-    "task": "Decide useful review tracks, spawn workgroups, and finish with findings."
-  }
+  "name": "review-flow",
+  "goal": "Review the auth refactor in phases, adapting later reviews from earlier findings."
 }
 ```
 
-## Example: spawn a child workgroup
+This creates names like:
 
-Give child group leaders the `workgroup` tool. Spawn multiple child workgroups in
-parallel only when their outputs do not depend on one another.
+- workflow: `flow-review-flow`
+- bus: `bus-flow-review-flow`
+- coordinator: `agent-flow-review-flow-coordinator`
+
+## Example: coordinator adds a workgroup
+
+Only the workflow coordinator should call this.
 
 ```json
 {
-  "action": "spawn_workgroup",
-  "workflowId": "code-review-workflow",
-  "name": "security-track",
-  "goal": "Review security-sensitive changes.",
-  "leader": {
-    "name": "security-track-leader",
-    "profile": {
-      "preset": "source-code-qa",
-      "tools": ["workgroup", "read", "bash"]
-    },
-    "task": "Coordinate security reviewers and finish with the track result."
-  }
+  "action": "add_workgroup",
+  "id": "review-flow",
+  "name": "security-phase",
+  "goal": "Review security risks in the auth refactor.",
+  "members": [
+    {
+      "name": "token-reviewer",
+      "profile": {
+        "name": "Token Security Reviewer",
+        "systemPrompt": "Review token handling for security regressions. Report findings with evidence.",
+        "tools": ["read", "bash"]
+      },
+      "task": "Check token refresh, storage, expiry, and revocation edge cases."
+    }
+  ]
 }
 ```
 
-## Example: finish or cancel
+Child workgroups still use workgroup naming:
 
-The flow leader owns `workflow finish`:
+- workgroup: `group-security-phase`
+- members: `agent-token-reviewer`
+
+## Example: finish the workflow
+
+Only the workflow coordinator should finish, and only after child workgroups are
+closed.
 
 ```json
 {
   "action": "finish",
-  "workflowId": "code-review-workflow",
+  "id": "review-flow",
   "status": "success",
-  "summary": "The review found two medium-risk issues and no blockers."
+  "summary": "Security and compatibility phases completed; one medium-risk token issue found.",
+  "data": {
+    "phases": 2,
+    "risk": "medium"
+  }
 }
 ```
 
-A supervising parent owns `workflow cancel`:
+## Example: cancel from a supervising parent
 
 ```json
 {
   "action": "cancel",
-  "workflowId": "code-review-workflow"
+  "id": "review-flow"
 }
 ```
 
 ## Notes
 
-- Prefer adaptive one-at-a-time workgroup spawning when later work should depend
-  on earlier results.
-- Parallel child workgroups are appropriate for independent tracks, not as a
-  default way to create every possible group up front.
-- Main receives `workflow.finished`; workflow-internal `workgroup.finished`
-  events route to the flow leader.
-- For flow leader and child group leader `profile.model`, usually omit. The
-  supervising parent chooses the flow leader model before `workflow create`; the
-  flow leader chooses child group leader models before `workflow spawn_workgroup`.
-  See `model-selection.md`.
+- Use workflow for sequential, adaptive workgroup chains; use workgroup directly
+  for one shared goal.
+- Do not create workflow buses manually.
+- Do not use nested workflows.
+- Direct workflow subagents are not supported; create workgroups instead.
+- Prefer one workgroup at a time unless the next phase truly does not depend on
+  previous results.

@@ -5,48 +5,50 @@ the main agent continues working.
 
 ## Basic flow
 
-1. Create or choose a standalone bus.
-2. Spawn the subagent on that bus.
+1. Spawn the subagent without `busId` for the default private bus.
+2. The tool spawns the run as `agent-{name}`, creates `bus-agent-{name}`, and subscribes the owning scope (main for top-level spawns, or the parent run for nested spawns).
 3. Continue main-thread work until `subagent.finished` arrives.
-4. Use `subagent message` only for meaningful new guidance.
-5. Use `subagent close` when the supervising parent no longer needs the run.
+4. Use `subagent message` only for useful new guidance.
+5. Use `subagent close` when the supervising parent no longer needs the run; for an auto-created private bus, finishing or closing the last active run closes that bus.
 
-## Example: create a bus
+## Example: spawn with a custom profile
 
-```json
-{
-  "action": "create",
-  "name": "auth-review-bus"
-}
-```
-
-## Example: spawn with a preset profile
-
-The top-level `name` is the run name for this specific agent instance. The preset
-provides the role/profile name unless you override it inside `profile`.
+The top-level `name` is the unprefixed logical name for this specific agent
+instance. Standalone spawns are stored as `agent-{name}` and, when `busId` is
+omitted, get a private bus named `bus-agent-{name}`. For example,
+`name: "auth-security-reviewer"` creates run `agent-auth-security-reviewer`
+on bus `bus-agent-auth-security-reviewer`.
 
 ```json
 {
   "action": "spawn",
   "name": "auth-security-reviewer",
-  "busId": "auth-review-bus",
   "profile": {
-    "preset": "code-reviewer",
+    "name": "Security Reviewer",
+    "systemPrompt": "Review code changes for security regressions. Report findings with evidence and a risk level.",
     "tools": ["read", "bash"]
   },
   "task": "Review the auth refactor for security regressions. Finish with findings, evidence, and risk level."
 }
 ```
 
-## Example: spawn with a custom profile
+## Example: share an explicit bus
 
-Custom profiles need a readable role/profile `name` and a `systemPrompt`.
+Create or choose a bus only when multiple standalone subagents should share the
+same reference context.
+
+```json
+{
+  "action": "create",
+  "name": "bus-auth-review"
+}
+```
 
 ```json
 {
   "action": "spawn",
   "name": "auth-api-compat-reviewer",
-  "busId": "auth-review-bus",
+  "busId": "bus-auth-review",
   "profile": {
     "name": "API Compatibility Reviewer",
     "systemPrompt": "Review API changes for compatibility risks and migration issues.",
@@ -58,10 +60,12 @@ Custom profiles need a readable role/profile `name` and a `systemPrompt`.
 
 ## Example: message or close
 
+Use the returned run name, typically `agent-{name}` for standalone spawns.
+
 ```json
 {
   "action": "message",
-  "id": "auth-security-reviewer",
+  "id": "agent-auth-security-reviewer",
   "message": "Also check token refresh edge cases before finishing."
 }
 ```
@@ -69,15 +73,19 @@ Custom profiles need a readable role/profile `name` and a `systemPrompt`.
 ```json
 {
   "action": "close",
-  "id": "auth-security-reviewer"
+  "id": "agent-auth-security-reviewer"
 }
 ```
 
 ## Notes
 
-- Use a globally unique run `name` for each spawned agent.
+- Use a globally unique logical `name` for each spawned agent.
 - Reuse a bus only for agents working on the same delegated work item.
+- Explicit/reused buses are not auto-closed by subagent finish/close; only marked auto-created standalone private buses are.
+- Use `bus status` to inspect shared messages when needed. It shows a bounded
+  latest-message view.
 - Child agents receive `finish` and `publish_bus` automatically; do not include
   `bus` in profile tools.
-- Omit `profile.model` unless intentionally overriding. The supervising caller
-  chooses before spawn; see `model-selection.md`.
+- Omit `profile.model` to inherit the current Pi model; set it only to an exact
+  `provider/model` id. The supervising caller chooses before spawn. An unknown id
+  fails at spawn.

@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { buildAgentRun } from "../../tests/helpers/agent-run-fixture.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { Bus, BusMessage } from "../core/bus.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import type { OrchestraApi, PublishedBusMessage } from "../core/orchestra.ts";
 import { slugify } from "../utils.ts";
-import { closeWorkgroupRun, createWorkgroupTool, type WorkgroupOutput, type WorkgroupToolDeps } from "./workgroup.ts";
+import {
+  closeWorkgroupRun,
+  createWorkgroupTool,
+  defineWorkgroupPiTool,
+  type WorkgroupOutput,
+  type WorkgroupToolDeps,
+} from "./workgroup.ts";
 
 const securityProfile: AgentProfile = {
   name: "security",
@@ -33,11 +40,285 @@ function workgroupDeps(orchestra: OrchestraApi & { store: InMemoryAgentStore }):
   return {
     orchestra,
     store: orchestra.store,
+    parentRunId: null,
+    ownerSessionId: "session-1",
     onWorkgroupLaunching: undefined,
     onWorkgroupLaunched: undefined,
     onWorkgroupLaunchFailed: undefined,
   };
 }
+
+test("workgroup create records the creating child run as leader", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-child-leader",
+    ownerSessionId: "session-1",
+  });
+
+  const created = await tool.execute({ action: "create", name: "child-led", goal: "Coordinate child work." });
+
+  assert.equal(requireCreatedWorkgroup(created).leaderRunId, "agent-child-leader");
+});
+
+test("workgroup lookup prefers live prefixed records over closed legacy ids", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  orchestra.buses.set("closed-bus", {
+    id: "closed-bus",
+    name: "closed-bus",
+    state: "closed",
+    messages: [],
+    nextMessageSeq: 1,
+  });
+  orchestra.buses.set("live-bus", { id: "live-bus", name: "live-bus", state: "open", messages: [], nextMessageSeq: 1 });
+  orchestra.store.saveWorkgroup({
+    id: "review",
+    name: "review",
+    busId: "closed-bus",
+    goal: "Closed legacy group.",
+    leaderRunId: null,
+    memberRunIds: [],
+    state: "closed",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 1,
+  });
+  const live: WorkgroupRun = {
+    id: "live",
+    name: "group-review",
+    busId: "live-bus",
+    goal: "Live group.",
+    leaderRunId: null,
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 2,
+  };
+  orchestra.store.saveWorkgroup(live);
+
+  const output = await tool.execute({ action: "status", id: "review" });
+
+  assert.equal(output.action, "status");
+  assert.equal(output.workgroup?.id, live.id);
+});
+
+test("workgroup status and cancel allow main/root recovery while preserving leader mutations", async () => {
+  const orchestra = new FakeOrchestra();
+  orchestra.runs.set("agent-flow-lead", agentRun({ id: "agent-flow-lead", name: "agent-flow-lead" }));
+  orchestra.runs.set(
+    "agent-group-lead",
+    agentRun({
+      id: "agent-group-lead",
+      name: "agent-group-lead",
+      parentRunId: "agent-flow-lead",
+      ownerSessionId: "session-1",
+    }),
+  );
+  const leaderTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-group-lead",
+    ownerSessionId: "session-1",
+  });
+  const supervisorTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-flow-lead",
+    ownerSessionId: "session-1",
+  });
+  const rootTool = createWorkgroupTool(workgroupDeps(orchestra));
+  const strangerTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-stranger",
+    ownerSessionId: "session-1",
+  });
+  const created = await leaderTool.execute({ action: "create", name: "child-led", goal: "Coordinate child work." });
+  const workgroup = requireCreatedWorkgroup(created);
+
+  assert.equal((await rootTool.execute({ action: "status", id: workgroup.id })).action, "status");
+  assert.equal((await leaderTool.execute({ action: "status", id: workgroup.id })).action, "status");
+  assert.equal((await supervisorTool.execute({ action: "status", id: workgroup.id })).action, "status");
+  await assert.rejects(
+    () => strangerTool.execute({ action: "status", id: workgroup.id }),
+    /Only a supervising parent can status workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () =>
+      strangerTool.execute({
+        action: "add_members",
+        id: workgroup.id,
+        members: [{ name: "agent-stranger-member", profile: securityProfile, task: "Should not launch." }],
+      }),
+    /Only leader agent-group-lead can add_members workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () =>
+      rootTool.execute({
+        action: "add_members",
+        id: workgroup.id,
+        members: [{ name: "agent-main-member", profile: securityProfile, task: "Should not launch." }],
+      }),
+    /Only leader agent-group-lead can add_members workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () => strangerTool.execute({ action: "finish", id: workgroup.id, result: { status: "success", summary: "Done." } }),
+    /Only leader agent-group-lead can finish workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () => rootTool.execute({ action: "finish", id: workgroup.id, result: { status: "success", summary: "Done." } }),
+    /Only leader agent-group-lead can finish workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () => leaderTool.execute({ action: "cancel", id: workgroup.id }),
+    /Only a supervising parent can cancel workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () => strangerTool.execute({ action: "cancel", id: workgroup.id }),
+    /Only a supervising parent can cancel workgroup group-child-led\./,
+  );
+
+  const cancelOutput = await rootTool.execute({ action: "cancel", id: workgroup.id });
+  assert.equal(cancelOutput.action, "cancel");
+  assert.equal(cancelOutput.workgroup.state, "closed");
+  assert.equal(orchestra.runs.get("agent-flow-lead")?.state, "running");
+});
+
+test("main/root can recover status and cancel when child leader run is missing", async () => {
+  const orchestra = new FakeOrchestra();
+  const rootTool = createWorkgroupTool(workgroupDeps(orchestra));
+  const strangerTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-stranger",
+    ownerSessionId: "session-1",
+  });
+  orchestra.buses.set("bus-child-led", {
+    id: "bus-child-led",
+    name: "bus-child-led",
+    state: "open",
+    messages: [],
+    nextMessageSeq: 1,
+  });
+  orchestra.store.saveBus({
+    id: "bus-child-led",
+    name: "bus-child-led",
+    state: "open",
+    messages: [],
+    nextMessageSeq: 1,
+  });
+  orchestra.store.saveWorkgroup({
+    id: "group-child-led",
+    name: "group-child-led",
+    busId: "bus-child-led",
+    goal: "Child-led workgroup.",
+    leaderRunId: "missing-leader",
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 1_700_000_000_000,
+  });
+
+  assert.equal((await rootTool.execute({ action: "status", id: "group-child-led" })).action, "status");
+  await assert.rejects(
+    () => strangerTool.execute({ action: "status", id: "group-child-led" }),
+    /Only a supervising parent can status workgroup group-child-led\./,
+  );
+  await assert.rejects(
+    () => strangerTool.execute({ action: "cancel", id: "group-child-led" }),
+    /Only a supervising parent can cancel workgroup group-child-led\./,
+  );
+  const cancelOutput = await rootTool.execute({ action: "cancel", id: "group-child-led" });
+  assert.equal(cancelOutput.action, "cancel");
+  assert.equal(orchestra.store.getWorkgroup("group-child-led")?.state, "closed");
+});
+
+test("main/root can recover orphaned child-led workgroup while sibling remains unauthorized", async () => {
+  const orchestra = new FakeOrchestra();
+  orchestra.createBus({ name: "bus-orphan-workgroup" });
+  orchestra.store.saveWorkgroup({
+    id: "group-orphan",
+    name: "group-orphan",
+    busId: "bus-orphan-workgroup",
+    goal: "Orphaned child workgroup.",
+    leaderRunId: "agent-missing-group-lead",
+    memberRunIds: [],
+    state: "running",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 1,
+  });
+  const rootTool = createWorkgroupTool(workgroupDeps(orchestra));
+  const strangerTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-stranger",
+    ownerSessionId: "session-1",
+  });
+
+  assert.equal((await rootTool.execute({ action: "status", id: "group-orphan" })).action, "status");
+  await assert.rejects(
+    () => strangerTool.execute({ action: "status", id: "group-orphan" }),
+    /Only a supervising parent can status workgroup group-orphan\./,
+  );
+  await assert.rejects(
+    () => strangerTool.execute({ action: "cancel", id: "group-orphan" }),
+    /Only a supervising parent can cancel workgroup group-orphan\./,
+  );
+  const cancelOutput = await rootTool.execute({ action: "cancel", id: "group-orphan" });
+  assert.equal(cancelOutput.action, "cancel");
+  assert.equal(orchestra.store.getWorkgroup("group-orphan")?.state, "closed");
+});
+
+test("workgroup member can read status but cannot mutate group", async () => {
+  const orchestra = new FakeOrchestra();
+  orchestra.createBus({ name: "bus-member-status" });
+  orchestra.store.saveRun(
+    agentRun({ id: "agent-leader", name: "agent-leader", busId: "bus-member-status", profile: backendProfile }),
+  );
+  orchestra.store.saveRun(
+    agentRun({ id: "agent-member", name: "agent-member", busId: "bus-member-status", profile: backendProfile }),
+  );
+  orchestra.store.saveWorkgroup({
+    id: "group-member-status",
+    name: "group-member-status",
+    busId: "bus-member-status",
+    goal: "Member status access.",
+    leaderRunId: "agent-leader",
+    memberRunIds: ["agent-member"],
+    state: "running",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 1,
+  });
+  const memberTool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    parentRunId: "agent-member",
+    ownerSessionId: "session-1",
+  });
+
+  assert.equal((await memberTool.execute({ action: "status", id: "group-member-status" })).action, "status");
+  await assert.rejects(
+    () =>
+      memberTool.execute({
+        action: "add_members",
+        id: "group-member-status",
+        members: [{ name: "extra", profile: backendProfile, task: "Do more work." }],
+      }),
+    /Only leader agent-leader can add_members workgroup group-member-status\./,
+  );
+  await assert.rejects(
+    () =>
+      memberTool.execute({
+        action: "finish",
+        id: "group-member-status",
+        result: { status: "success", summary: "Done." },
+      }),
+    /Only leader agent-leader can finish workgroup group-member-status\./,
+  );
+  await assert.rejects(
+    () => memberTool.execute({ action: "cancel", id: "group-member-status" }),
+    /Only a supervising parent can cancel workgroup group-member-status\./,
+  );
+});
 
 test("workgroup creates an internal bus and launches members on it", async () => {
   const orchestra = new FakeOrchestra();
@@ -45,7 +326,7 @@ test("workgroup creates an internal bus and launches members on it", async () =>
 
   const created = await tool.execute({
     action: "create",
-    name: "auth-work-workgroup",
+    name: "group-auth-work-workgroup",
     goal: "Plan the auth refactor.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -55,12 +336,12 @@ test("workgroup creates an internal bus and launches members on it", async () =>
     id: workgroup.id,
     members: [
       {
-        name: "security-review",
+        name: "agent-security-review",
         profile: securityProfile,
         task: "Identify auth security risks.",
       },
       {
-        name: "backend-review",
+        name: "agent-backend-review",
         profile: backendProfile,
         task: "Assess API and data model changes.",
       },
@@ -70,27 +351,27 @@ test("workgroup creates an internal bus and launches members on it", async () =>
   assertMembersAdded(output);
   assert.equal(output.bus, bus);
   assert.equal(output.runs.length, 2);
-  assertUuid7(output.workgroup.id);
-  assert.equal(output.workgroup.name, "auth-work-workgroup");
+  assertUuid(output.workgroup.id);
+  assert.equal(output.workgroup.name, "group-auth-work-workgroup");
   assert.equal(output.workgroup.leaderRunId, null);
-  assert.deepEqual(output.workgroup.memberRunIds, ["security-review", "backend-review"]);
+  assert.deepEqual(output.workgroup.memberRunIds, ["agent-security-review", "agent-backend-review"]);
   assert.deepEqual(orchestra.store.getWorkgroup(output.workgroup.id), output.workgroup);
   assert.deepEqual(
     orchestra.spawned.map((spawn) => ({ profile: spawn.profile, busId: spawn.busId, name: spawn.options?.name })),
     [
-      { profile: securityProfile, busId: bus.id, name: "security-review" },
-      { profile: backendProfile, busId: bus.id, name: "backend-review" },
+      { profile: securityProfile, busId: bus.id, name: "agent-security-review" },
+      { profile: backendProfile, busId: bus.id, name: "agent-backend-review" },
     ],
   );
   assert.equal(orchestra.spawned[0]?.task, "Identify auth security risks.");
   assert.equal(
     output.message,
     [
-      "Added 2 members to workgroup auth-work-workgroup on bus auth-work-workgroup-bus.",
+      "Added 2 members to workgroup group-auth-work-workgroup on bus bus-group-auth-work-workgroup.",
       "",
       "Runs:",
-      "- security-review: running",
-      "- backend-review: running",
+      "- agent-security-review: running",
+      "- agent-backend-review: running",
       "",
       "Pi-orchestra will deliver workgroup.member_finished events as members finish.",
     ].join("\n"),
@@ -111,7 +392,7 @@ test("workgroup status shows member models", async () => {
     id: workgroup.id,
     members: [
       {
-        name: "codex-mini-medium",
+        name: "agent-codex-mini-medium",
         profile: { ...backendProfile, model: "openai-codex/gpt-5.4-mini" },
         task: "Inspect model selection.",
       },
@@ -121,7 +402,7 @@ test("workgroup status shows member models", async () => {
   const status = await tool.execute({ action: "status", id: workgroup.id });
 
   assert.equal(status.action, "status");
-  assert.match(status.message, /- codex-mini-medium: running — openai-codex\/gpt-5\.4-mini/);
+  assert.match(status.message, /- agent-codex-mini-medium: running — openai-codex\/gpt-5\.4-mini/);
 });
 
 test("workgroup member task guides members to share useful context", async () => {
@@ -164,12 +445,12 @@ test("workgroup uses explicit member names", async () => {
     members: [
       {
         profile: backendProfile,
-        name: "backend-a",
+        name: "agent-backend-a",
         task: "Review backend changes from one angle.",
       },
       {
         profile: backendProfile,
-        name: "backend-b",
+        name: "agent-backend-b",
         task: "Review backend changes from another angle.",
       },
     ],
@@ -178,12 +459,66 @@ test("workgroup uses explicit member names", async () => {
   assertMembersAdded(output);
   assert.deepEqual(
     output.runs.map((run) => run.name),
-    ["backend-a", "backend-b"],
+    ["agent-backend-a", "agent-backend-b"],
   );
   assert.deepEqual(
     orchestra.spawned.map((spawn) => spawn.options?.name),
-    ["backend-a", "backend-b"],
+    ["agent-backend-a", "agent-backend-b"],
   );
+});
+
+test("workgroup Pi tool guidance reserves finish for leaders and cancel for supervisors", () => {
+  const tool = defineWorkgroupPiTool(() => ({
+    name: "workgroup",
+    async execute() {
+      throw new Error("not executed");
+    },
+  }));
+  assert.ok(tool.promptGuidelines);
+  const guidance = tool.promptGuidelines.join("\n");
+
+  assert.match(guidance, /Only the workgroup leader calls workgroup finish/);
+  assert.match(guidance, /workgroup cancel from a supervising parent scope/);
+  assert.doesNotMatch(guidance, /leader calls workgroup cancel/i);
+});
+
+test("workgroup Pi details window member runs and preserve raw output data", async () => {
+  const runs = Array.from({ length: 12 }, (_, index) =>
+    agentRun({ id: `agent-${index + 1}`, name: `agent-${index + 1}` }),
+  );
+  const workgroup: WorkgroupRun = {
+    id: "group-1",
+    name: "group-1",
+    busId: "bus-1",
+    goal: "Coordinate.",
+    leaderRunId: null,
+    memberRunIds: runs.map((run) => run.id),
+    state: "running",
+    result: null,
+    ownerSessionId: "session-1",
+    createdAtMs: 1,
+  };
+  const bus: Bus = { id: "bus-1", name: "bus-1", state: "open", messages: [], nextMessageSeq: 1 };
+  const rawOutput: WorkgroupOutput = { action: "status", workgroup, bus, runs, message: "status" };
+  const tool = defineWorkgroupPiTool(() => ({
+    name: "workgroup",
+    async execute() {
+      return rawOutput;
+    },
+  }));
+
+  const output = await tool.execute(
+    "call-1",
+    { action: "status", id: workgroup.id },
+    new AbortController().signal,
+    undefined,
+    {} as never,
+  );
+
+  const details = output.details as { runs: AgentRun[]; omittedRunsCount: number };
+  assert.equal(details.runs.length, 10);
+  assert.equal(details.omittedRunsCount, 2);
+  assert.equal(rawOutput.runs.length, 12);
 });
 
 test("workgroup create does not require a pre-existing bus", async () => {
@@ -198,7 +533,7 @@ test("workgroup create does not require a pre-existing bus", async () => {
 
   assert.equal(output.action, "create");
   if (output.action !== "create") throw new Error("Expected created workgroup output.");
-  assert.equal(output.workgroup.busId, "new-workgroup-bus");
+  assert.equal(output.workgroup.busId, "bus-group-new-workgroup");
   assert.equal(orchestra.getBus(output.workgroup.busId)?.state, "open");
 });
 
@@ -222,23 +557,57 @@ test("workgroup create validates names before creating the internal bus", async 
   await tool.execute({ action: "create", name: "duplicate-workgroup", goal: "Create once." });
   await assert.rejects(
     () => tool.execute({ action: "create", name: "duplicate-workgroup", goal: "Create twice." }),
-    /Workgroup name "duplicate-workgroup" is already in use\./,
+    /Workgroup name "group-duplicate-workgroup" is already in use\./,
   );
-  assert.deepEqual([...orchestra.buses.keys()], ["duplicate-workgroup-bus"]);
+  assert.deepEqual([...orchestra.buses.keys()], ["bus-group-duplicate-workgroup"]);
+});
+
+test("workgroup member name checks reserve finished revivable runs", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const otherBus = orchestra.createBus({ name: "other-work" });
+  orchestra.runs.set(
+    "agent-security-review",
+    agentRun({
+      id: "agent-security-review",
+      name: "agent-security-review",
+      busId: otherBus.id,
+      state: "success",
+      result: { status: "success", summary: "Done." },
+    }),
+  );
+
+  const created = await tool.execute({
+    action: "create",
+    name: "target-work-workgroup",
+    goal: "Plan the auth refactor.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+
+  await assert.rejects(
+    () =>
+      tool.execute({
+        action: "add_members",
+        id: workgroup.id,
+        members: [{ name: "security-review", profile: securityProfile, task: "Review security." }],
+      }),
+    /Workgroup member name "agent-security-review" is already in use\./,
+  );
 });
 
 test("workgroup member name checks are global", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const otherBus = orchestra.createBus({ name: "other-work" });
-  orchestra.runs.set("security-review", {
-    id: "security-review",
-    name: "security-review",
+  orchestra.runs.set("agent-security-review", {
+    id: "agent-security-review",
+    name: "agent-security-review",
     profile: securityProfile,
     task: "Existing work.",
     busId: otherBus.id,
     parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
+    ownerSessionId: "session-1",
     state: "running",
     result: null,
   });
@@ -257,13 +626,13 @@ test("workgroup member name checks are global", async () => {
         id: workgroup.id,
         members: [
           {
-            name: "security-review",
+            name: "agent-security-review",
             profile: securityProfile,
             task: "Review security.",
           },
         ],
       }),
-    /Workgroup member name "security-review" is already in use\./,
+    /Workgroup member name "agent-security-review" is already in use\./,
   );
 });
 
@@ -273,7 +642,7 @@ test("workgroup finish closes members and the bus and records final output", asy
 
   const created = await tool.execute({
     action: "create",
-    name: "auth-work-workgroup",
+    name: "group-auth-work-workgroup",
     goal: "Plan the auth refactor.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -282,12 +651,12 @@ test("workgroup finish closes members and the bus and records final output", asy
     id: workgroup.id,
     members: [
       {
-        name: "security-review",
+        name: "agent-security-review",
         profile: securityProfile,
         task: "Review security.",
       },
       {
-        name: "backend-review",
+        name: "agent-backend-review",
         profile: backendProfile,
         task: "Review backend.",
       },
@@ -311,9 +680,9 @@ test("workgroup finish closes members and the bus and records final output", asy
   assert.equal("bus" in output, false);
   assert.equal("message" in output, false);
   assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
-  assert.deepEqual(orchestra.closedIds, ["security-review", "backend-review"]);
-  assert.equal(orchestra.runs.get("security-review")?.state, "closed");
-  assert.equal(orchestra.runs.get("backend-review")?.state, "closed");
+  assert.deepEqual(orchestra.closedIds, ["agent-security-review", "agent-backend-review"]);
+  assert.equal(orchestra.runs.get("agent-security-review")?.state, "closed");
+  assert.equal(orchestra.runs.get("agent-backend-review")?.state, "closed");
 });
 
 test("workgroup cancel disposes members, bus, and leader", async () => {
@@ -322,7 +691,7 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
 
   const created = await tool.execute({
     action: "create",
-    name: "blocked-work-workgroup",
+    name: "group-blocked-work-workgroup",
     goal: "Cancel the group when blocked.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -331,12 +700,12 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
     id: workgroup.id,
     members: [
       {
-        name: "security-review",
+        name: "agent-security-review",
         profile: securityProfile,
         task: "Review security.",
       },
       {
-        name: "backend-review",
+        name: "agent-backend-review",
         profile: backendProfile,
         task: "Review backend.",
       },
@@ -352,6 +721,7 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
     busId: workgroup.busId,
     parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/workgroup-lead.jsonl",
+    ownerSessionId: "session-1",
     state: "running",
     result: null,
   });
@@ -370,7 +740,7 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
   assert.equal(
     output.message,
     [
-      "Cancelled workgroup blocked-work-workgroup.",
+      "Cancelled workgroup group-blocked-work-workgroup.",
       "",
       "Status: blocked",
       "Summary: Workgroup cancelled.",
@@ -379,10 +749,35 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
     ].join("\n"),
   );
   assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
-  assert.deepEqual(orchestra.closedIds, ["security-review", "backend-review", "workgroup-lead"]);
-  assert.equal(orchestra.runs.get("security-review")?.state, "closed");
-  assert.equal(orchestra.runs.get("backend-review")?.state, "closed");
+  assert.deepEqual(orchestra.closedIds, ["agent-security-review", "agent-backend-review", "workgroup-lead"]);
+  assert.equal(orchestra.runs.get("agent-security-review")?.state, "closed");
+  assert.equal(orchestra.runs.get("agent-backend-review")?.state, "closed");
   assert.equal(orchestra.runs.get("workgroup-lead")?.state, "closed");
+});
+
+test("workgroup cancel spares an external creator leader on its own bus", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+  const created = await tool.execute({
+    action: "create",
+    name: "external-leader-workgroup",
+    goal: "Cancel without killing the creator.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  const member = agentRun({ id: "agent-member", name: "agent-member", busId: workgroup.busId, parentRunId: "creator" });
+  const creator = agentRun({ id: "creator", name: "creator", busId: "creator-bus", parentRunId: null });
+  orchestra.runs.set(member.id, member);
+  orchestra.runs.set(creator.id, creator);
+  orchestra.store.saveRun(member);
+  orchestra.store.saveRun(creator);
+  orchestra.store.saveWorkgroup({ ...workgroup, leaderRunId: creator.id, memberRunIds: [member.id] });
+  const supervisorTool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  const output = await supervisorTool.execute({ action: "cancel", id: workgroup.id });
+
+  assert.equal(output.action, "cancel");
+  assert.deepEqual(orchestra.closedIds, ["agent-member"]);
+  assert.equal(orchestra.runs.get("creator")?.state, "running");
 });
 
 test("workgroup cancel completes cleanup for closing workgroups", async () => {
@@ -400,7 +795,7 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
     id: workgroup.id,
     members: [
       {
-        name: "cleanup-review",
+        name: "agent-cleanup-review",
         profile: securityProfile,
         task: "Review cleanup.",
       },
@@ -416,6 +811,7 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
     busId: workgroup.busId,
     parentRunId: null,
     sessionFile: ".pi/orchestra/sessions/cleanup-lead.jsonl",
+    ownerSessionId: "session-1",
     state: "running",
     result: null,
   });
@@ -428,7 +824,7 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
   assert.equal(output.alreadyClosed, false);
   assert.equal(output.workgroup.state, "closed");
   assert.equal(orchestra.getBus(workgroup.busId)?.state, "closed");
-  assert.deepEqual(orchestra.closedIds, ["cleanup-review", "cleanup-lead"]);
+  assert.deepEqual(orchestra.closedIds, ["agent-cleanup-review", "cleanup-lead"]);
 });
 
 test("workgroup close cleans up runs added during cleanup", async () => {
@@ -478,7 +874,7 @@ test("workgroup cancel preserves already finished results", async () => {
 
   const created = await tool.execute({
     action: "create",
-    name: "finished-work-workgroup",
+    name: "group-finished-work-workgroup",
     goal: "Finish before cancellation is requested.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -497,7 +893,7 @@ test("workgroup cancel preserves already finished results", async () => {
   assert.equal(
     output.message,
     [
-      "Workgroup finished-work-workgroup was already closed.",
+      "Workgroup group-finished-work-workgroup was already closed.",
       "",
       "Status: success",
       "Summary: Workgroup already completed.",
@@ -514,7 +910,7 @@ test("workgroup rejects adding members after finish", async () => {
 
   const created = await tool.execute({
     action: "create",
-    name: "auth-work-workgroup",
+    name: "group-auth-work-workgroup",
     goal: "Plan the auth refactor.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -537,7 +933,7 @@ test("workgroup rejects adding members after finish", async () => {
           },
         ],
       }),
-    /Workgroup auth-work-workgroup is closed\./,
+    /Workgroup group-auth-work-workgroup is closed\./,
   );
 });
 
@@ -552,7 +948,7 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
 
   const created = await tool.execute({
     action: "create",
-    name: "auth-work-workgroup",
+    name: "group-auth-work-workgroup",
     goal: "Plan the auth refactor.",
   });
   const workgroup = requireCreatedWorkgroup(created);
@@ -564,7 +960,7 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
         id: workgroup.id,
         members: [
           {
-            name: "security-review",
+            name: "agent-security-review",
             profile: securityProfile,
             task: "Review security.",
           },
@@ -578,9 +974,9 @@ test("workgroup closes successfully spawned members when launch is incomplete", 
     /Failed to launch every workgroup member\./,
   );
 
-  assert.deepEqual(eventOrder, ["launch_failed", "close:security-review"]);
-  assert.deepEqual(orchestra.closedIds, ["security-review"]);
-  assert.equal(orchestra.runs.get("security-review")?.state, "closed");
+  assert.deepEqual(eventOrder, ["launch_failed", "close:agent-security-review"]);
+  assert.deepEqual(orchestra.closedIds, ["agent-security-review"]);
+  assert.equal(orchestra.runs.get("agent-security-review")?.state, "closed");
 });
 
 test("workgroup add_members does not resurrect a workgroup closed during member launch", async () => {
@@ -597,26 +993,26 @@ test("workgroup add_members does not resurrect a workgroup closed during member 
 
   const created = await tool.execute({
     action: "create",
-    name: "race-work-workgroup",
+    name: "group-race-work-workgroup",
     goal: "Close while launch is pending.",
   });
   const workgroup = requireCreatedWorkgroup(created);
   const addTask = tool.execute({
     action: "add_members",
     id: workgroup.id,
-    members: [{ name: "late-member", profile: securityProfile, task: "Start after closure." }],
+    members: [{ name: "agent-late-member", profile: securityProfile, task: "Start after closure." }],
   });
   await spawnStarted.promise;
 
   await tool.execute({ action: "cancel", id: workgroup.id });
   spawnDelay.resolve();
 
-  await assert.rejects(addTask, /Workgroup race-work-workgroup is closed\./);
+  await assert.rejects(addTask, /Workgroup group-race-work-workgroup is closed\./);
   assert.equal(orchestra.store.getWorkgroup(workgroup.id)?.state, "closed");
   assert.deepEqual(orchestra.store.getWorkgroup(workgroup.id)?.memberRunIds, []);
-  assert.deepEqual(orchestra.closedIds, ["late-member"]);
-  assert.equal(orchestra.runs.get("late-member")?.state, "closed");
-  assert.deepEqual(launchFailedRunIds, [["late-member"]]);
+  assert.deepEqual(orchestra.closedIds, ["agent-late-member"]);
+  assert.equal(orchestra.runs.get("agent-late-member")?.state, "closed");
+  assert.deepEqual(launchFailedRunIds, [["agent-late-member"]]);
 });
 
 test("workgroup add_members merges member ids from concurrent launches", async () => {
@@ -633,23 +1029,44 @@ test("workgroup add_members merges member ids from concurrent launches", async (
     tool.execute({
       action: "add_members",
       id: workgroup.id,
-      members: [{ name: "first-member", profile: securityProfile, task: "Do the first part." }],
+      members: [{ name: "agent-first-member", profile: securityProfile, task: "Do the first part." }],
     }),
     tool.execute({
       action: "add_members",
       id: workgroup.id,
-      members: [{ name: "second-member", profile: backendProfile, task: "Do the second part." }],
+      members: [{ name: "agent-second-member", profile: backendProfile, task: "Do the second part." }],
     }),
   ]);
 
   assert.deepEqual(
     new Set(orchestra.store.getWorkgroup(workgroup.id)?.memberRunIds),
-    new Set(["first-member", "second-member"]),
+    new Set(["agent-first-member", "agent-second-member"]),
   );
 });
 
-function assertUuid7(id: string): void {
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+test("workgroup create closes internal bus when persisting the workgroup fails", async () => {
+  const orchestra = new FakeOrchestra();
+  orchestra.store = new SaveWorkgroupFailureStore();
+  orchestra.runs = new SyncedRunMap(orchestra.store);
+  const tool = createWorkgroupTool(workgroupDeps(orchestra));
+
+  await assert.rejects(
+    () => tool.execute({ action: "create", name: "persist-fails", goal: "Exercise rollback." }),
+    /save workgroup failed/,
+  );
+
+  assert.equal(orchestra.getBus("bus-group-persist-fails")?.state, "closed");
+  assert.deepEqual(orchestra.store.listWorkgroups(), []);
+});
+
+class SaveWorkgroupFailureStore extends InMemoryAgentStore {
+  override saveWorkgroup(_workgroup: WorkgroupRun): void {
+    throw new Error("save workgroup failed.");
+  }
+}
+
+function assertUuid(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 }
 
 function requireCreatedWorkgroupId(output: WorkgroupOutput): string {
@@ -682,7 +1099,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile;
     task: string;
     busId: string;
-    options: { name: string | undefined; parentRunId: string | null };
+    options: { name: string | undefined; parentRunId: string | null; ownerSessionId: "session-1" };
   }> = [];
   closedIds: string[] = [];
   spawnDelay: Promise<void> | undefined;
@@ -692,7 +1109,7 @@ class FakeOrchestra implements OrchestraApi {
 
   createBus(options: { name: string | undefined }): Bus {
     const id = options.name ?? `bus-${this.buses.size + 1}`;
-    const bus: Bus = { id, name: options.name ?? id, state: "open", messages: [] };
+    const bus: Bus = { id, name: options.name ?? id, state: "open", messages: [], nextMessageSeq: 1 };
     this.buses.set(bus.id, bus);
     return bus;
   }
@@ -712,7 +1129,8 @@ class FakeOrchestra implements OrchestraApi {
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     const bus = this.getBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
-    const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, message, from };
+    const busMessage: BusMessage = { id: `message-${bus.messages.length + 1}`, seq: bus.nextMessageSeq, message, from };
+    bus.nextMessageSeq += 1;
     bus.messages.push(busMessage);
     return { bus, busMessage };
   }
@@ -721,7 +1139,7 @@ class FakeOrchestra implements OrchestraApi {
     profile: AgentProfile,
     task: string,
     busId: string,
-    options: { name: string | undefined; parentRunId: string | null },
+    options: { name: string | undefined; parentRunId: string | null; ownerSessionId: "session-1" },
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
@@ -741,6 +1159,7 @@ class FakeOrchestra implements OrchestraApi {
       busId: bus.id,
       parentRunId: options.parentRunId,
       state: "running",
+      ownerSessionId: "session-1",
       sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
       result: null,
     };
@@ -786,7 +1205,7 @@ function requireWorkgroup(orchestra: FakeOrchestra, id: string): WorkgroupRun {
 
 function agentRun(overrides: Partial<AgentRun> = {}): AgentRun {
   const id = overrides.id ?? "agent-1";
-  return {
+  return buildAgentRun({
     id,
     name: overrides.name ?? id,
     profile: overrides.profile ?? securityProfile,
@@ -797,7 +1216,8 @@ function agentRun(overrides: Partial<AgentRun> = {}): AgentRun {
     parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
-  } as AgentRun;
+    ownerSessionId: overrides.ownerSessionId ?? "session-1",
+  });
 }
 
 function createDeferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {

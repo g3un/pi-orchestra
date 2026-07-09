@@ -3,18 +3,19 @@ import {
   matchesBusSubscription,
   type Bus,
   type BusMessage,
+  type NewBusMessage,
   type BusMessageEvent,
   type BusSubscription,
   type ListBusSubscriptionsOptions,
 } from "../core/bus.ts";
 import type { AgentStore } from "../core/store.ts";
-import type { WorkflowRun } from "../core/workflow.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
-import { notifySubscribers, subscribeStore, type StoreSubscription } from "./store-subscriptions.ts";
+import type { WorkflowRun } from "../core/workflow.ts";
 
 /**
- * In-memory {@link AgentStore} used as a lightweight fixture in tests.
- * Production code persists state through {@link SqliteAgentStore} instead.
+ * In-memory {@link AgentStore}. This store owns live orchestration state for
+ * the current Pi process. A separate append-only SQLite debug log mirrors state
+ * transitions for debugging and backup.
  */
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
@@ -84,24 +85,28 @@ export class InMemoryAgentStore implements AgentStore {
     return snapshot(updatedBus);
   }
 
-  addBusMessage(busId: string, message: BusMessage): void {
-    let addedMessage: BusMessage | undefined;
+  addBusMessage(busId: string, message: NewBusMessage | BusMessage): BusMessage {
+    let savedMessage: BusMessage | undefined;
+    let appended = false;
     const updatedBus = this.updateBus(busId, (bus) => {
       if (bus.state === "closed") throw new Error(`Bus ${bus.name} is closed.`);
 
-      const savedMessage = snapshot(message);
-      const existingIndex = bus.messages.findIndex((current) => current.id === savedMessage.id);
+      const existingIndex = bus.messages.findIndex((current) => current.id === message.id);
       const messages = [...bus.messages];
       if (existingIndex >= 0) {
-        messages[existingIndex] = savedMessage;
+        savedMessage = { ...message, seq: messages[existingIndex]!.seq };
+        messages[existingIndex] = snapshot(savedMessage);
         return { ...bus, messages };
       }
 
-      addedMessage = savedMessage;
-      return { ...bus, messages: [...messages, savedMessage] };
+      savedMessage = snapshot({ ...message, seq: bus.nextMessageSeq });
+      appended = true;
+      return { ...bus, nextMessageSeq: bus.nextMessageSeq + 1, messages: [...messages, savedMessage] };
     });
     if (!updatedBus) throw new Error(`Bus ${busId} not found.`);
-    if (addedMessage) notifySubscribers(this.busMessageSubscriptions, { busId, message: snapshot(addedMessage) });
+    if (!savedMessage) throw new Error(`Bus ${busId} message was not saved.`);
+    if (appended) notifySubscribers(this.busMessageSubscriptions, { busId, message: snapshot(savedMessage) });
+    return snapshot(savedMessage);
   }
 
   subscribeBusMessages(
@@ -188,6 +193,15 @@ export class InMemoryAgentStore implements AgentStore {
   ): () => void {
     return subscribeStore(this.workflowSubscriptions, listener, filter);
   }
+
+  dispose(): void {
+    // The process owns this in-memory state; there is nothing to release.
+  }
+}
+
+interface StoreSubscription<T> {
+  listener(value: T): void;
+  filter: ((value: T) => boolean) | undefined;
 }
 
 interface NamedEntity {
@@ -235,6 +249,22 @@ function getNamedEntity<T extends NamedEntity>(
     if (entity.name === name) return entity;
   }
   return undefined;
+}
+
+function subscribeStore<T>(
+  subscriptions: Set<StoreSubscription<T>>,
+  listener: (value: T) => void,
+  filter: ((value: T) => boolean) | undefined,
+): () => void {
+  const subscription = { listener, filter };
+  subscriptions.add(subscription);
+  return () => subscriptions.delete(subscription);
+}
+
+function notifySubscribers<T>(subscriptions: Set<StoreSubscription<T>>, value: T): void {
+  for (const subscription of subscriptions) {
+    if (!subscription.filter || subscription.filter(value)) subscription.listener(value);
+  }
 }
 
 function snapshot<T>(value: T): T {

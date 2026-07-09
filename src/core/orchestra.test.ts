@@ -6,6 +6,7 @@ import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
 import { Orchestra } from "./orchestra.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "./runtime.ts";
 import type { AgentStore } from "./store.ts";
+import { buildAgentRun } from "../../tests/helpers/agent-run-fixture.ts";
 
 const profile: AgentProfile = {
   name: "researcher",
@@ -22,7 +23,7 @@ test("orchestra creates buses in the store", () => {
   const bus = orchestra.createBus({ name: undefined });
 
   assert.deepEqual(store.getBus(bus.id), bus);
-  assertUuid7(bus.id);
+  assertUuid(bus.id);
   assert.equal(bus.name, "bus");
   assert.equal(bus.state, "open");
   assert.deepEqual(bus.messages, []);
@@ -38,8 +39,8 @@ test("orchestra closes buses, clears subscriptions, and rejects new work", async
     busId: bus.id,
     subscriberId: "main",
     subscriberKind: "main",
-    lastDeliveredMessageId: null,
-    deliveredMessageIds: [],
+    lastDeliveredSeq: 0,
+    deliveredSeqs: [],
   });
 
   const closedBus = orchestra.closeBus(bus.name);
@@ -68,10 +69,10 @@ test("orchestra accepts short names for buses and agent runs", async () => {
     parentRunId: null,
   });
 
-  assertUuid7(bus.id);
+  assertUuid(bus.id);
   assert.equal(bus.name, "Frontend Audit");
   assert.deepEqual(orchestra.getBus(bus.name), bus);
-  assertUuid7(run.id);
+  assertUuid(run.id);
   assert.equal(run.name, "Reviewer A");
   assert.deepEqual(orchestra.getRun(run.name, { busId: undefined }), run);
 });
@@ -96,11 +97,11 @@ test("orchestra keeps agent run names globally unique", async () => {
     parentRunId: null,
   });
 
-  assertUuid7(namedRun.id);
+  assertUuid(namedRun.id);
   assert.equal(namedRun.name, "Reviewer");
-  assertUuid7(firstAutoRun.id);
+  assertUuid(firstAutoRun.id);
   assert.equal(firstAutoRun.name, "researcher");
-  assertUuid7(secondAutoRun.id);
+  assertUuid(secondAutoRun.id);
   assert.equal(secondAutoRun.name, "researcher-2");
   assert.deepEqual(orchestra.getRun("Reviewer", { busId: undefined }), namedRun);
   await assert.rejects(
@@ -128,6 +129,49 @@ test("orchestra lists runs and filters by bus", () => {
 
   assert.deepEqual(orchestra.listRuns({ busId: undefined }), [firstRun, secondRun]);
   assert.deepEqual(orchestra.listRuns({ busId: "bus-1" }), [firstRun]);
+});
+
+test("orchestra reuses closed bus names while open buses still conflict", () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const first = orchestra.createBus({ name: undefined });
+  orchestra.closeBus(first.id);
+
+  const second = orchestra.createBus({ name: undefined });
+
+  assert.equal(second.name, first.name);
+  assert.equal(second.name, "bus");
+  assert.notEqual(second.id, first.id);
+  assert.throws(() => orchestra.createBus({ name: second.name }), /Bus name "bus" is already in use\./);
+});
+
+test("orchestra bus lookup prefers live prefixed names over closed legacy ids", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  store.saveBus({ id: "review", name: "review", state: "closed", messages: [], nextMessageSeq: 1 });
+  const live = orchestra.createBus({ name: "bus-review" });
+
+  assert.deepEqual(orchestra.getBus("review"), live);
+  assert.deepEqual(
+    (await orchestra.publishBus("review", "Live fact.", "main")).busMessage,
+    store.getBus(live.id)?.messages[0],
+  );
+});
+
+test("orchestra resolves agent-prefixed run names from unprefixed ids", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus({ name: "Frontend Audit" });
+  const run = await orchestra.spawnAgent(profile, "Inspect frontend code.", bus.id, {
+    name: "agent-reviewer",
+    parentRunId: null,
+  });
+
+  assert.deepEqual(orchestra.getRun("reviewer", { busId: undefined }), run);
+  assert.deepEqual(orchestra.getRun("reviewer", { busId: bus.name }), run);
 });
 
 test("orchestra resolves global run names for lifecycle actions", async () => {
@@ -199,6 +243,35 @@ test("orchestra publishes bus messages through runtime and reads updated store s
   assert.deepEqual(store.getBus(bus.id), output.bus);
 });
 
+test("orchestra marks sender bus subscriptions delivered after publish", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus({ name: "bus-1" });
+  const subscriptionId = "main:main:bus:" + bus.id;
+  store.saveBusSubscription({
+    id: subscriptionId,
+    busId: bus.id,
+    subscriberId: "main",
+    subscriberKind: "main",
+    lastDeliveredSeq: 1,
+    deliveredSeqs: [],
+  });
+  store.addBusMessage(bus.id, { id: "message-1", from: "agent-1", message: "Already delivered." });
+
+  const published = await orchestra.publishBus(bus.id, "Main-owned context.", "main");
+
+  assert.equal(published.busMessage.seq, 2);
+  assert.deepEqual(store.getBusSubscription(subscriptionId), {
+    id: subscriptionId,
+    busId: bus.id,
+    subscriberId: "main",
+    subscriberKind: "main",
+    lastDeliveredSeq: 2,
+    deliveredSeqs: [],
+  });
+});
+
 test("orchestra messages reusable finished agents", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);
@@ -240,6 +313,7 @@ class FakeRuntime implements AgentRuntime {
       parentRunId: options.parentRunId ?? null,
       state: "running",
       sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
+      ownerSessionId: "session-1",
       result: null,
     };
     this.store.saveRun(run);
@@ -259,9 +333,11 @@ class FakeRuntime implements AgentRuntime {
 
   async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
     this.published = { busId, message, from };
-    const busMessage: BusMessage = { id: "message-1", message, from };
-    this.store.addBusMessage(busId, busMessage);
-    return busMessage;
+    return this.store.addBusMessage(busId, {
+      id: `message-${this.store.getBus(busId)?.nextMessageSeq ?? 1}`,
+      message,
+      from,
+    });
   }
 
   async close(id: string): Promise<AgentRun | undefined> {
@@ -275,13 +351,13 @@ class FakeRuntime implements AgentRuntime {
   }
 }
 
-function assertUuid7(id: string): void {
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+function assertUuid(id: string): void {
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 }
 
 function run(overrides: Partial<AgentRun>): AgentRun {
   const id = overrides.id ?? "agent-1";
-  return {
+  return buildAgentRun({
     id,
     name: overrides.name ?? id,
     profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
@@ -292,5 +368,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     parentRunId: overrides.parentRunId ?? null,
     sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
-  } as AgentRun;
+    ownerSessionId: overrides.ownerSessionId ?? "session-1",
+  });
 }

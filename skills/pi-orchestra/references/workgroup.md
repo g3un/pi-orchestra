@@ -1,11 +1,12 @@
 # Workgroup Calls
 
 Use a workgroup when one leader should coordinate multiple member agents toward
-one shared result.
+one shared result. Use `workflow` instead when you need a sequence of workgroups
+where later groups depend on earlier results.
 
 ## Basic flow
 
-1. `workgroup create` creates the private bus.
+1. `workgroup create` stores the group as `group-{name}` and creates the private bus as `bus-group-{name}`.
 2. The workgroup leader calls `workgroup add_members` with focused member tasks.
 3. The leader consumes `workgroup.member_finished` events.
 4. The leader calls `workgroup finish` with the canonical group output.
@@ -23,8 +24,7 @@ one shared result.
 
 ## Example: add members
 
-Members can share the same role/profile preset, but each member needs its own run
-`name`.
+Each member needs its own custom profile and its own run `name`.
 
 ```json
 {
@@ -34,7 +34,8 @@ Members can share the same role/profile preset, but each member needs its own ru
     {
       "name": "security-reviewer",
       "profile": {
-        "preset": "code-reviewer",
+        "name": "Security Reviewer",
+        "systemPrompt": "Review code changes for security risks. Report findings with evidence.",
         "tools": ["read", "bash"]
       },
       "task": "Review security risks in the auth refactor."
@@ -42,7 +43,8 @@ Members can share the same role/profile preset, but each member needs its own ru
     {
       "name": "api-reviewer",
       "profile": {
-        "preset": "code-reviewer",
+        "name": "API Compatibility Reviewer",
+        "systemPrompt": "Review code changes for API compatibility and migration risks. Report findings with evidence.",
         "tools": ["read", "bash"]
       },
       "task": "Review API compatibility risks in the auth refactor."
@@ -79,9 +81,10 @@ Only the workgroup leader should finish the group result.
 
 ## Notes
 
-- Do not create a bus manually for a workgroup.
+- Do not create a bus manually for a workgroup; the private bus name preserves the group prefix, for example `bus-group-review-workgroup`.
 - Do not finish a workgroup from outside its leader; cancel instead when a parent
   needs cleanup.
 - Prefer 2-4 well-briefed members over many vague members.
-- For member `profile.model`, usually omit. The workgroup leader chooses before
-  `add_members`; see `model-selection.md`.
+- For member `profile.model`, omit to inherit the current Pi model; set it only
+  to an exact `provider/model` id. The workgroup leader chooses before
+  `add_members`. An unknown id fails at spawn.

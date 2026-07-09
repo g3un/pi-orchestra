@@ -37,12 +37,7 @@
     "lint": "oxlint",
     "test": "pnpm test:all",
     "test:all": "vitest run",
-    "test:unit": "vitest run src",
-    "test:integration": "vitest run tests/integration",
-    "test:e2e": "vitest run tests/e2e"
-  },
-  "dependencies": {
-    "uuid": "^14.0.0"
+    "test:unit": "vitest run src"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.78.0",

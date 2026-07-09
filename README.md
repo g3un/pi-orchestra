@@ -16,23 +16,14 @@ pi -e npm:@g3un/pi-orchestra
 
 ## Usage
 
-Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and
-`workflow`.
+Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and `workflow`.
 
 - Use the smallest orchestration primitive that fits the task.
-- Completion events are delivered back to the main conversation, so delegated
-  work can continue without polling.
-- Active workflows appear in a TUI widget as `workflow [uptime] | workgroups
-(done/total) | agents (done/total) | status`. Reopen it with
-  `/orchestra-workflows`.
-- Use `/orchestra-recovery` after a restart to inspect persisted active records
-  before explicitly cancelling or closing abandoned scopes.
-- Use `/orchestra-models` to list available Pi model ids. Omit `profile.model`
-  to inherit the current model; see
-  [model-selection.md](skills/pi-orchestra/references/model-selection.md) before
-  overriding it.
-- Child profiles can use presets such as `source-code-qa`,
-  `external-researcher`, and `code-reviewer`, or provide a custom role prompt.
+- Pi sends completion events back to the main conversation, so delegated work
+  can continue without polling.
+- Child profiles are always custom: a `name`, a `systemPrompt`, and a `tools`
+  allowlist. Set `profile.model` to an exact `provider/model` id, or omit it to
+  inherit the current Pi model.
 
 ## Development
 
@@ -50,15 +41,9 @@ Corepack/pnpm after creation. Forgejo CI and publishing run the same
 
 ## Core concepts
 
-Implementation hardening trade-offs that affect recovery and compatibility are
-recorded in [docs/hardening-decisions.md](docs/hardening-decisions.md).
-
 ### Bus
 
-A bus is shared reference context for standalone subagents. Create one when
-multiple standalone agents need the same evolving context. Workgroups and
-workflows create their own private buses internally. `bus action=compact` removes
-messages already delivered to all current subscribers.
+A bus is shared reference context for standalone subagents. Omit `busId` on a standalone `subagent spawn` to create a private bus from the prefixed run name. For example, `name: "review"` creates run `agent-review` on bus `bus-agent-review`, then subscribes the owning scope (main, or the parent run for nested spawns). Create or pass an explicit bus only when multiple standalone agents need the same changing context. Workgroups and workflows create their own private buses internally. `bus status` shows a bounded latest-message view (the latest ~10 messages, with long text truncated).
 
 ### Subagent
 
@@ -68,15 +53,8 @@ research, planning, or an alternative implementation attempt.
 
 ### Workgroup
 
-A workgroup is a private-bus coordination scope for one shared goal. A leader can
-add member agents, consume `workgroup.member_finished` events, then call
-`workgroup finish` with one canonical result. A supervising parent can use
-`workgroup cancel` to abort and clean up the group.
+A workgroup is stored as `group-{name}` and uses a private bus to coordinate one shared goal. A leader can add member agents, consume `workgroup.member_finished` events, then call `workgroup finish` with one canonical result. A supervising parent can use `workgroup cancel` to abort and clean up the group.
 
 ### Workflow
 
-A workflow is led by one flow leader agent. The flow leader creates child
-workgroups, uses their `workgroup.finished` results to decide the next step, and
-calls `workflow finish` with the final result. It may run child workgroups in
-parallel when the goal has independent tracks; otherwise prefer adaptive
-one-at-a-time spawning.
+A workflow chains workgroups through a coordinator agent. `workflow create` stores the workflow as `flow-{name}`, creates `bus-flow-{name}`, and spawns `agent-flow-{name}-coordinator`. The coordinator uses `workflow add_workgroup` one step at a time, waits for `workflow.workgroup_finished`, then calls `workflow finish` when done. Direct workflow subagents are intentionally not supported; use child workgroups.

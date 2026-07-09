@@ -15,9 +15,9 @@ export function formatBusMessages(messages: BusMessage[], options?: FormatBusMes
 
 function formatBusMessage(message: BusMessage, options: FormatBusMessagesOptions | undefined): string {
   const from = options?.formatFrom?.(message.from) ?? message.from;
-  return [`<bus_message from="${escapeXmlAttribute(from)}">`, message.message, "</bus_message>"].join("\n");
+  return [`<bus_message from="${escapeXml(from)}">`, escapeXml(message.message), "</bus_message>"].join("\n");
 }
 
-function escapeXmlAttribute(value: string): string {
+function escapeXml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

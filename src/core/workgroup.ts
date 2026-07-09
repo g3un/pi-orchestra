@@ -7,6 +7,7 @@ export interface WorkgroupRun {
   id: string;
   name: string;
   busId: string;
+  ownerSessionId: string;
   goal: string;
   /** The leader subagent run id, or null when main owns the workgroup. */
   leaderRunId: AgentRun["id"] | null;
@@ -21,6 +22,7 @@ export const WORKGROUP_NAME_MAX_LENGTH = 60;
 export interface CreateWorkgroupRunOptions {
   identity: NamedEntity;
   busId: string;
+  ownerSessionId: string;
   goal: string;
   leaderRunId: AgentRun["id"] | null;
 }
@@ -44,6 +46,7 @@ export function createWorkgroupRun(options: CreateWorkgroupRunOptions): Workgrou
   return {
     ...options.identity,
     busId: options.busId,
+    ownerSessionId: options.ownerSessionId,
     goal: options.goal,
     leaderRunId: options.leaderRunId,
     memberRunIds: [],

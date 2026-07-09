@@ -1,7 +1,8 @@
+import { closeBusRecord } from "./auto-bus.ts";
 import type { AgentProfile, AgentRun } from "./subagent.ts";
-import type { Bus, BusMessage } from "./bus.ts";
+import { markBusMessageDeliveredForSubscriber, type Bus, type BusMessage } from "./bus.ts";
 import type { AgentRuntime } from "./runtime.ts";
-import { createEntityIdentity } from "../utils.ts";
+import { createEntityIdentity, findAgentRun, findEntity } from "../utils.ts";
 import type { AgentStore } from "./store.ts";
 
 export interface OrchestraApi {
@@ -19,6 +20,7 @@ export interface OrchestraApi {
 
 export interface CreateBusOptions {
   name: string | undefined;
+  metadata?: Bus["metadata"];
 }
 
 export interface SpawnAgentOptions {
@@ -56,7 +58,7 @@ export class Orchestra implements OrchestraApi {
 
   createBus(options: CreateBusOptions): Bus {
     const identity = this.createBusIdentity(options.name);
-    const bus: Bus = { ...identity, state: "open", messages: [] };
+    const bus: Bus = { ...identity, state: "open", messages: [], nextMessageSeq: 1, metadata: options.metadata };
     this.store.saveBus(bus);
     return bus;
   }
@@ -68,23 +70,13 @@ export class Orchestra implements OrchestraApi {
   closeBus(id: string): Bus | undefined {
     const bus = this.findBus(id);
     if (!bus) return undefined;
-    const closedBus = this.store.updateBus(bus.id, (current) => ({ ...current, state: "closed" })) ?? {
-      ...bus,
-      state: "closed",
-    };
-    for (const subscription of this.store.listBusSubscriptions({
-      busId: bus.id,
-      subscriberId: undefined,
-      subscriberKind: undefined,
-    })) {
-      this.store.deleteBusSubscription(subscription.id);
-    }
-    return closedBus;
+    return closeBusRecord(this.store, bus.id) ?? { ...bus, state: "closed" };
   }
 
   async publishBus(id: string, message: string, from: string): Promise<PublishedBusMessage> {
     const bus = this.requireOpenBus(id);
     const busMessage = await this.runtime.publishBus(bus.id, message, from);
+    this.markSenderBusMessageDelivered(bus.id, from, busMessage);
     return { bus: this.requireBus(bus.id), busMessage };
   }
 
@@ -118,6 +110,10 @@ export class Orchestra implements OrchestraApi {
     return await this.runtime.close(run.id);
   }
 
+  private markSenderBusMessageDelivered(busId: string, from: string, busMessage: BusMessage): void {
+    markBusMessageDeliveredForSubscriber(this.store, busId, from === "main" ? "main" : "agent", from, busMessage);
+  }
+
   private requireBus(id: string): Bus {
     const bus = this.findBus(id);
     if (!bus) throw new Error(`Bus ${id} not found.`);
@@ -131,7 +127,13 @@ export class Orchestra implements OrchestraApi {
   }
 
   private findBus(id: string): Bus | undefined {
-    return this.store.getBus(id) ?? this.store.getBusByName(id);
+    return findEntity(
+      id,
+      "bus",
+      (busId) => this.store.getBus(busId),
+      () => this.store.listBuses(),
+      (bus) => bus.state === "open",
+    );
   }
 
   private requireRun(id: string, options: RunLookupOptions): AgentRun {
@@ -142,11 +144,8 @@ export class Orchestra implements OrchestraApi {
 
   private findRun(id: string, options: RunLookupOptions): AgentRun | undefined {
     const bus = options.busId ? this.requireBus(options.busId) : undefined;
-    const runById = this.store.getRun(id);
-    if (runById && (!bus || runById.busId === bus.id)) return runById;
-
-    const runByName = this.store.getRunByName(id);
-    return runByName && (!bus || runByName.busId === bus.id) ? runByName : undefined;
+    const run = findAgentRun(this.store, id);
+    return run && (!bus || run.busId === bus.id) ? run : undefined;
   }
 
   private createBusIdentity(name: string | undefined) {
@@ -157,19 +156,13 @@ export class Orchestra implements OrchestraApi {
       buses.filter((bus) => bus.state === "open"),
       "Bus",
       undefined,
-      buses,
+      buses.filter((bus) => bus.state === "open"),
     );
   }
 
   private createRunIdentity(profile: AgentProfile, name: string | undefined) {
     const runs = this.store.listRuns();
-    return createEntityIdentity(
-      name,
-      profile.name,
-      runs.filter((run) => run.state !== "closed"),
-      "Agent",
-      undefined,
-      runs,
-    );
+    const reusableRuns = runs.filter((run) => run.state !== "closed");
+    return createEntityIdentity(name, profile.name, reusableRuns, "Agent", undefined, reusableRuns);
   }
 }

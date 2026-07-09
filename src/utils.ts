@@ -1,8 +1,6 @@
-import { v7 as uuid7 } from "uuid";
 import type { OrchestraApi } from "./core/orchestra.ts";
 import type { AgentRun, AgentRunResult } from "./core/subagent.ts";
 import type { AgentStore } from "./core/store.ts";
-import type { WorkflowRun } from "./core/workflow.ts";
 
 export interface NamedEntity {
   id: string;
@@ -36,18 +34,19 @@ export function createEntityIdentity(
     const name = normalizeEntityName(requestedName, entityLabel, maxLength);
     if (hasEntityNameConflict(name, existingActiveEntities, reservedEntities))
       throw new Error(`${entityLabel} name "${name}" is already in use.`);
-    return { id: createUuid7(), name };
+    return { id: createId(), name };
   }
 
   const base = slugify(autoSeed) || entityLabel.toLowerCase();
   for (let index = 1; ; index++) {
     const name = index === 1 ? base : `${base}-${index}`;
-    if (!hasEntityNameConflict(name, existingActiveEntities, reservedEntities)) return { id: createUuid7(), name };
+    normalizeEntityName(name, entityLabel, maxLength);
+    if (!hasEntityNameConflict(name, existingActiveEntities, reservedEntities)) return { id: createId(), name };
   }
 }
 
-export function createUuid7(): string {
-  return uuid7();
+export function createId(): string {
+  return crypto.randomUUID();
 }
 
 function hasEntityNameConflict(
@@ -56,19 +55,90 @@ function hasEntityNameConflict(
   reservedEntities: NamedEntity[],
 ): boolean {
   return (
-    existingActiveEntities.some((entity) => entity.name === name) ||
-    reservedEntities.some((entity) => entity.id === name)
+    hasNameConflict(
+      name,
+      existingActiveEntities.map((entity) => entity.name),
+    ) || reservedEntities.some((entity) => entity.id === name)
   );
 }
 
-export function findWorkflow(store: AgentStore, id: string): WorkflowRun | undefined {
-  return store.getWorkflow(id) ?? store.getWorkflowByName(id);
+export function hasNameConflict(candidate: string, existingNames: string[]): boolean {
+  return existingNames.some((existingName) => namesConflict(existingName, candidate));
 }
 
-export function requireWorkflow(store: AgentStore, id: string): WorkflowRun {
-  const workflow = findWorkflow(store, id);
-  if (!workflow) throw new Error(`Workflow ${id} not found.`);
-  return workflow;
+export function assertAgentRunNameAvailable(
+  name: string,
+  runs: Array<Pick<AgentRun, "id" | "name" | "state">>,
+  label: string,
+): void {
+  const nonClosedRuns = runs.filter((run) => run.state !== "closed");
+  const reservableRunNames = nonClosedRuns.flatMap((run) => [run.id, run.name]);
+  if (hasNameConflict(name, reservableRunNames)) throw new Error(`${label} name "${name}" is already in use.`);
+}
+
+export function namesConflict(left: string, right: string): boolean {
+  const leftVariants = nameConflictVariants(left);
+  const rightVariants = new Set(nameConflictVariants(right));
+  return leftVariants.some((variant) => rightVariants.has(variant));
+}
+
+function nameConflictVariants(name: string): string[] {
+  const variants = [name];
+  const prefix = name.split("-", 1)[0];
+  if (prefix !== "agent" && prefix !== "bus" && prefix !== "group" && prefix !== "flow") return variants;
+
+  let stripped = name;
+  const prefixPattern = `${prefix}-`;
+  while (stripped.startsWith(prefixPattern)) {
+    stripped = stripped.slice(prefixPattern.length);
+    variants.push(stripped);
+  }
+  return variants;
+}
+
+export function findEntity<T extends NamedEntity>(
+  id: string,
+  prefix: "agent" | "bus" | "group" | "flow",
+  getById: (id: string) => T | undefined,
+  listAll: () => T[],
+  isActive: (entity: T) => boolean,
+): T | undefined {
+  const byId = getById(id);
+  if (byId && isActive(byId)) return byId;
+
+  return findByOperationalNames(listAll(), prefixedLookupNames(id, prefix), isActive) ?? byId;
+}
+
+function prefixedLookupNames(id: string, prefix: "agent" | "bus" | "group" | "flow"): string[] {
+  return id.startsWith(`${prefix}-`) ? [id] : [id, `${prefix}-${id}`];
+}
+
+function findByOperationalNames<T extends NamedEntity>(
+  entities: T[],
+  names: string[],
+  isActive: (entity: T) => boolean,
+): T | undefined {
+  for (const name of names) {
+    const active = findLatestByName(entities, name, isActive);
+    if (active) return active;
+  }
+  for (const name of names) {
+    const inactive = findLatestByName(entities, name, () => true);
+    if (inactive) return inactive;
+  }
+  return undefined;
+}
+
+function findLatestByName<T extends NamedEntity>(
+  entities: T[],
+  name: string,
+  predicate: (entity: T) => boolean,
+): T | undefined {
+  for (let index = entities.length - 1; index >= 0; index--) {
+    const entity = entities[index];
+    if (entity.name === name && predicate(entity)) return entity;
+  }
+  return undefined;
 }
 
 export function resolveBusName(store: AgentStore, busId: string): string {
@@ -79,11 +149,25 @@ export function resolveRunName(store: AgentStore, runId: string): string {
   return store.getRun(runId)?.name ?? runId;
 }
 
+export function findAgentRun(store: AgentStore, id: string): AgentRun | undefined {
+  return findEntity(
+    id,
+    "agent",
+    (runId) => store.getRun(runId),
+    () => store.listRuns(),
+    (run) => run.state !== "closed",
+  );
+}
+
 export function resolveWorkgroupName(store: AgentStore, workgroupId: string): string {
   return store.getWorkgroup(workgroupId)?.name ?? workgroupId;
 }
 
-export type LifecycleState = AgentRun["state"] | WorkflowRun["state"];
+export function resolveWorkflowName(store: AgentStore, workflowId: string): string {
+  return store.getWorkflow(workflowId)?.name ?? workflowId;
+}
+
+export type LifecycleState = AgentRun["state"];
 
 export function isTerminalAgentState(state: LifecycleState): boolean {
   return state === "success" || state === "blocked" || state === "failed" || state === "closed";
@@ -102,6 +186,12 @@ export function indent(text: string, prefix = "  "): string {
     .split(/\r?\n/)
     .map((line) => `${prefix}${line}`)
     .join("\n");
+}
+
+export function requireParam<T extends object, K extends keyof T>(params: T, key: K, label: string): NonNullable<T[K]> {
+  const value = params[key];
+  if (!value) throw new Error(`${label} requires ${String(key)}.`);
+  return value as NonNullable<T[K]>;
 }
 
 export function formatError(error: unknown): string {

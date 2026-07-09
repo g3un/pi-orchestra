@@ -9,8 +9,23 @@ import {
 import type { Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
-import { createWorkgroupIdentity, createWorkgroupRun, type WorkgroupRun } from "../core/workgroup.ts";
-import { closeAgentRuns, formatError, normalizeEntityName, pluralize, resolveRunName } from "../utils.ts";
+import {
+  createWorkgroupIdentity,
+  createWorkgroupRun,
+  WORKGROUP_NAME_MAX_LENGTH,
+  type WorkgroupRun,
+} from "../core/workgroup.ts";
+import { createBusNameFromOwnerName, createPrefixedName } from "../naming.ts";
+import {
+  closeAgentRuns,
+  assertAgentRunNameAvailable,
+  findEntity,
+  formatError,
+  pluralize,
+  requireParam,
+  resolveRunName,
+} from "../utils.ts";
+import { DETAIL_MAX_COLLECTION_ITEMS, boundDetailValue, boundResultData } from "../formatting.ts";
 import {
   AgentProfileParams,
   spawnSubagent,
@@ -20,8 +35,9 @@ import {
   type SubagentSpawnInput,
   withDefaultProfileModelInput,
 } from "./subagent.ts";
+import { boundBusDetails } from "./bus.ts";
 
-type WorkgroupMemberInput = Omit<SubagentSpawnInput, "action" | "busId">;
+export type WorkgroupMemberInput = Omit<SubagentSpawnInput, "action" | "busId">;
 
 export type WorkgroupInput =
   | {
@@ -114,6 +130,14 @@ export interface WorkgroupToolDeps {
   onWorkgroupLaunching: ((event: WorkgroupLaunchEvent) => void) | undefined;
   onWorkgroupLaunched: ((event: WorkgroupLaunchedEvent) => void) | undefined;
   onWorkgroupLaunchFailed: ((event: WorkgroupLaunchFailedEvent) => void) | undefined;
+  parentRunId: string | null;
+  ownerSessionId: string;
+}
+
+export interface CreateAndLaunchWorkgroupOptions extends WorkgroupToolDeps {
+  name: string;
+  goal: string;
+  members: WorkgroupMemberInput[];
 }
 
 const WorkgroupActionParams = Type.String({
@@ -203,22 +227,33 @@ export function createWorkgroupTool({
   onWorkgroupLaunching,
   onWorkgroupLaunched,
   onWorkgroupLaunchFailed,
+  parentRunId,
+  ownerSessionId,
 }: WorkgroupToolDeps): WorkgroupTool {
   return {
     name: "workgroup",
 
     async execute(input) {
       if (input.action === "create") {
-        const identity = createWorkgroupIdentity(input.name, store.listWorkgroups());
-        const bus = orchestra.createBus({ name: `${identity.name}-bus` });
+        const identity = createWorkgroupIdentity(
+          createPrefixedName("group", input.name, "Workgroup", WORKGROUP_NAME_MAX_LENGTH),
+          store.listWorkgroups(),
+        );
+        const bus = orchestra.createBus({ name: createBusNameFromOwnerName(identity.name) });
 
         const workgroup = createWorkgroupRun({
           identity,
           busId: bus.id,
+          ownerSessionId,
           goal: input.goal,
-          leaderRunId: null,
+          leaderRunId: parentRunId,
         });
-        store.saveWorkgroup(workgroup);
+        try {
+          store.saveWorkgroup(workgroup);
+        } catch (error) {
+          orchestra.closeBus(bus.id);
+          throw error;
+        }
         return {
           action: "create",
           workgroup,
@@ -235,6 +270,7 @@ export function createWorkgroupTool({
       if (!bus) throw new Error(`Bus ${workgroup.busId} not found.`);
 
       if (input.action === "status") {
+        requireWorkgroupParticipant(store, workgroup, parentRunId, "status");
         return {
           action: "status",
           workgroup,
@@ -245,6 +281,7 @@ export function createWorkgroupTool({
       }
 
       if (input.action === "finish") {
+        requireWorkgroupLeader(workgroup, parentRunId, "finish");
         if (workgroup.state !== "running") throw new Error(`Workgroup ${workgroup.name} is ${workgroup.state}.`);
         const closedWorkgroup = await closeWorkgroupRun(orchestra, store, workgroup, {
           includeLeader: false,
@@ -257,6 +294,7 @@ export function createWorkgroupTool({
       }
 
       if (input.action === "cancel") {
+        requireWorkgroupSupervisor(store, workgroup, parentRunId, "cancel");
         const cancellation = await cancelWorkgroup(orchestra, store, workgroup);
         return {
           action: "cancel",
@@ -265,6 +303,7 @@ export function createWorkgroupTool({
         };
       }
 
+      requireWorkgroupLeader(workgroup, parentRunId, "add_members");
       if (workgroup.state !== "running") throw new Error(`Workgroup ${workgroup.name} is ${workgroup.state}.`);
       if (input.members.length === 0) throw new Error("workgroup action=add_members requires members.");
 
@@ -351,9 +390,131 @@ export function createWorkgroupTool({
   };
 }
 
+export async function createAndLaunchWorkgroup({
+  orchestra,
+  store,
+  onWorkgroupLaunching,
+  onWorkgroupLaunched,
+  onWorkgroupLaunchFailed,
+  parentRunId,
+  ownerSessionId,
+  name,
+  goal,
+  members: memberInputs,
+}: CreateAndLaunchWorkgroupOptions): Promise<Extract<WorkgroupOutput, { action: "add_members" }>> {
+  if (memberInputs.length === 0) throw new Error("workflow add_workgroup requires members.");
+  const identity = createWorkgroupIdentity(
+    createPrefixedName("group", name, "Workgroup", WORKGROUP_NAME_MAX_LENGTH),
+    store.listWorkgroups(),
+  );
+  const bus = orchestra.createBus({ name: createBusNameFromOwnerName(identity.name) });
+  const workgroup = createWorkgroupRun({ identity, busId: bus.id, ownerSessionId, goal, leaderRunId: parentRunId });
+  try {
+    store.saveWorkgroup(workgroup);
+  } catch (error) {
+    orchestra.closeBus(bus.id);
+    throw error;
+  }
+
+  const members = prepareMembers(memberInputs, orchestra.listRuns({ busId: undefined }), bus);
+  const runNames = members.map((member) => member.name);
+  onWorkgroupLaunching?.({
+    input: { action: "add_members", id: workgroup.id, members: memberInputs },
+    workgroup,
+    bus,
+    runIds: [],
+    runNames,
+  });
+  let launchFailedNotified = false;
+  try {
+    const spawnResults = await Promise.allSettled(
+      members.map(
+        async (member): Promise<SpawnSuccess> => ({ member, run: await spawnSubagent(orchestra, member, parentRunId) }),
+      ),
+    );
+    const successes = collectSpawnSuccesses(spawnResults);
+    const failures = collectSpawnFailures(members, spawnResults);
+    if (failures.length > 0) {
+      const runIds = successes.map((success) => success.run.id);
+      onWorkgroupLaunchFailed?.({
+        input: { action: "add_members", id: workgroup.id, members: memberInputs },
+        workgroup,
+        bus,
+        runIds,
+        runNames,
+        error: new Error("Failed to launch every workgroup member."),
+      });
+      launchFailedNotified = true;
+      const cleanupResults = await Promise.allSettled(
+        successes.map((success) => orchestra.closeAgent(success.run.id, { busId: undefined })),
+      );
+      throw new Error(formatLaunchFailure(failures, successes, cleanupResults));
+    }
+
+    const runs = successes.map((success) => success.run);
+    const latestWorkgroup = store.getWorkgroup(workgroup.id);
+    if (!latestWorkgroup || latestWorkgroup.state !== "running") {
+      const runIds = runs.map((run) => run.id);
+      const error = new Error(
+        latestWorkgroup
+          ? `Workgroup ${latestWorkgroup.name} is ${latestWorkgroup.state}.`
+          : `Workgroup ${workgroup.name} not found.`,
+      );
+      onWorkgroupLaunchFailed?.({
+        input: { action: "add_members", id: workgroup.id, members: memberInputs },
+        workgroup: latestWorkgroup ?? workgroup,
+        bus,
+        runIds,
+        runNames,
+        error,
+      });
+      launchFailedNotified = true;
+      await closeAgentRuns(orchestra, runIds);
+      throw error;
+    }
+
+    const updatedWorkgroup = {
+      ...latestWorkgroup,
+      memberRunIds: [...new Set([...latestWorkgroup.memberRunIds, ...runs.map((run) => run.id)])],
+    };
+    store.saveWorkgroup(updatedWorkgroup);
+    const output: Extract<WorkgroupOutput, { action: "add_members" }> = {
+      action: "add_members",
+      workgroup: updatedWorkgroup,
+      bus,
+      runs,
+      message: formatWorkgroupMembersAddedMessage(bus, updatedWorkgroup, runs),
+    };
+    onWorkgroupLaunched?.({
+      input: { action: "add_members", id: workgroup.id, members: memberInputs },
+      workgroup: updatedWorkgroup,
+      bus,
+      runIds: runs.map((run) => run.id),
+      runNames,
+      output,
+    });
+    return output;
+  } catch (error) {
+    if (!launchFailedNotified)
+      onWorkgroupLaunchFailed?.({
+        input: { action: "add_members", id: workgroup.id, members: memberInputs },
+        workgroup,
+        bus,
+        runIds: [],
+        runNames,
+        error,
+      });
+    await closeWorkgroupRun(orchestra, store, workgroup, {
+      includeLeader: false,
+      result: { status: "failed", summary: formatError(error) },
+    });
+    throw error;
+  }
+}
+
 export interface CloseWorkgroupRunOptions {
   includeLeader: boolean;
-  /** undefined preserves the current result; null clears it. */
+  /** undefined keeps the current result; null clears it. */
   result: AgentResult | null | undefined;
 }
 
@@ -394,7 +555,12 @@ function collectWorkgroupCloseRunIds(workgroup: WorkgroupRun, includeLeader: boo
   return [...workgroup.memberRunIds, ...(includeLeader && workgroup.leaderRunId ? [workgroup.leaderRunId] : [])];
 }
 
-async function cancelWorkgroup(
+export function workgroupOwnsLeaderRun(store: AgentStore, workgroup: WorkgroupRun): boolean {
+  if (!workgroup.leaderRunId) return false;
+  return store.getRun(workgroup.leaderRunId)?.busId === workgroup.busId;
+}
+
+export async function cancelWorkgroup(
   orchestra: OrchestraApi,
   store: AgentStore,
   workgroup: WorkgroupRun,
@@ -406,7 +572,7 @@ async function cancelWorkgroup(
     summary: WORKGROUP_CANCELLED_SUMMARY,
   };
   const closedWorkgroup = await closeWorkgroupRun(orchestra, store, latestWorkgroup, {
-    includeLeader: true,
+    includeLeader: workgroupOwnsLeaderRun(store, latestWorkgroup),
     result,
   });
   return { workgroup: closedWorkgroup, alreadyClosed };
@@ -422,7 +588,7 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
       "Use workgroup create first; it creates the private bus.",
       "Use workgroup add_members with member profile/task/name only.",
       "Only the workgroup leader calls workgroup finish.",
-      "Use workgroup cancel from a supervising parent scope to abort a workgroup and dispose all resources.",
+      "Use workgroup cancel from a supervising parent scope, or from main/root during recovery, to abort a workgroup and dispose all resources.",
     ],
     parameters: WorkgroupToolParams,
     executionMode: "sequential",
@@ -432,56 +598,76 @@ export function defineWorkgroupPiTool(resolveTool: (ctx: ExtensionContext) => Wo
 
       return {
         content: [{ type: "text", text: formatWorkgroupOutputMessage(output) }],
-        details: output,
+        details: boundWorkgroupOutputDetails(output),
       };
     },
   });
 }
 
+export function boundWorkgroupOutputDetails(output: WorkgroupOutput): unknown {
+  const bounded = boundWorkgroupResultData(output);
+  const withBus = "bus" in bounded ? { ...bounded, bus: boundBusDetails(bounded.bus) } : bounded;
+  if (!("runs" in withBus)) return withBus;
+  const visibleRuns = withBus.runs.slice(0, DETAIL_MAX_COLLECTION_ITEMS).map(boundDetailValue);
+  return {
+    ...withBus,
+    runs: visibleRuns,
+    omittedRunsCount: Math.max(0, withBus.runs.length - visibleRuns.length),
+  };
+}
+
+function boundWorkgroupResultData<T extends WorkgroupOutput>(output: T): T {
+  if (!("workgroup" in output)) return output;
+  const workgroup = boundWorkgroupRunDetails(output.workgroup);
+  return workgroup === output.workgroup ? output : { ...output, workgroup };
+}
+
+export function boundWorkgroupRunDetails(workgroup: WorkgroupRun): WorkgroupRun {
+  return boundResultData(workgroup);
+}
+
 function toWorkgroupInput(params: RawWorkgroupParams): WorkgroupInput {
   if (params.action === "create") {
-    if (!params.name) throw new Error("workgroup action=create requires name.");
-    if (!params.goal) throw new Error("workgroup action=create requires goal.");
-    return { action: "create", name: params.name, goal: params.goal };
+    return {
+      action: "create",
+      name: requireParam(params, "name", "workgroup action=create"),
+      goal: requireParam(params, "goal", "workgroup action=create"),
+    };
   }
 
   if (params.action === "add_members") {
-    if (!params.id) throw new Error("workgroup action=add_members requires id.");
-    if (!params.members || params.members.length === 0)
-      throw new Error("workgroup action=add_members requires members.");
+    const members = requireParam(params, "members", "workgroup action=add_members");
+    if (members.length === 0) throw new Error("workgroup action=add_members requires members.");
     return {
       action: "add_members",
-      id: params.id,
-      members: params.members.map((member, index) => toWorkgroupMemberInput(member, `workgroup member ${index + 1}`)),
+      id: requireParam(params, "id", "workgroup action=add_members"),
+      members: members.map((member, index) => toWorkgroupMemberInput(member, `workgroup member ${index + 1}`)),
     };
   }
 
   if (params.action === "finish") {
-    if (!params.id) throw new Error("workgroup action=finish requires id.");
-    if (!params.status) throw new Error("workgroup action=finish requires status.");
-    if (!params.summary) throw new Error("workgroup action=finish requires summary.");
-    const result: AgentResult = { status: params.status, summary: params.summary };
+    const result: AgentResult = {
+      status: requireParam(params, "status", "workgroup action=finish"),
+      summary: requireParam(params, "summary", "workgroup action=finish"),
+    };
     if (params.data !== undefined) result.data = params.data;
-    return { action: "finish", id: params.id, result };
+    return { action: "finish", id: requireParam(params, "id", "workgroup action=finish"), result };
   }
 
-  if (params.action === "cancel") {
-    if (!params.id) throw new Error("workgroup action=cancel requires id.");
-    return { action: "cancel", id: params.id };
-  }
+  if (params.action === "cancel")
+    return { action: "cancel", id: requireParam(params, "id", "workgroup action=cancel") };
 
-  if (!params.id) throw new Error("workgroup action=status requires id.");
-  return { action: "status", id: params.id };
+  return { action: "status", id: requireParam(params, "id", "workgroup action=status") };
 }
 
 function toWorkgroupMemberInput(params: RawWorkgroupMemberParams, label: string): WorkgroupMemberInput {
-  if (!params.profile) throw new Error(`${label} requires profile.`);
-  if (!params.task) throw new Error(`${label} requires task.`);
-  if (!params.name) throw new Error(`${label} requires name.`);
+  const profile = requireParam(params, "profile", label);
+  const task = requireParam(params, "task", label);
+  const name = requireParam(params, "name", label);
   return {
-    profile: toAgentProfile(params.profile),
-    task: params.task,
-    name: params.name,
+    profile: toAgentProfile(profile),
+    task,
+    name,
   };
 }
 
@@ -500,8 +686,46 @@ function withDefaultModelsForSubagentSpawns(
   return members.map((member) => withDefaultProfileModelInput(member, ctx));
 }
 
+function requireWorkgroupLeader(workgroup: WorkgroupRun, parentRunId: string | null, action: string): void {
+  if (parentRunId === null && workgroup.leaderRunId === null) return;
+  if (parentRunId !== null && parentRunId === workgroup.leaderRunId) return;
+  throw new Error(`Only leader ${workgroup.leaderRunId ?? "main"} can ${action} workgroup ${workgroup.name}.`);
+}
+
+function requireWorkgroupParticipant(
+  store: AgentStore,
+  workgroup: WorkgroupRun,
+  parentRunId: string | null,
+  action: string,
+): void {
+  if (parentRunId === null) return;
+  if (parentRunId === workgroup.leaderRunId) return;
+  if (parentRunId !== null && workgroup.memberRunIds.includes(parentRunId)) return;
+  requireWorkgroupSupervisor(store, workgroup, parentRunId, action);
+}
+
+function requireWorkgroupSupervisor(
+  store: AgentStore,
+  workgroup: WorkgroupRun,
+  parentRunId: string | null,
+  action: string,
+): void {
+  if (parentRunId === null) return;
+  if (!workgroup.leaderRunId) throw new Error(`Only a supervising parent can ${action} workgroup ${workgroup.name}.`);
+
+  const leaderRun = store.getRun(workgroup.leaderRunId);
+  if (leaderRun && parentRunId === leaderRun.parentRunId) return;
+  throw new Error(`Only a supervising parent can ${action} workgroup ${workgroup.name}.`);
+}
+
 function findWorkgroup(store: AgentStore, id: string): WorkgroupRun | undefined {
-  return store.getWorkgroup(id) ?? store.getWorkgroupByName(id);
+  return findEntity(
+    id,
+    "group",
+    (workgroupId) => store.getWorkgroup(workgroupId),
+    () => store.listWorkgroups(),
+    (workgroup) => workgroup.state !== "closed",
+  );
 }
 
 function collectWorkgroupMemberRuns(store: AgentStore, workgroup: WorkgroupRun): AgentRun[] {
@@ -511,21 +735,18 @@ function collectWorkgroupMemberRuns(store: AgentStore, workgroup: WorkgroupRun):
   });
 }
 
-function prepareMembers(members: WorkgroupMemberInput[], existingRuns: AgentRun[], bus: Bus): SubagentSpawnInput[] {
-  const reservedNames = new Set<string>();
-  for (const run of existingRuns) {
-    if (run.state !== "running") continue;
-    reservedNames.add(run.id);
-    reservedNames.add(run.name);
-  }
+function prepareMembers(
+  members: WorkgroupMemberInput[],
+  existingRuns: Array<Pick<AgentRun, "id" | "name" | "state">>,
+  bus: Bus,
+): SubagentSpawnInput[] {
+  const reservableRuns = [...existingRuns];
 
   return members.map((member) => {
-    const name = normalizeEntityName(member.name, "Workgroup member");
-    if (reservedNames.has(name)) {
-      throw new Error(`Workgroup member name "${name}" is already in use.`);
-    }
+    const name = createPrefixedName("agent", member.name, "Workgroup member");
+    assertAgentRunNameAvailable(name, reservableRuns, "Workgroup member");
 
-    reservedNames.add(name);
+    reservableRuns.push({ id: name, name, state: "running" });
     return { action: "spawn", ...member, busId: bus.id, name };
   });
 }

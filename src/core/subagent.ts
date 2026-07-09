@@ -22,6 +22,7 @@ interface AgentRunBase {
   profile: AgentProfile;
   task: string;
   busId: string;
+  ownerSessionId: string;
   /** Parent run id for child-spawned agents, or null when main owns the run. */
   parentRunId: string | null;
   /** Pi session file for this child agent. */
