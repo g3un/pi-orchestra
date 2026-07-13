@@ -21,6 +21,9 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and `workflow
 - Use the smallest orchestration primitive that fits the task.
 - Pi sends completion events back to the main conversation, so delegated work
   can continue without polling.
+- Active orchestration appears in a compact TUI widget below the editor. It shows
+  up to three top-level workflows, workgroups, or subagents without repeating
+  nested scopes; reopen it with `/orchestra-monitor`.
 - Child profiles are always custom: a `name`, a `systemPrompt`, and a `tools`
   allowlist. Set `profile.model` to an exact `provider/model` id, or omit it to
   inherit the current Pi model.

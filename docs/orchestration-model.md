@@ -7,6 +7,12 @@ pi-orchestra builds delegation in four layers. Persisted entities use opaque ids
 3. Workgroup: multiple subagents working on one bus.
 4. Workflow: a coordinator agent that creates sequential workgroups dynamically.
 
+The TUI monitor shows active top-level scopes below the editor. Workflow rows
+aggregate their child workgroups and agents, workgroup rows aggregate their
+agents, and only otherwise-standalone subagents get their own rows. The widget
+shows at most three scopes plus one overflow line and disappears when no scope
+is active.
+
 ## Bus
 
 A `Bus` coordinates related work. It has an `id`, `name`, `state`, ordered `messages`, and optional lifecycle metadata. New buses start `open`; finishing a workgroup or finishing/closing a marked standalone private subagent bus closes the relevant bus and removes bus subscriptions. Closed bus names may be reused; open bus names still conflict.

@@ -14,12 +14,14 @@ import type { WorkgroupRun } from "../core/workgroup.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { closeAgentRuns } from "../utils.ts";
 import { ORCHESTRA_EVENT_CUSTOM_TYPE, OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
+import { OrchestraMonitorController } from "./orchestra-monitor.ts";
 
 interface ToolBundle {
   busTool: BusTool;
   subagentTool: SubagentTool;
   workgroupTool: WorkgroupTool;
   workflowTool: WorkflowTool;
+  orchestraMonitor: OrchestraMonitorController;
   orchestraEvents: OrchestraEventController;
   runtime: PiAgentRuntime;
   store: InMemoryAgentStore;
@@ -37,6 +39,20 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
   pi.registerTool(defineSubagentPiTool((ctx) => getToolBundle(ctx).subagentTool));
   pi.registerTool(defineWorkgroupPiTool((ctx) => getToolBundle(ctx).workgroupTool));
   pi.registerTool(defineWorkflowPiTool((ctx) => getToolBundle(ctx).workflowTool));
+
+  pi.on("tool_execution_end", (event, ctx) => {
+    if (event.isError || !["subagent", "workgroup", "workflow"].includes(event.toolName)) return;
+    getToolBundle(ctx).orchestraMonitor.show(ctx);
+  });
+
+  pi.registerCommand("orchestra-monitor", {
+    description: "Show the active pi-orchestra status widget.",
+    handler: async (_args, ctx) => {
+      const monitor = getToolBundle(ctx).orchestraMonitor;
+      if (monitor.show(ctx)) return;
+      ctx.ui.notify("No active pi-orchestra scopes.", "info");
+    },
+  });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     await bundles.get(ctx.cwd)?.dispose();
@@ -113,6 +129,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     subagentTool: createScopedSubagentTool(null),
     workgroupTool: createScopedWorkgroupTool(null),
     workflowTool: createScopedWorkflowTool(null),
+    orchestraMonitor: new OrchestraMonitorController(store),
     orchestraEvents,
     runtime,
     store,
@@ -120,7 +137,10 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     createWorkgroupTool: createScopedWorkgroupTool,
     createWorkflowTool: createScopedWorkflowTool,
     async dispose() {
-      const disposers: Array<() => Promise<void> | void> = [() => this.orchestraEvents.dispose()];
+      const disposers: Array<() => Promise<void> | void> = [
+        () => this.orchestraMonitor.dispose(),
+        () => this.orchestraEvents.dispose(),
+      ];
       for (const dispose of disposers) {
         try {
           await dispose();
