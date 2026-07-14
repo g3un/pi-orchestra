@@ -49,7 +49,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
     description: "Show the active pi-orchestra status widget.",
     handler: async (_args, ctx) => {
       const monitor = getToolBundle(ctx).orchestraMonitor;
-      if (monitor.show(ctx)) return;
+      if (monitor.show(ctx) !== false) return;
       ctx.ui.notify("No active pi-orchestra scopes.", "info");
     },
   });

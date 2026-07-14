@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
@@ -200,6 +200,51 @@ test("orchestra monitor reports and stops when a coalesced render throws", async
 
   assert.deepEqual(notifications, ["error:Pi-orchestra monitor stopped: listWorkflows failed"]);
   assert.equal(widgets.at(-1), undefined);
+});
+
+test("orchestra monitor distinguishes an initial render failure from an empty monitor", () => {
+  const store = new ThrowingStore();
+  store.throwOnList = true;
+  const widgets: Array<string[] | undefined> = [];
+  const notifications: string[] = [];
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
+
+  assert.equal(monitor.show(monitorContext(widgets, notifications)), undefined);
+  assert.deepEqual(notifications, ["error:Pi-orchestra monitor stopped: listWorkflows failed"]);
+  assert.deepEqual(widgets, [undefined]);
+
+  store.throwOnList = false;
+  assert.equal(monitor.show(monitorContext(widgets, notifications)), false);
+});
+
+test("orchestra monitor finishes teardown when UI callbacks throw", () => {
+  vi.useFakeTimers();
+  try {
+    const store = new InMemoryAgentStore();
+    store.saveRun(run());
+    const calls: string[] = [];
+    const ctx = {
+      hasUI: true,
+      cwd: "/workspace",
+      ui: {
+        setWidget() {
+          calls.push("setWidget");
+          throw new Error("setWidget failed");
+        },
+        notify() {
+          calls.push("notify");
+          throw new Error("notify failed");
+        },
+      },
+    } as unknown as ExtensionContext;
+    const monitor = new OrchestraMonitorController(store, { ...MONITOR_OPTIONS, tickMs: 1_000 });
+
+    assert.equal(monitor.show(ctx), undefined);
+    assert.deepEqual(calls, ["setWidget", "notify", "setWidget"]);
+    assert.equal(vi.getTimerCount(), 0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("orchestra monitor coalesces store updates before rerendering", async () => {

@@ -38,7 +38,7 @@ export class OrchestraMonitorController {
     this.tickMs = options.tickMs ?? DEFAULT_TICK_MS;
   }
 
-  show(ctx: ExtensionContext): boolean {
+  show(ctx: ExtensionContext): boolean | undefined {
     if (!ctx.hasUI) return false;
 
     this.ctx = ctx;
@@ -54,19 +54,25 @@ export class OrchestraMonitorController {
     }
     this.startTicking();
 
-    return this.render();
+    return this.safeRender();
   }
 
   dispose(): void {
-    this.unsubscribe?.();
+    const unsubscribe = this.unsubscribe;
+    const ctx = this.ctx;
     this.unsubscribe = undefined;
+    this.ctx = undefined;
     this.renderQueued = false;
     this.stopTicking();
 
-    if (this.ctx?.hasUI) {
-      this.ctx.ui.setWidget(WIDGET_KEY, undefined);
+    unsubscribe?.();
+    if (ctx?.hasUI) {
+      try {
+        ctx.ui.setWidget(WIDGET_KEY, undefined);
+      } catch {
+        // UI teardown is best-effort.
+      }
     }
-    this.ctx = undefined;
   }
 
   private requestRender(): void {
@@ -79,14 +85,18 @@ export class OrchestraMonitorController {
     });
   }
 
-  private safeRender(): boolean {
+  private safeRender(): boolean | undefined {
     try {
       return this.render();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.ctx?.ui.notify(`Pi-orchestra monitor stopped: ${message}`, "error");
+      try {
+        this.ctx?.ui.notify(`Pi-orchestra monitor stopped: ${message}`, "error");
+      } catch {
+        // Notification failure must not prevent cleanup.
+      }
       this.dispose();
-      return false;
+      return undefined;
     }
   }
 
