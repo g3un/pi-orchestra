@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentRun } from "../core/subagent.ts";
+import { OrchestraEventController } from "../extension/orchestra-events.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { observeAgentSessionHealth, PiAgentRuntime } from "./pi-runtime.ts";
 
@@ -181,6 +182,87 @@ test.each([
   assert.equal(steerCalls, expected.steerCalls);
   assert.equal(harness.runtimeState.contextUsageCalls, 0);
   runtime.dispose();
+});
+
+test("message safely resumes and raw-steers a finished streaming run", async () => {
+  const store = new InMemoryAgentStore();
+  const finishedRun: AgentRun = {
+    ...run("agent-1", null),
+    state: "success",
+    result: { status: "success", summary: "Done." },
+  };
+  const resumedRun: AgentRun = { ...finishedRun, state: "running", result: null };
+  const concurrentFinishedRun: AgentRun = {
+    ...finishedRun,
+    state: "blocked",
+    result: { status: "blocked", summary: "Concurrent finish." },
+  };
+  store.saveRun(finishedRun);
+  const deliveredEvents: unknown[] = [];
+  const events = new OrchestraEventController({
+    store,
+    sendEvents: (sentEvents) => deliveredEvents.push(...sentEvents),
+    isRunWaiting: () => false,
+    flushDelayMs: 0,
+  });
+
+  const sentUserMessages: Array<{
+    content: Parameters<AgentSession["sendUserMessage"]>[0];
+    options: Parameters<AgentSession["sendUserMessage"]>[1];
+  }> = [];
+  const session = {
+    isStreaming: true,
+    prompt: async () => assert.fail("message must not start a new prompt task"),
+    steer: async () => assert.fail("finished-run messages must use the raw user-message pipeline"),
+    sendUserMessage: async (
+      content: Parameters<AgentSession["sendUserMessage"]>[0],
+      options: Parameters<AgentSession["sendUserMessage"]>[1],
+    ) => {
+      assert.deepEqual(store.getRun(finishedRun.id), resumedRun);
+      if (content === "Continue.") throw new Error("Steer rejected.");
+      if (content === "Concurrent finish.") {
+        store.saveRun(concurrentFinishedRun);
+        throw new Error("Steer rejected after finish.");
+      }
+      sentUserMessages.push({ content, options });
+    },
+  } as unknown as AgentSession;
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: undefined,
+    resolveCustomTools: undefined,
+    ownerSessionId: "session-1",
+    onRunRollback: (runId) => events.suppressRunFinish(runId),
+  });
+  const runtimeWithEntries = runtime as unknown as RuntimeInternals;
+  runtimeWithEntries.entries.set(finishedRun.id, {
+    session,
+    health: observeAgentSessionHealth(session),
+  });
+
+  await assert.rejects(runtime.message(finishedRun.id, "Continue."), /Steer rejected/);
+  events.flush();
+  assert.deepEqual(store.getRun(finishedRun.id), finishedRun);
+  assert.deepEqual(deliveredEvents, []);
+
+  await assert.rejects(runtime.message(finishedRun.id, "Concurrent finish."), /Steer rejected after finish/);
+  events.flush();
+  assert.deepEqual(store.getRun(finishedRun.id), concurrentFinishedRun);
+  assert.equal(deliveredEvents.length, 1);
+
+  store.saveRun(resumedRun);
+  store.saveRun(finishedRun);
+  events.flush();
+  assert.equal(deliveredEvents.length, 2);
+
+  const messagedRun = await runtime.message(finishedRun.id, "/review unchanged");
+
+  assert.deepEqual(messagedRun, resumedRun);
+  assert.deepEqual(store.getRun(finishedRun.id), resumedRun);
+  assert.equal(runtimeWithEntries.entries.get(finishedRun.id)?.promptTask, undefined);
+  assert.deepEqual(sentUserMessages, [{ content: "/review unchanged", options: { deliverAs: "steer" } }]);
+  events.dispose();
 });
 
 interface HealthHarnessOptions {

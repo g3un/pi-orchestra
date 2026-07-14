@@ -33,7 +33,7 @@ export interface PiAgentRuntimeOptions {
   resolveModel: ((model: string) => Model<any> | Promise<Model<any> | undefined> | undefined) | undefined;
   resolveCustomTools: ((runId: string) => ToolDefinition[]) | undefined;
   onPromptTaskError?: (runId: string, error: unknown) => void;
-  onSpawnRollback?: (runId: string) => void;
+  onRunRollback?: (runId: string) => void;
   ownerSessionId: string;
 }
 
@@ -82,7 +82,7 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly resolveModel: PiAgentRuntimeOptions["resolveModel"];
   private readonly resolveCustomTools: NonNullable<PiAgentRuntimeOptions["resolveCustomTools"]>;
   private readonly onPromptTaskError: PiAgentRuntimeOptions["onPromptTaskError"];
-  private readonly onSpawnRollback: PiAgentRuntimeOptions["onSpawnRollback"];
+  private readonly onRunRollback: PiAgentRuntimeOptions["onRunRollback"];
   private readonly ownerSessionId: string;
   private readonly pendingBusDeliveryIds = new Set<string>();
   private readonly activeToolRunId = new AsyncLocalStorage<string>();
@@ -94,7 +94,7 @@ export class PiAgentRuntime implements AgentRuntime {
     this.resolveModel = options.resolveModel;
     this.resolveCustomTools = options.resolveCustomTools ?? ((_runId: string) => []);
     this.onPromptTaskError = options.onPromptTaskError;
-    this.onSpawnRollback = options.onSpawnRollback;
+    this.onRunRollback = options.onRunRollback;
     this.ownerSessionId = options.ownerSessionId;
   }
 
@@ -157,7 +157,7 @@ export class PiAgentRuntime implements AgentRuntime {
       if (savedRun) {
         try {
           // Store run notifications are synchronous; suppress them before saving the rollback close.
-          this.onSpawnRollback?.(run.id);
+          this.onRunRollback?.(run.id);
           this.store.saveRun({ ...run, state: "closed" });
         } catch {
           // Keep the original spawn failure.
@@ -174,21 +174,36 @@ export class PiAgentRuntime implements AgentRuntime {
     const entry = this.requireEntry(id);
     const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
+    const isRunning = run.state === "running";
+    const messagedRun: AgentRun = isRunning ? run : { ...run, state: "running", result: null };
     const shouldSteer =
-      run.state === "running" &&
-      (entry.session.isStreaming || (entry.promptTask !== undefined && !entry.health.isWaiting()));
+      entry.session.isStreaming || (isRunning && entry.promptTask !== undefined && !entry.health.isWaiting());
     if (shouldSteer) {
+      if (!isRunning) this.store.saveRun(messagedRun);
       try {
-        await entry.session.steer(messageWithBusContext.content);
+        if (isRunning) {
+          await entry.session.steer(messageWithBusContext.content);
+        } else {
+          await entry.session.sendUserMessage(messageWithBusContext.content, { deliverAs: "steer" });
+        }
         this.markPendingBusDeliveries(messageWithBusContext.busDeliveries);
       } catch (error) {
+        // TODO: Serialize per-run messages; risk exists only when concurrent sends overlap and one steer fails.
+        const currentRun = this.store.getRun(id);
+        if (!isRunning && currentRun && isAgentRunActive(currentRun)) {
+          try {
+            this.onRunRollback?.(id);
+          } catch {
+            // Rollback observers must not block result restoration.
+          }
+          this.store.saveRun(run);
+        }
         this.clearPendingBusDeliveries(messageWithBusContext.busDeliveries);
         throw error;
       }
-      return run;
+      return messagedRun;
     }
 
-    const messagedRun: AgentRun = { ...run, state: "running", result: null };
     this.store.saveRun(messagedRun);
     this.startPromptTask(id, entry, messageWithBusContext);
     return messagedRun;

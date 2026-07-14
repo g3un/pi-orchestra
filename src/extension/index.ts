@@ -75,7 +75,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     resolveModel: (model) => resolveModel(ctx, model),
     resolveCustomTools: (runId) => resolveChildCustomTools(runId),
     ownerSessionId,
-    onSpawnRollback: (runId) => orchestraEvents.suppressRunFinish(runId),
+    onRunRollback: (runId) => orchestraEvents.suppressRunFinish(runId),
   });
   const orchestra = new Orchestra({ runtime, store });
   const orchestraEvents = new OrchestraEventController({
