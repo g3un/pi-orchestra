@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { formatAgentHealth, formatAggregateAgentHealth, type ResolveAgentHealth } from "../agent-health.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import type { AgentStore } from "../core/store.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
@@ -14,6 +15,7 @@ const TYPE_PREFIX_LENGTH = 7;
 
 export interface OrchestraMonitorControllerOptions {
   now: (() => number) | undefined;
+  resolveAgentHealth: ResolveAgentHealth | undefined;
   /** Defaults to 1000 ms when undefined. Use 0 to disable periodic refreshes in tests. */
   tickMs: number | undefined;
 }
@@ -21,6 +23,7 @@ export interface OrchestraMonitorControllerOptions {
 export class OrchestraMonitorController {
   private readonly now: () => number;
   private readonly tickMs: number;
+  private readonly resolveAgentHealth: ResolveAgentHealth | undefined;
   private unsubscribe?: () => void;
   private tickTimer?: ReturnType<typeof setInterval>;
   private renderQueued = false;
@@ -28,9 +31,10 @@ export class OrchestraMonitorController {
 
   constructor(
     private readonly store: AgentStore,
-    options: OrchestraMonitorControllerOptions = { now: undefined, tickMs: undefined },
+    options: OrchestraMonitorControllerOptions,
   ) {
     this.now = options.now ?? Date.now;
+    this.resolveAgentHealth = options.resolveAgentHealth;
     this.tickMs = options.tickMs ?? DEFAULT_TICK_MS;
   }
 
@@ -90,7 +94,7 @@ export class OrchestraMonitorController {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return false;
 
-    const lines = buildOrchestraMonitorLines(this.store, this.now());
+    const lines = buildOrchestraMonitorLines(this.store, this.now(), this.resolveAgentHealth);
     if (lines.length === 0) {
       this.dispose();
       return false;
@@ -127,7 +131,11 @@ export class OrchestraMonitorController {
   }
 }
 
-export function buildOrchestraMonitorLines(store: AgentStore, nowMs = Date.now()): string[] {
+export function buildOrchestraMonitorLines(
+  store: AgentStore,
+  nowMs = Date.now(),
+  resolveAgentHealth?: ResolveAgentHealth,
+): string[] {
   const workflows = store.listWorkflows().filter((workflow) => workflow.state !== "closed");
   const allWorkgroups = store.listWorkgroups();
   const workgroups = allWorkgroups.filter((workgroup) => workgroup.state !== "closed");
@@ -143,16 +151,18 @@ export function buildOrchestraMonitorLines(store: AgentStore, nowMs = Date.now()
     for (const run of collectWorkgroupRuns(workgroup, runs)) ownedRunIds.add(run.id);
   }
 
-  const lines = [
-    ...workflows.map((workflow) => formatWorkflowLine(workflow, workgroupsById, runs, nowMs)),
+  const scopeFormatters = [
+    ...workflows.map((workflow) => () => formatWorkflowLine(workflow, workgroupsById, runs, nowMs, resolveAgentHealth)),
     ...workgroups
       .filter((workgroup) => !workflowWorkgroupIds.has(workgroup.id))
-      .map((workgroup) => formatWorkgroupLine(workgroup, runs, nowMs)),
-    ...runs.filter((run) => isAgentRunActive(run) && !ownedRunIds.has(run.id)).map((run) => formatAgentLine(run)),
+      .map((workgroup) => () => formatWorkgroupLine(workgroup, runs, nowMs, resolveAgentHealth)),
+    ...runs
+      .filter((run) => isAgentRunActive(run) && !ownedRunIds.has(run.id))
+      .map((run) => () => formatAgentLine(run, resolveAgentHealth)),
   ];
 
-  const visibleLines = lines.slice(0, MAX_VISIBLE_SCOPES);
-  const hiddenCount = lines.length - visibleLines.length;
+  const visibleLines = scopeFormatters.slice(0, MAX_VISIBLE_SCOPES).map((formatScope) => formatScope());
+  const hiddenCount = scopeFormatters.length - visibleLines.length;
   if (hiddenCount > 0) {
     visibleLines.push(
       `${" ".repeat(TYPE_PREFIX_LENGTH)}+${hiddenCount} more active ${pluralize("scope", hiddenCount)}`,
@@ -166,6 +176,7 @@ function formatWorkflowLine(
   workgroupsById: Map<string, WorkgroupRun>,
   runs: AgentRun[],
   nowMs: number,
+  resolveAgentHealth: ResolveAgentHealth | undefined,
 ): string {
   const workgroups = workflow.workgroupIds.flatMap((workgroupId) => {
     const workgroup = workgroupsById.get(workgroupId);
@@ -177,22 +188,40 @@ function formatWorkflowLine(
     `FLOW   ${formatName(workflow.name)} [${formatUptimeSince(workflow.createdAtMs, nowMs)}]`,
     `groups ${workgroups.filter((workgroup) => workgroup.state === "closed").length}/${workgroups.length}`,
     `agents ${workflowRuns.filter(isAgentRunFinished).length}/${workflowRuns.length}`,
+    formatAggregateAgentHealth(workflowRuns, resolveAgentHealth),
     status,
-  ].join(" | ");
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" | ");
 }
 
-function formatWorkgroupLine(workgroup: WorkgroupRun, runs: AgentRun[], nowMs: number): string {
+function formatWorkgroupLine(
+  workgroup: WorkgroupRun,
+  runs: AgentRun[],
+  nowMs: number,
+  resolveAgentHealth: ResolveAgentHealth | undefined,
+): string {
   const workgroupRuns = collectWorkgroupRuns(workgroup, runs);
   const status = workgroup.state === "closing" ? "closing" : formatInline(workgroup.goal);
   return [
     `GROUP  ${formatName(workgroup.name)} [${formatUptimeSince(workgroup.createdAtMs, nowMs)}]`,
     `agents ${workgroupRuns.filter(isAgentRunFinished).length}/${workgroupRuns.length}`,
+    formatAggregateAgentHealth(workgroupRuns, resolveAgentHealth),
     status,
-  ].join(" | ");
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" | ");
 }
 
-function formatAgentLine(run: AgentRun): string {
-  return [`AGENT  ${formatName(run.name)}`, formatInline(run.profile.name), formatInline(run.task)].join(" | ");
+function formatAgentLine(run: AgentRun, resolveAgentHealth: ResolveAgentHealth | undefined): string {
+  return [
+    `AGENT  ${formatName(run.name)}`,
+    formatAgentHealth(resolveAgentHealth?.(run.id)) ?? "",
+    formatInline(run.profile.name),
+    formatInline(run.task),
+  ]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function collectWorkflowRuns(

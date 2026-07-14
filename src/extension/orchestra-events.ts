@@ -58,6 +58,7 @@ export interface OrchestraEventControllerOptions {
   store: AgentStore;
   sendEvents: (events: OrchestraMainEvent[], content: string) => void;
   sendAgentEvents?: (runId: string, events: OrchestraMainEvent[], content: string) => unknown;
+  isRunWaiting: ((runId: string) => boolean) | undefined;
   /** Uses 50 ms when undefined. Set 0 in tests for immediate delivery. */
   flushDelayMs: number | undefined;
 }
@@ -89,6 +90,7 @@ export class OrchestraEventController {
   private readonly store: AgentStore;
   private readonly sendEvents: OrchestraEventControllerOptions["sendEvents"];
   private readonly sendAgentEvents: NonNullable<OrchestraEventControllerOptions["sendAgentEvents"]> | undefined;
+  private readonly isRunWaiting: OrchestraEventControllerOptions["isRunWaiting"];
   private readonly flushDelayMs: number;
   private readonly runFinished = new Map<string, boolean>();
   private readonly workgroupMemberRunIndexes = new Map<string, string[]>();
@@ -113,6 +115,7 @@ export class OrchestraEventController {
     this.store = options.store;
     this.sendEvents = options.sendEvents;
     this.sendAgentEvents = options.sendAgentEvents;
+    this.isRunWaiting = options.isRunWaiting;
     this.flushDelayMs = options.flushDelayMs ?? 50;
 
     for (const run of this.store.listRuns()) {
@@ -312,7 +315,11 @@ export class OrchestraEventController {
       return;
     }
 
-    this.queueEvent({ type: "workgroup.finished", workgroup });
+    const event = { type: "workgroup.finished" as const, workgroup };
+    if (workgroup.leaderRunId && this.isRunWaiting?.(workgroup.leaderRunId)) {
+      this.deliverToRun(workgroup.leaderRunId, event);
+    }
+    this.queueEvent(event);
   }
 
   private handleWorkflowSaved(workflow: WorkflowRun): void {

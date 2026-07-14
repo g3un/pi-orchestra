@@ -164,6 +164,7 @@ test("workflow.finished event is emitted when workflow closes", () => {
   const controller = new OrchestraEventController({
     store,
     sendEvents: (sent) => events.push(...sent),
+    isRunWaiting: undefined,
     flushDelayMs: 0,
   });
   const workflow: WorkflowRun = {

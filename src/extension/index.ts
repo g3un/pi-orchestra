@@ -86,6 +86,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
       void orchestra.messageAgent(runId, content, { busId: undefined }).catch(() => undefined);
       return true;
     },
+    isRunWaiting: (runId) => runtime.getHealthSnapshot(runId)?.phase === "waiting",
     flushDelayMs: undefined,
   });
   const createScopedWorkgroupTool = (parentRunId: string | null) =>
@@ -129,7 +130,11 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     subagentTool: createScopedSubagentTool(null),
     workgroupTool: createScopedWorkgroupTool(null),
     workflowTool: createScopedWorkflowTool(null),
-    orchestraMonitor: new OrchestraMonitorController(store),
+    orchestraMonitor: new OrchestraMonitorController(store, {
+      now: undefined,
+      resolveAgentHealth: (runId) => runtime.getHealthSnapshot(runId),
+      tickMs: undefined,
+    }),
     orchestraEvents,
     runtime,
     store,

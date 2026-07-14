@@ -1,12 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import {
-  type AgentSession,
-  createAgentSession,
-  SessionManager,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   AGENT_RESULT_STATUS_VALUES,
@@ -25,10 +21,11 @@ import {
   type BusSubscription,
 } from "../core/bus.ts";
 import { formatBusMessages } from "../core/bus-format.ts";
-import { formatBusMessageText } from "../formatting.ts";
+import { formatBusMessageText, truncateText } from "../formatting.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
-import { resolveBusName, resolveRunName } from "../utils.ts";
+import { formatError, isAgentRunActive, resolveBusName, resolveRunName } from "../utils.ts";
+import type { AgentHealthSnapshot } from "../agent-health.ts";
 
 export interface PiAgentRuntimeOptions {
   store: AgentStore;
@@ -50,6 +47,7 @@ function safeDisposeSession(session: AgentSession): void {
 
 interface RuntimeEntry {
   session: AgentSession;
+  health: ReturnType<typeof observeAgentSessionHealth>;
   promptTask?: Promise<void>;
 }
 
@@ -144,7 +142,7 @@ export class PiAgentRuntime implements AgentRuntime {
       this.store.saveRun(run);
       savedRun = true;
       this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
-      const entry: RuntimeEntry = { session };
+      const entry: RuntimeEntry = { session, health: observeAgentSessionHealth(session) };
       this.entries.set(run.id, entry);
       this.startPromptTask(
         run.id,
@@ -176,7 +174,10 @@ export class PiAgentRuntime implements AgentRuntime {
     const entry = this.requireEntry(id);
     const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
-    if (run.state === "running" && (entry.promptTask || entry.session.isStreaming)) {
+    const shouldSteer =
+      run.state === "running" &&
+      (entry.session.isStreaming || (entry.promptTask !== undefined && !entry.health.isWaiting()));
+    if (shouldSteer) {
       try {
         await entry.session.steer(messageWithBusContext.content);
         this.markPendingBusDeliveries(messageWithBusContext.busDeliveries);
@@ -237,6 +238,10 @@ export class PiAgentRuntime implements AgentRuntime {
     return [...this.entries.keys()];
   }
 
+  getHealthSnapshot(runId: string): AgentHealthSnapshot | undefined {
+    return this.entries.get(runId)?.health.getSnapshot();
+  }
+
   async close(id: string): Promise<AgentRun | undefined> {
     const run = this.store.getRun(id);
     if (!run) return undefined;
@@ -284,6 +289,7 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   private startPromptTask(id: string, entry: RuntimeEntry, message: PromptMessage): void {
+    entry.health.beginPrompt();
     const task = this.runPrompt(id, message)
       .catch((error) => this.handlePromptTaskError(id, error))
       .finally(() => {
@@ -304,34 +310,40 @@ export class PiAgentRuntime implements AgentRuntime {
       this.markPendingBusDeliveries(message.busDeliveries);
       if (this.isClosed(id)) return;
       if (this.isRunningWithoutResult(id)) {
-        await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
+        if (this.hasActiveDirectChild(id)) {
+          entry.health.setWaiting();
+          return;
+        }
+
+        let finalError = entry.health.getSnapshot().finalError;
+        if (!finalError) {
+          await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
+          if (this.isClosed(id) || !this.isRunningWithoutResult(id)) return;
+          if (this.hasActiveDirectChild(id)) {
+            entry.health.setWaiting();
+            return;
+          }
+          finalError = entry.health.getSnapshot().finalError;
+        }
+        if (finalError) {
+          this.saveFailedRun(id, finalError, { providerError: finalError });
+          return;
+        }
       }
       if (this.isClosed(id)) return;
       const run = this.store.getRun(id);
-      if (run && isRunningWithoutResult(run)) {
-        this.store.saveRun({
-          ...run,
-          state: "failed",
-          result: {
-            status: "failed",
-            summary: "Agent stopped without calling finish.",
-            data: getLastAssistantText(entry.session),
-          },
-        });
+      if (run && isAgentRunActive(run)) {
+        this.saveFailedRun(id, "Agent stopped without calling finish.", getLastAssistantText(entry.session));
       }
     } catch (error) {
       this.clearPendingBusDeliveries(message.busDeliveries);
       if (this.isClosed(id)) return;
-      const run = this.store.getRun(id);
-      if (!run) return;
-      this.store.saveRun({
-        ...run,
-        state: "failed",
-        result: {
-          status: "failed",
-          summary: error instanceof Error ? error.message : String(error),
-        },
-      });
+      if (this.hasActiveDirectChild(id)) {
+        entry.health.setWaiting();
+        return;
+      }
+      const errorMessage = formatError(error);
+      this.saveFailedRun(id, errorMessage, { providerError: errorMessage });
     }
   }
 
@@ -449,7 +461,25 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private isRunningWithoutResult(id: string): boolean {
     const run = this.store.getRun(id);
-    return run !== undefined && isRunningWithoutResult(run);
+    return run !== undefined && isAgentRunActive(run);
+  }
+
+  private hasActiveDirectChild(id: string): boolean {
+    return this.store.listRuns().some((run) => run.parentRunId === id && isAgentRunActive(run));
+  }
+
+  private saveFailedRun(id: string, summary: string, data?: unknown): void {
+    const run = this.store.getRun(id);
+    if (!run || !isAgentRunActive(run)) return;
+    this.store.saveRun({
+      ...run,
+      state: "failed",
+      result: {
+        status: "failed",
+        summary: truncateText(summary, 500),
+        ...(data !== undefined ? { data } : {}),
+      },
+    });
   }
 
   private findRunningLedScope(runId: string): { type: "workgroup"; name: string } | undefined {
@@ -583,7 +613,7 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     task,
     "",
     "## Completion",
-    "- End with exactly one finalization path; never stop text-only.",
+    "- If you delegated active direct child runs, wait for their completion events before finalizing.",
     "- If you lead a running workgroup, use workgroup action=finish before calling finish for your own run.",
     "- Otherwise call finish exactly once with status, summary, and useful data.",
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
@@ -627,8 +657,33 @@ function buildFinishRequiredPrompt(): string {
   ].join("\n");
 }
 
-function isRunningWithoutResult(run: AgentRun): boolean {
-  return run.state === "running" && run.result === null;
+export function observeAgentSessionHealth(session: AgentSession) {
+  let waiting = false;
+
+  return {
+    beginPrompt() {
+      waiting = false;
+    },
+    isWaiting() {
+      return waiting;
+    },
+    getSnapshot(): AgentHealthSnapshot {
+      const retrying = session.isRetrying;
+      const compacting = session.isCompacting;
+      const phase = waiting ? "waiting" : retrying ? "retrying" : compacting ? "compacting" : "active";
+      const finalError =
+        waiting || session.isStreaming || retrying || compacting ? undefined : session.state.errorMessage;
+      const contextPercent = session.getContextUsage()?.percent;
+      return {
+        phase,
+        ...(finalError ? { finalError } : {}),
+        ...(contextPercent !== null && contextPercent !== undefined ? { contextPercent } : {}),
+      };
+    },
+    setWaiting() {
+      waiting = true;
+    },
+  };
 }
 
 function getLastAssistantText(session: AgentSession): string | undefined {

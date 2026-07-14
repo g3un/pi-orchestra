@@ -10,6 +10,7 @@ import { buildOrchestraMonitorLines, OrchestraMonitorController } from "./orches
 
 const STARTED_AT_MS = 1_700_000_000_000;
 const MONITOR_NOW_MS = STARTED_AT_MS + 10_000;
+const MONITOR_OPTIONS = { now: () => MONITOR_NOW_MS, resolveAgentHealth: undefined, tickMs: 0 };
 
 test("orchestra monitor shows root scopes without duplicating workflow and workgroup children", () => {
   const store = new InMemoryAgentStore();
@@ -60,18 +61,80 @@ test("orchestra monitor shows root scopes without duplicating workflow and workg
   ]);
 });
 
-test("orchestra monitor limits its height and reports hidden scopes", () => {
+test("orchestra monitor limits its height before resolving health", () => {
   const store = new InMemoryAgentStore();
   for (let index = 1; index <= 5; index++) {
     store.saveRun(run({ id: `agent-${index}`, busId: `bus-${index}` }));
   }
+  let healthCalls = 0;
 
-  assert.deepEqual(buildOrchestraMonitorLines(store, MONITOR_NOW_MS), [
+  const lines = buildOrchestraMonitorLines(store, MONITOR_NOW_MS, () => {
+    healthCalls++;
+    return { phase: "active" };
+  });
+
+  assert.deepEqual(lines, [
     "AGENT  agent-1 | researcher | Inspect the code.",
     "AGENT  agent-2 | researcher | Inspect the code.",
     "AGENT  agent-3 | researcher | Inspect the code.",
     "       +2 more active scopes",
   ]);
+  assert.equal(healthCalls, 3);
+});
+
+test("orchestra monitor omits failures for waiting agents", () => {
+  const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "waiting-agent", busId: "waiting-group-bus" }));
+  store.saveWorkgroup(
+    workgroupRun({
+      id: "waiting-group",
+      name: "waiting-group",
+      busId: "waiting-group-bus",
+      memberRunIds: ["waiting-agent"],
+    }),
+  );
+
+  const lines = buildOrchestraMonitorLines(store, MONITOR_NOW_MS, () => ({ phase: "waiting" }));
+
+  assert.match(lines[0] ?? "", /\[health waiting=1\]/);
+  assert.doesNotMatch(lines[0] ?? "", /failures=/);
+});
+
+test("orchestra monitor adds bounded standalone and aggregate health", () => {
+  const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "healthy-agent", busId: "health-bus" }));
+  store.saveRun(run({ id: "group-agent", busId: "health-group-bus" }));
+  store.saveRun(
+    run({
+      id: "failed-group-agent",
+      busId: "health-group-bus",
+      state: "failed",
+      result: { status: "failed", summary: "Provider failed." },
+    }),
+  );
+  store.saveWorkgroup(
+    workgroupRun({
+      id: "health-group",
+      name: "health-group",
+      busId: "health-group-bus",
+      memberRunIds: ["group-agent", "failed-group-agent"],
+    }),
+  );
+  const resolveHealth = (id: string) =>
+    id === "healthy-agent"
+      ? {
+          phase: "active" as const,
+          contextPercent: 50,
+          finalError: "provider failure ".repeat(30),
+        }
+      : id === "group-agent"
+        ? { phase: "retrying" as const, contextPercent: 80 }
+        : undefined;
+
+  const lines = buildOrchestraMonitorLines(store, MONITOR_NOW_MS, resolveHealth);
+  assert.match(lines[0] ?? "", /\[health retrying=1 failures=1 ctx<=80%\]/);
+  assert.match(lines[1] ?? "", /\[ctx=50% error=provider failure/);
+  assert.ok((lines[1]?.length ?? 0) < 220);
 });
 
 test("orchestra monitor shows closing state and omits closed scopes", () => {
@@ -89,7 +152,7 @@ test("orchestra monitor controller updates and clears the widget when work finis
   const agent = run({ id: "reviewer", busId: "review-bus" });
   store.saveRun(agent);
   const widgets: Array<string[] | undefined> = [];
-  const monitor = new OrchestraMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
 
   assert.equal(monitor.show(monitorContext(widgets)), true);
   assert.deepEqual(widgets[0], [" AGENT  reviewer | researcher | Inspect the code."]);
@@ -114,7 +177,7 @@ test("orchestra monitor truncates every scope to one terminal line", () => {
     }),
   );
   const widgets: Array<string[] | undefined> = [];
-  const monitor = new OrchestraMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
 
   assert.equal(monitor.show(monitorContext(widgets, [], 36)), true);
   assert.equal(widgets[0]?.length, 1);
@@ -128,7 +191,7 @@ test("orchestra monitor reports and stops when a coalesced render throws", async
   store.saveRun(agent);
   const widgets: Array<string[] | undefined> = [];
   const notifications: string[] = [];
-  const monitor = new OrchestraMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
 
   assert.equal(monitor.show(monitorContext(widgets, notifications)), true);
   store.throwOnList = true;
@@ -144,7 +207,7 @@ test("orchestra monitor coalesces store updates before rerendering", async () =>
   const agent = run({ id: "reviewer" });
   store.saveRun(agent);
   const widgets: Array<string[] | undefined> = [];
-  const monitor = new OrchestraMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
 
   assert.equal(monitor.show(monitorContext(widgets)), true);
   const listCallsAfterShow = store.listWorkflowsCalls;
@@ -161,7 +224,7 @@ test("orchestra monitor coalesces store updates before rerendering", async () =>
 test("orchestra monitor is disabled without UI", () => {
   const store = new InMemoryAgentStore();
   store.saveRun(run());
-  const monitor = new OrchestraMonitorController(store, { now: () => MONITOR_NOW_MS, tickMs: 0 });
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
 
   assert.equal(monitor.show({ hasUI: false } as unknown as ExtensionContext), false);
 });
