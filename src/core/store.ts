@@ -10,6 +10,7 @@ import type {
 import type { WorkgroupRun } from "./workgroup.ts";
 import type { WorkflowRun } from "./workflow.ts";
 
+/** Store subscriptions return idempotent cleanup callbacks that must not throw. */
 export interface AgentStore {
   saveRun(run: AgentRun): void;
   getRun(id: string): AgentRun | undefined;

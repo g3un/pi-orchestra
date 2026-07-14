@@ -202,49 +202,59 @@ test("orchestra monitor reports and stops when a coalesced render throws", async
   assert.equal(widgets.at(-1), undefined);
 });
 
-test("orchestra monitor distinguishes an initial render failure from an empty monitor", () => {
-  const store = new ThrowingStore();
-  store.throwOnList = true;
-  const widgets: Array<string[] | undefined> = [];
-  const notifications: string[] = [];
-  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
-
-  assert.equal(monitor.show(monitorContext(widgets, notifications)), undefined);
-  assert.deepEqual(notifications, ["error:Pi-orchestra monitor stopped: listWorkflows failed"]);
-  assert.deepEqual(widgets, [undefined]);
-
-  store.throwOnList = false;
-  assert.equal(monitor.show(monitorContext(widgets, notifications)), false);
-});
-
-test("orchestra monitor finishes teardown when UI callbacks throw", () => {
+test("orchestra monitor surfaces and cleans up initial UI failures", async () => {
   vi.useFakeTimers();
   try {
     const store = new InMemoryAgentStore();
-    store.saveRun(run());
-    const calls: string[] = [];
-    const ctx = {
-      hasUI: true,
-      cwd: "/workspace",
-      ui: {
-        setWidget() {
-          calls.push("setWidget");
-          throw new Error("setWidget failed");
-        },
-        notify() {
-          calls.push("notify");
-          throw new Error("notify failed");
-        },
-      },
-    } as unknown as ExtensionContext;
+    const agent = run({ id: "reviewer" });
+    store.saveRun(agent);
+    const notifications: string[] = [];
     const monitor = new OrchestraMonitorController(store, { ...MONITOR_OPTIONS, tickMs: 1_000 });
+    const ctx = monitorContext([], notifications);
+    ctx.ui.setWidget = () => {
+      throw new Error("setWidget failed");
+    };
 
-    assert.equal(monitor.show(ctx), undefined);
-    assert.deepEqual(calls, ["setWidget", "notify", "setWidget"]);
+    assert.throws(() => monitor.show(ctx), /setWidget failed/);
     assert.equal(vi.getTimerCount(), 0);
+    store.saveRun({ ...agent, task: "Must not rerender." });
+    await flushMicrotasks();
+    assert.deepEqual(notifications, []);
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("orchestra monitor contains stale context failures", async () => {
+  const store = new InMemoryAgentStore();
+  const agent = run({ id: "reviewer" });
+  store.saveRun(agent);
+  const monitor = new OrchestraMonitorController(store, MONITOR_OPTIONS);
+  const notifications: string[] = [];
+  const ctx = monitorContext([], notifications);
+  const ui = ctx.ui;
+  let stale = false;
+  Object.defineProperties(ctx, {
+    hasUI: {
+      get: () => {
+        if (stale) throw new Error("context is stale");
+        return true;
+      },
+    },
+    ui: {
+      get: () => {
+        if (stale) throw new Error("context is stale");
+        return ui;
+      },
+    },
+  });
+
+  assert.equal(monitor.show(ctx), true);
+  stale = true;
+  store.saveRun({ ...agent, task: "Trigger stale context." });
+  await flushMicrotasks();
+
+  assert.deepEqual(notifications, []);
 });
 
 test("orchestra monitor coalesces store updates before rerendering", async () => {

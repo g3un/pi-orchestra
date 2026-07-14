@@ -38,7 +38,8 @@ export class OrchestraMonitorController {
     this.tickMs = options.tickMs ?? DEFAULT_TICK_MS;
   }
 
-  show(ctx: ExtensionContext): boolean | undefined {
+  /** Returns true when the widget is shown. Initial render failures are cleaned up and rethrown. */
+  show(ctx: ExtensionContext): boolean {
     if (!ctx.hasUI) return false;
 
     this.ctx = ctx;
@@ -47,6 +48,7 @@ export class OrchestraMonitorController {
       const unsubscribeWorkflows = this.store.subscribeWorkflows(() => this.requestRender(), undefined);
       const unsubscribeWorkgroups = this.store.subscribeWorkgroups(() => this.requestRender(), undefined);
       this.unsubscribe = () => {
+        // Cleanup callbacks are non-throwing by AgentStore contract.
         unsubscribeRuns();
         unsubscribeWorkflows();
         unsubscribeWorkgroups();
@@ -54,23 +56,29 @@ export class OrchestraMonitorController {
     }
     this.startTicking();
 
-    return this.safeRender();
+    try {
+      return this.render();
+    } catch (error) {
+      this.dispose();
+      throw error;
+    }
   }
 
   dispose(): void {
     const unsubscribe = this.unsubscribe;
     const ctx = this.ctx;
     this.unsubscribe = undefined;
-    this.ctx = undefined;
     this.renderQueued = false;
     this.stopTicking();
+    this.ctx = undefined;
 
     unsubscribe?.();
-    if (ctx?.hasUI) {
+    if (ctx) {
       try {
+        // Stored Pi contexts can become stale, so property access stays inside this boundary.
         ctx.ui.setWidget(WIDGET_KEY, undefined);
       } catch {
-        // UI teardown is best-effort.
+        // The monitor is already stopped even if the UI cannot clear its widget.
       }
     }
   }
@@ -85,18 +93,19 @@ export class OrchestraMonitorController {
     });
   }
 
-  private safeRender(): boolean | undefined {
+  private safeRender(): boolean {
     try {
       return this.render();
     } catch (error) {
+      const ctx = this.ctx;
       const message = error instanceof Error ? error.message : String(error);
-      try {
-        this.ctx?.ui.notify(`Pi-orchestra monitor stopped: ${message}`, "error");
-      } catch {
-        // Notification failure must not prevent cleanup.
-      }
       this.dispose();
-      return undefined;
+      try {
+        ctx?.ui.notify(`Pi-orchestra monitor stopped: ${message}`, "error");
+      } catch {
+        // Rendering is already contained; notification failure must be contained too.
+      }
+      return false;
     }
   }
 
