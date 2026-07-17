@@ -214,6 +214,54 @@ test("orchestra delegates agent lifecycle while store remains the source of trut
   assert.equal(closedRun?.state, "closed");
 });
 
+test.each([
+  run({
+    id: crypto.randomUUID(),
+    name: "delivery-target",
+    state: "success",
+    result: { status: "success", summary: "Finished during delivery." },
+  }),
+  run({
+    id: crypto.randomUUID(),
+    name: "delivery-target",
+    state: "blocked",
+    result: { status: "blocked", summary: "Blocked during delivery." },
+  }),
+  run({
+    id: crypto.randomUUID(),
+    name: "delivery-target",
+    state: "failed",
+    result: { status: "failed", summary: "Failed during delivery." },
+  }),
+  run({ id: crypto.randomUUID(), name: "delivery-target", state: "closed", result: null }),
+])("orchestra returns the latest $state run after message delivery", async (latestRun) => {
+  const store = new InMemoryAgentStore();
+  const runtime = new FakeRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  store.saveBus({ id: latestRun.busId, name: "target-bus", state: "open", messages: [], nextMessageSeq: 1 });
+  store.saveBus({ id: "other-bus", name: "other-bus", state: "open", messages: [], nextMessageSeq: 1 });
+  const idleRun: AgentRun = {
+    ...latestRun,
+    state: "blocked",
+    result: { status: "blocked", summary: "Waiting for input." },
+  };
+  store.saveRun(idleRun);
+
+  const messageTask = orchestra.messageAgent(idleRun.id, "Continue.", { busId: idleRun.busId });
+  assert.equal(store.getRun(idleRun.id)?.state, "running");
+  store.saveRun(latestRun);
+  if (latestRun.state === "closed") {
+    // A closed run ID may be reused as another active run's name.
+    store.saveRun(run({ id: crypto.randomUUID(), name: latestRun.id, busId: "other-bus" }));
+  }
+
+  const output = await messageTask;
+
+  assert.notEqual(output.state, "running");
+  assert.deepEqual(output, latestRun);
+  assert.deepEqual(output, store.getRun(idleRun.id));
+});
+
 test("orchestra closeAgent honors bus narrowing", async () => {
   const store = new InMemoryAgentStore();
   const runtime = new FakeRuntime(store);

@@ -49,6 +49,10 @@ interface RuntimeEntry {
   session: AgentSession;
   health: ReturnType<typeof observeAgentSessionHealth>;
   promptTask?: Promise<void>;
+  queuedMessages: PromptMessage[];
+  queueParked: boolean;
+  preflightRetryInProgress: boolean;
+  deferredFinish?: AgentResult;
 }
 
 interface PromptMessage {
@@ -142,7 +146,13 @@ export class PiAgentRuntime implements AgentRuntime {
       this.store.saveRun(run);
       savedRun = true;
       this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
-      const entry: RuntimeEntry = { session, health: observeAgentSessionHealth(session) };
+      const entry: RuntimeEntry = {
+        session,
+        health: observeAgentSessionHealth(session),
+        queuedMessages: [],
+        queueParked: false,
+        preflightRetryInProgress: false,
+      };
       this.entries.set(run.id, entry);
       this.startPromptTask(
         run.id,
@@ -169,44 +179,79 @@ export class PiAgentRuntime implements AgentRuntime {
 
   async message(id: string, message: string): Promise<AgentRun> {
     this.assertNotDisposed();
-    const run = this.requireRun(id);
-    this.assertOpenRun(run);
-    const entry = this.requireEntry(id);
-    const messageWithBusContext = this.withSubscribedBusMessages(id, message);
 
-    const isRunning = run.state === "running";
-    const messagedRun: AgentRun = isRunning ? run : { ...run, state: "running", result: null };
-    const shouldSteer =
-      entry.session.isStreaming || (isRunning && entry.promptTask !== undefined && !entry.health.isWaiting());
-    if (shouldSteer) {
-      if (!isRunning) this.store.saveRun(messagedRun);
-      try {
-        if (isRunning) {
-          await entry.session.steer(messageWithBusContext.content);
-        } else {
-          await entry.session.sendUserMessage(messageWithBusContext.content, { deliverAs: "steer" });
-        }
-        this.markPendingBusDeliveries(messageWithBusContext.busDeliveries);
-      } catch (error) {
-        // TODO: Serialize per-run messages; risk exists only when concurrent sends overlap and one steer fails.
-        const currentRun = this.store.getRun(id);
-        if (!isRunning && currentRun && isAgentRunActive(currentRun)) {
-          try {
-            this.onRunRollback?.(id);
-          } catch {
-            // Rollback observers must not block result restoration.
-          }
-          this.store.saveRun(run);
-        }
-        this.clearPendingBusDeliveries(messageWithBusContext.busDeliveries);
-        throw error;
-      }
-      return messagedRun;
+    let run = this.requireRun(id);
+    this.assertOpenRun(run);
+    let entry = this.requireEntry(id);
+    if (entry.promptTask && !entry.session.isStreaming && (run.state !== "running" || entry.health.isWaiting())) {
+      await entry.promptTask.catch(() => undefined);
+
+      // Another waiter may have resumed the run first. Refresh once; replacement prompt tasks are steerable.
+      run = this.requireRun(id);
+      this.assertOpenRun(run);
+      entry = this.requireEntry(id);
     }
 
-    this.store.saveRun(messagedRun);
-    this.startPromptTask(id, entry, messageWithBusContext);
-    return messagedRun;
+    const messageWithBusContext = this.withSubscribedBusMessages(id, message);
+    const isRunning = run.state === "running";
+    const messagedRun: AgentRun = isRunning ? run : { ...run, state: "running", result: null };
+    let restoreRunOnFailure = false;
+    try {
+      if (entry.queueParked) {
+        this.store.saveRun(messagedRun);
+        entry.queuedMessages.push(messageWithBusContext);
+        entry.queueParked = false;
+        entry.preflightRetryInProgress = true;
+        this.startQueuedPromptTask(id, entry);
+        return messagedRun;
+      }
+
+      const shouldSteer =
+        entry.session.isStreaming || (isRunning && entry.promptTask !== undefined && !entry.health.isWaiting());
+      if (shouldSteer) {
+        // Only steer failures restore a run revived for delivery; non-steer recovery is a separate lifecycle concern.
+        restoreRunOnFailure = !isRunning;
+        if (!isRunning) this.store.saveRun(messagedRun);
+        const hasActiveSessionDelivery = entry.session.isStreaming || entry.session.isCompacting;
+        if (!hasActiveSessionDelivery || entry.queuedMessages.length > 0) {
+          // The agent loop has settled but its runtime task has not; hand this to the next normal session prompt.
+          entry.queuedMessages.push(messageWithBusContext);
+          return messagedRun;
+        }
+
+        // Pi 0.78 has no atomic raw session queue; this bypasses expansion, input races, and session bookkeeping.
+        entry.session.agent.steer({
+          role: "user",
+          content: [{ type: "text", text: messageWithBusContext.content }],
+          timestamp: Date.now(),
+        });
+        this.markPendingBusDeliveries(messageWithBusContext.busDeliveries);
+        return messagedRun;
+      }
+
+      this.store.saveRun(messagedRun);
+      this.startPromptTask(id, entry, messageWithBusContext);
+      return messagedRun;
+    } catch (error) {
+      // Release reservations before best-effort rollback; retrying an ambiguous send favors duplication over loss.
+      this.clearPendingBusDeliveries(messageWithBusContext.busDeliveries);
+      if (restoreRunOnFailure) {
+        try {
+          const currentRun = this.store.getRun(id);
+          if (currentRun && isAgentRunActive(currentRun)) {
+            try {
+              this.onRunRollback?.(id);
+            } catch {
+              // Rollback observers must not block result restoration.
+            }
+            this.store.saveRun(run);
+          }
+        } catch {
+          // Keep the original message failure.
+        }
+      }
+      throw error;
+    }
   }
 
   async publishBus(busId: string, message: string, from: string): Promise<BusMessage> {
@@ -238,6 +283,7 @@ export class PiAgentRuntime implements AgentRuntime {
       const entry = this.entries.get(subscription.subscriberId);
       if (!run || !entry || run.state !== "running" || !entry.session.isStreaming) continue;
 
+      // Bus envelopes cannot expand because they never start with "/"; keep AgentSession bookkeeping here.
       steerTasks.push(
         entry.session
           .steer(steeringMessage)
@@ -263,16 +309,26 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const entry = this.entries.get(id);
     if (run.state === "closed") {
-      if (entry) safeDisposeSession(entry.session);
+      const closedRun = this.buildClosedRun(run, entry);
+      if (closedRun.result !== run.result) this.store.saveRun(closedRun);
+      if (entry) {
+        this.clearQueuedMessages(entry);
+        entry.deferredFinish = undefined;
+        safeDisposeSession(entry.session);
+      }
       if (this.activeToolRunId.getStore() !== id) await this.waitForPromptTask(entry);
       this.entries.delete(id);
-      return run;
+      return closedRun;
     }
 
-    const closedRun: AgentRun = { ...run, state: "closed" };
+    const closedRun = this.buildClosedRun(run, entry);
     this.store.saveRun(closedRun);
     this.deleteAgentBusSubscriptions(id);
-    if (entry) safeDisposeSession(entry.session);
+    if (entry) {
+      this.clearQueuedMessages(entry);
+      entry.deferredFinish = undefined;
+      safeDisposeSession(entry.session);
+    }
     if (this.activeToolRunId.getStore() !== id) await this.waitForPromptTask(entry);
     this.entries.delete(id);
     return this.store.getRun(id) ?? closedRun;
@@ -283,15 +339,19 @@ export class PiAgentRuntime implements AgentRuntime {
     this.disposed = true;
 
     const entries = [...this.entries.entries()];
-    for (const [id] of entries) {
+    for (const [id, entry] of entries) {
       const run = this.store.getRun(id);
-      if (!run || run.state === "closed") continue;
-
-      this.store.saveRun({ ...run, state: "closed" });
-      this.deleteAgentBusSubscriptions(id);
+      if (!run) continue;
+      const closedRun = this.buildClosedRun(run, entry);
+      if (run.state !== "closed" || closedRun.result !== run.result) this.store.saveRun(closedRun);
+      if (run.state !== "closed") this.deleteAgentBusSubscriptions(id);
     }
 
-    for (const [, entry] of entries) safeDisposeSession(entry.session);
+    for (const [, entry] of entries) {
+      this.clearQueuedMessages(entry);
+      entry.deferredFinish = undefined;
+      safeDisposeSession(entry.session);
+    }
     this.entries.clear();
   }
 
@@ -308,9 +368,51 @@ export class PiAgentRuntime implements AgentRuntime {
     const task = this.runPrompt(id, message)
       .catch((error) => this.handlePromptTaskError(id, error))
       .finally(() => {
-        if (entry.promptTask === task) entry.promptTask = undefined;
+        if (entry.promptTask !== task) return;
+        entry.promptTask = undefined;
+        if (!entry.queueParked) this.startQueuedPromptTask(id, entry);
       });
     entry.promptTask = task;
+  }
+
+  private startQueuedPromptTask(id: string, entry: RuntimeEntry): void {
+    const message = entry.queuedMessages[0];
+    if (!message) return;
+
+    try {
+      const run = this.store.getRun(id);
+      if (this.disposed || this.entries.get(id) !== entry || !run || run.state === "closed") {
+        this.clearQueuedMessages(entry);
+        return;
+      }
+      if (!isAgentRunActive(run)) {
+        const queuedMessageCount = entry.queuedMessages.length;
+        this.clearQueuedMessages(entry);
+        entry.deferredFinish = undefined;
+        this.handlePromptTaskError(
+          id,
+          new Error(`Agent ${run.name} became terminal before ${queuedMessageCount} queued message(s) could run.`),
+        );
+        return;
+      }
+      entry.queuedMessages.shift();
+      this.startPromptTask(id, entry, message);
+    } catch (error) {
+      this.clearPendingBusDeliveries(message.busDeliveries);
+      this.clearQueuedMessages(entry);
+      this.handlePromptTaskError(id, error);
+    }
+  }
+
+  private clearQueuedMessages(entry: RuntimeEntry): void {
+    for (const message of entry.queuedMessages) this.clearPendingBusDeliveries(message.busDeliveries);
+    entry.queuedMessages.length = 0;
+    entry.queueParked = false;
+    entry.preflightRetryInProgress = false;
+  }
+
+  private buildClosedRun(run: AgentRun, entry: RuntimeEntry | undefined): AgentRun {
+    return { ...run, state: "closed", result: run.result ?? entry?.deferredFinish ?? null };
   }
 
   private async runPrompt(id: string, message: PromptMessage): Promise<void> {
@@ -320,10 +422,18 @@ export class PiAgentRuntime implements AgentRuntime {
       return;
     }
 
+    let messageAccepted = false;
     try {
-      await entry.session.prompt(message.content, { expandPromptTemplates: false });
+      await entry.session.prompt(message.content, {
+        expandPromptTemplates: false,
+        preflightResult: (accepted) => {
+          messageAccepted = accepted;
+          if (accepted) entry.preflightRetryInProgress = false;
+        },
+      });
+      // Pi treats input-handler action=handled as accepted, so acknowledge any attached bus context.
       this.markPendingBusDeliveries(message.busDeliveries);
-      if (this.isClosed(id)) return;
+      if (this.isClosed(id) || entry.queuedMessages.length > 0) return;
       if (this.isRunningWithoutResult(id)) {
         if (this.hasActiveDirectChild(id)) {
           entry.health.setWaiting();
@@ -332,7 +442,18 @@ export class PiAgentRuntime implements AgentRuntime {
 
         let finalError = entry.health.getSnapshot().finalError;
         if (!finalError) {
-          await entry.session.prompt(buildFinishRequiredPrompt(), { expandPromptTemplates: false });
+          let finishPromptAccepted = false;
+          try {
+            await entry.session.prompt(buildFinishRequiredPrompt(entry.deferredFinish), {
+              expandPromptTemplates: false,
+              preflightResult: (accepted) => {
+                finishPromptAccepted = accepted;
+              },
+            });
+          } catch (error) {
+            if (!finishPromptAccepted && entry.queuedMessages.length > 0) return;
+            throw error;
+          }
           if (this.isClosed(id) || !this.isRunningWithoutResult(id)) return;
           if (this.hasActiveDirectChild(id)) {
             entry.health.setWaiting();
@@ -351,13 +472,30 @@ export class PiAgentRuntime implements AgentRuntime {
         this.saveFailedRun(id, "Agent stopped without calling finish.", getLastAssistantText(entry.session));
       }
     } catch (error) {
+      if (this.isClosed(id)) {
+        this.clearPendingBusDeliveries(message.busDeliveries);
+        return;
+      }
+      const errorMessage = formatError(error);
+      if (!messageAccepted && this.hasActiveDirectChild(id)) {
+        // A queued message grants one immediate retry; otherwise wait for the next message to wake the parent.
+        const retryNow = entry.queuedMessages.length > 0 && !entry.preflightRetryInProgress;
+        entry.queuedMessages.unshift(message);
+        entry.queueParked = !retryNow;
+        entry.preflightRetryInProgress = retryNow;
+        if (!retryNow) entry.health.setWaiting();
+        return;
+      }
       this.clearPendingBusDeliveries(message.busDeliveries);
-      if (this.isClosed(id)) return;
+      if (!messageAccepted) {
+        this.clearQueuedMessages(entry);
+        this.saveFailedRun(id, errorMessage, { providerError: errorMessage });
+        return;
+      }
       if (this.hasActiveDirectChild(id)) {
         entry.health.setWaiting();
         return;
       }
-      const errorMessage = formatError(error);
       this.saveFailedRun(id, errorMessage, { providerError: errorMessage });
     }
   }
@@ -383,7 +521,7 @@ export class PiAgentRuntime implements AgentRuntime {
       name: "finish",
       label: "Finish",
       description:
-        "Required final subagent action. Report that your assigned subagent task is complete. This does not close the agent.",
+        "Required final subagent action. Report that your assigned subagent task is complete. If queued runtime messages defer completion, the result is retained; handle them, then call finish again to confirm or update it. This does not close the agent.",
       parameters: FinishAgentParams,
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
@@ -399,6 +537,21 @@ export class PiAgentRuntime implements AgentRuntime {
           summary: params.summary,
           data: params.data,
         };
+        const entry = this.requireEntry(runId);
+        if (entry.queuedMessages.length > 0) {
+          entry.deferredFinish = result;
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Finish deferred because a runtime message is queued for the next turn. Your result is retained; after handling queued messages, call finish again to confirm or update it.",
+              },
+            ],
+            details: result,
+            terminate: true,
+          };
+        }
+        entry.deferredFinish = undefined;
         this.store.saveRun({
           ...run,
           result,
@@ -485,14 +638,20 @@ export class PiAgentRuntime implements AgentRuntime {
 
   private saveFailedRun(id: string, summary: string, data?: unknown): void {
     const run = this.store.getRun(id);
+    const entry = this.entries.get(id);
     if (!run || !isAgentRunActive(run)) return;
+    // The queued prompt, not the settling one, owns the next terminal transition.
+    if (entry?.queuedMessages.length) return;
+    const deferredFinish = entry?.deferredFinish;
+    if (entry) entry.deferredFinish = undefined;
+    const failureData = deferredFinish ? { deferredFinish, ...(data !== undefined ? { failure: data } : {}) } : data;
     this.store.saveRun({
       ...run,
       state: "failed",
       result: {
         status: "failed",
         summary: truncateText(summary, 500),
-        ...(data !== undefined ? { data } : {}),
+        ...(failureData !== undefined ? { data: failureData } : {}),
       },
     });
   }
@@ -665,11 +824,16 @@ function createAgentBusSubscription(runId: string, busId: string): BusSubscripti
   });
 }
 
-function buildFinishRequiredPrompt(): string {
-  return [
-    "Your previous response ended without finish.",
-    "Call finish now with status success, blocked, or failed; include summary and useful data.",
-  ].join("\n");
+function buildFinishRequiredPrompt(deferredFinish: AgentResult | undefined): string {
+  return deferredFinish
+    ? [
+        "A previous finish result was deferred while newer messages were queued.",
+        "Re-evaluate it against those messages, then call finish again to confirm or update status, summary, and data.",
+      ].join("\n")
+    : [
+        "Your previous response ended without finish.",
+        "Call finish now with status success, blocked, or failed; include summary and useful data.",
+      ].join("\n");
 }
 
 export function observeAgentSessionHealth(session: AgentSession) {
