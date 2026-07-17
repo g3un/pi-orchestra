@@ -30,7 +30,7 @@ A tool is not a thin API wrapper. It is a handle the agent can reason about. Des
 Tool and parameter descriptions land in the agent's context and strongly affect tool calls.
 
 - Make implicit context explicit, as if onboarding a teammate: what the tool is for, when to use it instead of a sibling tool, input format, edge cases, and boundaries.
-- For lifecycle tools, document ownership. `finish` belongs to the effective owner of the current scope: the subagent itself or the workgroup leader. `cancel` belongs to the supervising parent above that owner.
+- For lifecycle tools, document ownership. Subagents call `finish`, workgroup leaders call `workgroup finish`, and workflow coordinators call `workflow finish`. Cancelling a workgroup or workflow belongs to the supervising parent.
 - Describe every parameter with a Typebox `description`. See `AgentProfileParams` in `src/tools/subagent.ts`.
 - Treat wording as something you tune. Small description changes can change agent behavior.
 

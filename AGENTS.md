@@ -28,6 +28,8 @@
 
 ## Development tools
 
+- Run development commands inside the repository's Nix environment with `nix develop` or `nix develop --command <command>`
+- Use `nix flake check` for the full CI-equivalent verification
 - Use `corepack pnpm` to manage dependencies and run scripts
 - Use `oxlint` for linting and type checking
 - Use `oxfmt` for formatting

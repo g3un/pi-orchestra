@@ -22,7 +22,7 @@ When a task outgrows one context window, use one or more of these:
 
 1. Compaction: near the limit, summarize history into decisions, open threads, and any still-useful facts. Drop repeated tool output. Pi exposes session lifecycle hooks (`session_before_compact`, `session_compact`) for custom compaction.
 2. Structured notes: let the agent store notes _outside_ the immediate context window and retrieve them when relevant. In Pi, `pi.appendEntry` stores custom session state that survives restarts without automatically becoming LLM-visible context. See [pi-extensions.md](./pi-extensions.md).
-3. Sub-agent architectures: give a focused task to a specialist agent with a clean window, then return only a condensed summary to the coordinator. This is the pi-orchestra model; see [orchestration-model.md](../docs/orchestration-model.md). The `finish` tool's `summary` and `data` are the handoff, so keep them tight.
+3. Sub-agent architectures: give a focused task to a specialist agent with a clean window, then return only a condensed summary to the coordinator. In pi-orchestra, the `finish` tool's `summary` and `data` are the handoff, so keep them tight.
 
 ## Keep injected context labeled and subordinate
 
@@ -34,7 +34,7 @@ When a task outgrows one context window, use one or more of these:
 In a multi-agent system, handoffs _are_ context engineering. Make them:
 
 - Condensed: synthesized findings, not raw transcripts. Produce concise canonical output, deduplicate and reconcile, and prefer finished results over ambient context.
-- Decision-bearing: note conflicts, gaps, and confidence so the flow leader or next workgroup does not have to derive them again.
+- Decision-bearing: note conflicts, gaps, and confidence so the workflow coordinator or next workgroup does not have to derive them again.
 
 ## Checklist for long-running flows
 

@@ -1,6 +1,6 @@
 # Prompt engineering
 
-Best practices for writing prompts, system prompts, and agent-profile instructions for LLM agents across providers. In this repo, the main surfaces are agent profile system prompts (`src/profiles/`) and the task/instruction strings threaded through the runtime (`buildInitialPrompt` in `src/adapters/pi-runtime.ts`).
+Best practices for writing prompts, system prompts, and agent-profile instructions for LLM agents across providers. In this repo, the main surfaces are inline agent profile prompts accepted by `src/tools/` and the task/instruction strings assembled by `buildInitialPrompt` in `src/adapters/pi-runtime.ts`.
 
 For _what goes into the context window_ over a long task, such as compaction, note taking, and retrieval, see [context-engineering.md](./context-engineering.md).
 

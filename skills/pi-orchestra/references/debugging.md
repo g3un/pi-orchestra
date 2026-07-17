@@ -4,10 +4,7 @@ Pi-Orchestra keeps operational state in memory for the current Pi session.
 There is no cross-restart resume: once the Pi session ends, active runs,
 workgroups, workflows, and buses are gone.
 
-While the session is live you normally never need to inspect stored state.
-Completion, `workgroup.finished`, `workflow.finished`, and bus events arrive automatically, so prefer
-the Pi-Orchestra tools (`status`, `message`, `finish`, `cancel`) to observe and
-steer live orchestration.
+Completion and bus events arrive automatically. Do not poll status during normal operation. Use the Pi-Orchestra tools (`status`, `message`, `finish`, `cancel`) only when you need to inspect or steer live orchestration.
 
 ## Debug log
 

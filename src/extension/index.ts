@@ -42,6 +42,7 @@ export default function piOrchestraExtension(pi: ExtensionAPI): void {
 
   pi.on("tool_execution_end", (event, ctx) => {
     if (event.isError || !["subagent", "workgroup", "workflow"].includes(event.toolName)) return;
+    // Let Pi report render failures; a later orchestration tool completion retries via show().
     getToolBundle(ctx).orchestraMonitor.show(ctx);
   });
 

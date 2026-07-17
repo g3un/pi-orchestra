@@ -54,6 +54,7 @@ function hasEntityNameConflict(
   existingActiveEntities: NamedEntity[],
   reservedEntities: NamedEntity[],
 ): boolean {
+  // Reserved IDs cannot be reused as names because id-first lookups would permanently shadow them.
   return (
     hasNameConflict(
       name,
