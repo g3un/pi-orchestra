@@ -24,6 +24,7 @@ import { formatBusMessages } from "../core/bus-format.ts";
 import { formatBusMessageText, truncateText } from "../formatting.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
+import { findRunningLedWorkgroup } from "../core/workgroup.ts";
 import { formatError, isAgentRunActive, resolveBusName, resolveRunName } from "../utils.ts";
 import type { AgentHealthSnapshot } from "../agent-health.ts";
 
@@ -526,10 +527,10 @@ export class PiAgentRuntime implements AgentRuntime {
       execute: async (_toolCallId, params) => {
         const run = this.requireRun(runId);
         this.assertOpenRun(run);
-        const ledScope = this.findRunningLedScope(run.id);
-        if (ledScope) {
+        const ledWorkgroup = findRunningLedWorkgroup(this.store.listWorkgroups(), run.id);
+        if (ledWorkgroup) {
           throw new Error(
-            `Agent ${run.name} leads running ${ledScope.type} ${ledScope.name}; use ${ledScope.type} action=finish before finish.`,
+            `Agent ${run.name} leads running workgroup ${ledWorkgroup.name}; use workgroup action=finish before finish.`,
           );
         }
         const result: AgentResult = {
@@ -654,13 +655,6 @@ export class PiAgentRuntime implements AgentRuntime {
         ...(failureData !== undefined ? { data: failureData } : {}),
       },
     });
-  }
-
-  private findRunningLedScope(runId: string): { type: "workgroup"; name: string } | undefined {
-    const workgroup = this.store
-      .listWorkgroups()
-      .find((current) => current.leaderRunId === runId && current.state === "running");
-    return workgroup ? { type: "workgroup", name: workgroup.name } : undefined;
   }
 
   private requireBus(id: string): Bus {

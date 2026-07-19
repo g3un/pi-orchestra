@@ -9,7 +9,7 @@ the main agent continues working.
 2. The tool spawns the run as `agent-{name}`, creates `bus-agent-{name}`, and subscribes the owning scope (main for top-level spawns, or the parent run for nested spawns).
 3. Continue main-thread work until `subagent.finished` arrives.
 4. Use `subagent message` only for useful new guidance.
-5. Use `subagent close` when the supervising parent no longer needs the run; for an auto-created private bus, finishing or closing the last active run closes that bus.
+5. Use `subagent close` when the supervising parent no longer needs the run. It rejects runs with active descendants or a running led workgroup instead of cascading. On success, an unused auto-created private bus closes; a rejection leaves the run and bus unchanged.
 
 ## Example: spawn with a custom profile
 
@@ -82,6 +82,7 @@ Use the returned run name, typically `agent-{name}` for standalone spawns.
 - Use a globally unique logical `name` for each spawned agent.
 - Reuse a bus only for agents working on the same delegated work item.
 - Explicit/reused buses are not auto-closed by subagent finish/close; only marked auto-created standalone private buses are.
+- A child can close only its direct children. For deeper trees, message the target child to clean up its descendants; if it cannot, main/root must close them bottom-up.
 - Use `bus status` to inspect shared messages when needed. It shows a bounded
   latest-message view.
 - Child agents receive `finish` and `publish_bus` automatically; do not include

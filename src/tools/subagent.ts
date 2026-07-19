@@ -5,8 +5,9 @@ import { closeStandalonePrivateBusIfUnused } from "../core/auto-bus.ts";
 import { createBusSubscription, maxMessageSeq, type Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
+import { findRunningLedWorkgroup } from "../core/workgroup.ts";
 import { createBusNameFromOwnerName, createPrefixedName, getBusOwnerRawNameBudget } from "../naming.ts";
-import { assertAgentRunNameAvailable, normalizeEntityName, requireParam } from "../utils.ts";
+import { assertAgentRunNameAvailable, isAgentRunActive, normalizeEntityName, requireParam } from "../utils.ts";
 import { boundResultData, formatResultData } from "../formatting.ts";
 import { subscribeMainToBus } from "./bus.ts";
 
@@ -196,6 +197,7 @@ export function createSubagentTool({ orchestra, store, parentRunId, ownerSession
       const targetRun = orchestra.getRun(input.id, { busId: undefined });
       if (!targetRun) return { message: formatMissingSubagentMessage(input.id) };
       requireSubagentTargetAuthorized(store, targetRun, parentRunId, "close");
+      requireSubagentCloseable(store, targetRun, parentRunId);
       const run = await orchestra.closeAgent(targetRun.id, { busId: undefined });
       if (run) closeStandalonePrivateBusIfUnused(store, (busId) => orchestra.closeBus(busId), run.busId);
       return {
@@ -215,6 +217,8 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     promptGuidelines: [
       "Omit busId for the default private bus; pass busId only when related agents should share an existing bus.",
       "Use subagent status/message/close with the returned run name.",
+      "Use subagent close only after active descendants and any led workgroup are closed; it never cascades.",
+      "For deeper trees, message the target child to clean up its descendants; use main/root for bottom-up recovery if it cannot.",
     ],
     parameters: SubagentToolParams,
     executionMode: "parallel",
@@ -394,6 +398,43 @@ function requireSubagentTargetAuthorized(
   if (action === "status" && targetRun.id === parentRunId) return;
   if (targetRun.parentRunId === parentRunId) return;
   throw new Error(`Only main or direct parent ${parentRunId} can ${action} subagent ${targetRun.name}.`);
+}
+
+function requireSubagentCloseable(store: AgentStore, targetRun: AgentRun, parentRunId: string | null): void {
+  if (targetRun.state === "closed") return;
+
+  const ledWorkgroup = findRunningLedWorkgroup(store.listWorkgroups(), targetRun.id);
+  if (ledWorkgroup) {
+    throw new Error(
+      `Agent ${targetRun.name} leads running workgroup ${ledWorkgroup.name}; finish or cancel it before closing the agent.`,
+    );
+  }
+
+  const activeDescendant = findActiveDescendant(store.listRuns(), targetRun.id);
+  if (!activeDescendant) return;
+  const recovery =
+    parentRunId === null
+      ? "close active descendants bottom-up before closing the agent."
+      : `message ${targetRun.name} to close its descendants, or ask main/root to clean them up bottom-up before closing the agent.`;
+  throw new Error(`Agent ${targetRun.name} has active descendant ${activeDescendant.name}; ${recovery}`);
+}
+
+function findActiveDescendant(runs: AgentRun[], runId: AgentRun["id"]): AgentRun | undefined {
+  const parentRunIds = new Map(runs.map((run) => [run.id, run.parentRunId]));
+  return runs.find((run) => {
+    if (run.id === runId || !isAgentRunActive(run)) return false;
+
+    const visited = new Set<string>();
+    for (
+      let parentRunId = run.parentRunId;
+      parentRunId && !visited.has(parentRunId);
+      parentRunId = parentRunIds.get(parentRunId) ?? null
+    ) {
+      if (parentRunId === runId) return true;
+      visited.add(parentRunId);
+    }
+    return false;
+  });
 }
 
 function formatMissingSubagentMessage(id: string): string {

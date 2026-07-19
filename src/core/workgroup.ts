@@ -55,3 +55,10 @@ export function createWorkgroupRun(options: CreateWorkgroupRunOptions): Workgrou
     createdAtMs: Date.now(),
   };
 }
+
+export function findRunningLedWorkgroup(
+  workgroups: WorkgroupRun[],
+  leaderRunId: AgentRun["id"],
+): WorkgroupRun | undefined {
+  return workgroups.find((workgroup) => workgroup.leaderRunId === leaderRunId && workgroup.state === "running");
+}

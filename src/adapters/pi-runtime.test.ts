@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { closeRuntimeOwnedStandalonePrivateBuses } from "../core/auto-bus.ts";
 import { createBusSubscription } from "../core/bus.ts";
+import { Orchestra } from "../core/orchestra.ts";
 import type { AgentRun } from "../core/subagent.ts";
 import { OrchestraEventController } from "../extension/orchestra-events.ts";
+import { closeWorkgroupRun } from "../tools/workgroup.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { observeAgentSessionHealth, PiAgentRuntime } from "./pi-runtime.ts";
 
@@ -732,6 +735,81 @@ test("close preserves a finish result deferred by queued messages", async () => 
     data: { pages: 42 },
   });
   assert.deepEqual(store.getRun(runId)?.result, closedRun?.result);
+  runtime.dispose();
+});
+
+test("workgroup teardown force-closes registered runs without cascading to nested descendants", async () => {
+  const store = new InMemoryAgentStore();
+  const runtime = createRuntime(store);
+  const orchestra = new Orchestra({ runtime, store });
+  const bus = orchestra.createBus({ name: "bus-group-nested" });
+  const leader = { ...run("leader", null), busId: bus.id };
+  const member = { ...run("member", leader.id), busId: bus.id };
+  const nested = { ...run("nested", member.id), busId: "bus-nested" };
+  store.saveRun(leader);
+  store.saveRun(member);
+  store.saveRun(nested);
+  installEntry(runtime, leader.id, createHealthHarness());
+  installEntry(runtime, member.id, createHealthHarness());
+  installEntry(runtime, nested.id, createHealthHarness());
+  const workgroup = {
+    id: "workgroup-1",
+    name: "group-nested",
+    busId: bus.id,
+    ownerSessionId: "owner",
+    goal: "Test nested teardown.",
+    leaderRunId: leader.id,
+    memberRunIds: [member.id],
+    state: "running" as const,
+    result: null,
+    createdAtMs: Date.now(),
+  };
+  store.saveWorkgroup(workgroup);
+
+  const closedWorkgroup = await closeWorkgroupRun(orchestra, store, workgroup, {
+    includeLeader: true,
+    result: { status: "blocked", summary: "Cancelled." },
+  });
+
+  assert.equal(closedWorkgroup.state, "closed");
+  assert.equal(store.getBus(bus.id)?.state, "closed");
+  assert.equal(store.getRun(leader.id)?.state, "closed");
+  assert.equal(store.getRun(member.id)?.state, "closed");
+  assert.equal(store.getRun(nested.id)?.state, "running");
+  assert.deepEqual(runtime.listRunIds(), [nested.id]);
+  runtime.dispose();
+});
+
+test("shutdown closes nested standalone runs and their private buses", async () => {
+  const store = new InMemoryAgentStore();
+  for (const bus of [
+    { id: "bus-parent", name: "bus-agent-parent" },
+    { id: "bus-child", name: "bus-agent-child" },
+  ]) {
+    store.saveBus({
+      ...bus,
+      state: "open",
+      messages: [],
+      nextMessageSeq: 1,
+      metadata: { autoClose: "standalone-subagent-private", ownerSessionId: "session-1" },
+    });
+  }
+  const parent = { ...run("parent", null), busId: "bus-parent" };
+  const child = { ...run("child", parent.id), busId: "bus-child" };
+  store.saveRun(parent);
+  store.saveRun(child);
+  const runtime = createRuntime(store);
+  installEntry(runtime, parent.id, createHealthHarness());
+  installEntry(runtime, child.id, createHealthHarness());
+  const orchestra = new Orchestra({ runtime, store });
+
+  await closeRuntimeOwnedStandalonePrivateBuses(store, orchestra, "session-1");
+
+  assert.equal(store.getRun(parent.id)?.state, "closed");
+  assert.equal(store.getRun(child.id)?.state, "closed");
+  assert.equal(store.getBus(parent.busId)?.state, "closed");
+  assert.equal(store.getBus(child.busId)?.state, "closed");
+  assert.deepEqual(runtime.listRunIds(), []);
   runtime.dispose();
 });
 
