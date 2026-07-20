@@ -606,7 +606,6 @@ test("workgroup member name checks are global", async () => {
     task: "Existing work.",
     busId: otherBus.id,
     parentRunId: null,
-    sessionFile: ".pi/orchestra/sessions/security-review.jsonl",
     ownerSessionId: "session-1",
     state: "running",
     result: null,
@@ -720,7 +719,6 @@ test("workgroup cancel disposes members, bus, and leader", async () => {
     task: "Lead the group.",
     busId: workgroup.busId,
     parentRunId: null,
-    sessionFile: ".pi/orchestra/sessions/workgroup-lead.jsonl",
     ownerSessionId: "session-1",
     state: "running",
     result: null,
@@ -810,7 +808,6 @@ test("workgroup cancel completes cleanup for closing workgroups", async () => {
     task: "Lead cleanup.",
     busId: workgroup.busId,
     parentRunId: null,
-    sessionFile: ".pi/orchestra/sessions/cleanup-lead.jsonl",
     ownerSessionId: "session-1",
     state: "running",
     result: null,
@@ -1160,7 +1157,6 @@ class FakeOrchestra implements OrchestraApi {
       parentRunId: options.parentRunId,
       state: "running",
       ownerSessionId: "session-1",
-      sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
       result: null,
     };
     this.runs.set(run.id, run);
@@ -1214,7 +1210,6 @@ function agentRun(overrides: Partial<AgentRun> = {}): AgentRun {
     state: "running",
     ...overrides,
     parentRunId: overrides.parentRunId ?? null,
-    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
     ownerSessionId: overrides.ownerSessionId ?? "session-1",
   });

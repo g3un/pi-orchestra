@@ -297,7 +297,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     state: "running",
     ...overrides,
     parentRunId: overrides.parentRunId ?? null,
-    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
     ownerSessionId: overrides.ownerSessionId ?? "session-1",
   });

@@ -360,7 +360,6 @@ class FakeRuntime implements AgentRuntime {
       busId,
       parentRunId: options.parentRunId ?? null,
       state: "running",
-      sessionFile: `.pi/orchestra/sessions/${options.id}.jsonl`,
       ownerSessionId: "session-1",
       result: null,
     };
@@ -414,7 +413,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     state: "running",
     ...overrides,
     parentRunId: overrides.parentRunId ?? null,
-    sessionFile: overrides.sessionFile ?? `.pi/orchestra/sessions/${id}.jsonl`,
     result: overrides.result ?? null,
     ownerSessionId: overrides.ownerSessionId ?? "session-1",
   });

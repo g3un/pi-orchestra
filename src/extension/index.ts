@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { PiAgentRuntime } from "../adapters/pi-runtime.ts";
 import { InMemoryAgentStore } from "../adapters/in-memory-store.ts";
-import { createProjectSqliteDebugLog } from "../adapters/sqlite-debug-log.ts";
 import { Orchestra } from "../core/orchestra.ts";
 import { boundResultData, formatBusMessageText } from "../formatting.ts";
 import { createBusTool, defineBusPiTool, type BusTool } from "../tools/bus.ts";
@@ -66,8 +65,6 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   if (existing) return existing;
 
   const store = new InMemoryAgentStore();
-  const debugLog = process.env.PI_ORCHESTRA_DEBUG_LOG === "1" ? createProjectSqliteDebugLog(ctx.cwd) : undefined;
-  debugLog?.attach(store);
   const ownerSessionId = crypto.randomUUID();
   let resolveChildCustomTools: (runId: string) => ToolDefinition[] = () => [];
   const runtime = new PiAgentRuntime({
@@ -160,7 +157,6 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
         try {
           this.runtime.dispose();
         } finally {
-          debugLog?.dispose();
           store.dispose();
         }
       }

@@ -8,7 +8,6 @@ export interface AgentRunFixtureRecord {
   busId: string;
   ownerSessionId: string | undefined;
   parentRunId: string | null;
-  sessionFile: string;
   state: AgentRunState;
   result: AgentResult | null;
 }

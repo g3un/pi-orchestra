@@ -279,7 +279,6 @@ class FakeOrchestra implements OrchestraApi {
       busId: bus.id,
       parentRunId: options.parentRunId,
       ownerSessionId: "session-1",
-      sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
       state: "running",
       result: null,
     };

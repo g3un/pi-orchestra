@@ -71,7 +71,6 @@ function run(id: string, parentRunId: string | null): AgentRun {
     busId: "bus-1",
     ownerSessionId: "session-1",
     parentRunId,
-    sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
     state: "running",
     result: null,
   };

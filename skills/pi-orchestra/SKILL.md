@@ -23,7 +23,6 @@ Do not delegate trivial tasks that you can finish faster yourself.
 4. Give every child agent a specific profile, assignment, success criteria, handoff shape, and explicit tool allowlist. Do not include `bus`; child agents get `publish_bus` automatically.
 5. After starting delegated work, continue useful main-thread work. When none remains, yield and wait for the matching completion event instead of polling status.
 6. Consume `subagent.finished`, `workgroup.member_finished`, `workgroup.finished`, `workflow.workgroup_finished`, and `workflow.finished` events.
-7. To debug unexpected orchestra behavior, read `references/debugging.md`.
 
 ## References
 

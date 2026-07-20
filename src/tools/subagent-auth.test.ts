@@ -132,7 +132,6 @@ function run(overrides: Partial<AgentRun>): AgentRun {
     busId: overrides.busId ?? "bus-1",
     ownerSessionId: "session-1",
     parentRunId: overrides.parentRunId ?? null,
-    sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
     state: overrides.state ?? "running",
     result: overrides.result ?? null,
   });

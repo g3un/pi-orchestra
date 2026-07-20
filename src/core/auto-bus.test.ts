@@ -131,7 +131,6 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     parentRunId: null,
     state: "running",
     result: null,
-    sessionFile: ".pi/orchestra/sessions/agent.jsonl",
     ...overrides,
     ownerSessionId: overrides.ownerSessionId ?? "session-1",
   });

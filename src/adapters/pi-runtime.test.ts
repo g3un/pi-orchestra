@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test, vi } from "vitest";
+import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
 import { closeRuntimeOwnedStandalonePrivateBuses } from "../core/auto-bus.ts";
 import { createBusSubscription } from "../core/bus.ts";
 import { Orchestra } from "../core/orchestra.ts";
@@ -10,7 +14,55 @@ import { closeWorkgroupRun } from "../tools/workgroup.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { observeAgentSessionHealth, PiAgentRuntime } from "./pi-runtime.ts";
 
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  // Exercise the real session factory with deterministic in-memory auth.
+  const authStorage = actual.AuthStorage.inMemory();
+  authStorage.setRuntimeApiKey("faux", "test");
+  return {
+    ...actual,
+    createAgentSession: (options?: CreateAgentSessionOptions) => actual.createAgentSession({ ...options, authStorage }),
+  };
+});
+
 const profile = { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined };
+
+test("spawn completes a child conversation without creating an orchestra directory", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-runtime-"));
+  const faux = registerFauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("finish", { status: "success", summary: "Done." }), {
+      stopReason: "toolUse",
+    }),
+  ]);
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-memory", name: "bus-memory", state: "open", messages: [], nextMessageSeq: 1 });
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd,
+    resolveModel: () => faux.getModel(),
+    resolveCustomTools: () => [],
+    ownerSessionId: "owner",
+  });
+
+  try {
+    await runtime.spawn({ ...profile, model: "faux/faux-1" }, "Research.", "bus-memory", {
+      id: "agent-memory",
+      name: "agent-memory",
+      parentRunId: null,
+    });
+    const promptTask = runtimeInternals(runtime).entries.get("agent-memory")?.promptTask;
+    assert.ok(promptTask);
+    await promptTask;
+
+    assert.equal(store.getRun("agent-memory")?.state, "success");
+    assert.equal(existsSync(join(cwd, ".pi", "orchestra")), false);
+  } finally {
+    runtime.dispose();
+    faux.unregister();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("runtime health reads context live and hides errors during recoverable phases", () => {
   const harness = createHealthHarness({ contextPercent: 40 });
@@ -1490,7 +1542,6 @@ function run(id: string, parentRunId: string | null): AgentRun {
     busId: "bus-1",
     ownerSessionId: "session-1",
     parentRunId,
-    sessionFile: `.pi/orchestra/sessions/${id}.jsonl`,
     state: "running",
     result: null,
   };

@@ -25,8 +25,6 @@ interface AgentRunBase {
   ownerSessionId: string;
   /** Parent run id for child-spawned agents, or null when main owns the run. */
   parentRunId: string | null;
-  /** Pi session file for this child agent. */
-  sessionFile: string;
 }
 
 export type AgentRun =

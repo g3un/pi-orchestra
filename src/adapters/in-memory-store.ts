@@ -12,11 +12,7 @@ import type { AgentStore } from "../core/store.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 
-/**
- * In-memory {@link AgentStore}. This store owns live orchestration state for
- * the current Pi process. A separate append-only SQLite debug log mirrors state
- * transitions for debugging and backup.
- */
+/** In-memory {@link AgentStore} that owns live orchestration state for the current Pi session. */
 export class InMemoryAgentStore implements AgentStore {
   private readonly runs = new Map<string, AgentRun>();
   private readonly runIdByName = new Map<string, string>();

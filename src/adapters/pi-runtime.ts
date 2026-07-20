@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -66,8 +65,6 @@ interface PendingBusDelivery {
   messages: BusMessage[];
 }
 
-const ORCHESTRA_SESSION_RELATIVE_DIR = join(".pi", "orchestra", "sessions");
-
 const FinishAgentParams = Type.Object({
   status: Type.String({ enum: [...AGENT_RESULT_STATUS_VALUES] }),
   summary: Type.String(),
@@ -114,9 +111,7 @@ export class PiAgentRuntime implements AgentRuntime {
 
     const baseTools = filterChildProfileTools(requireProfileTools(profile));
     const model = await this.resolveProfileModel(profile);
-    const sessionManager = SessionManager.create(this.cwd, getProjectOrchestraSessionDir(this.cwd));
-    const sessionFile = sessionManager.getSessionFile();
-    if (!sessionFile) throw new Error("Could not create a persisted session for the subagent.");
+    const sessionManager = SessionManager.inMemory(this.cwd);
 
     const run: AgentRun = {
       id: options.id,
@@ -125,7 +120,6 @@ export class PiAgentRuntime implements AgentRuntime {
       task,
       busId,
       ownerSessionId: this.ownerSessionId,
-      sessionFile,
       parentRunId: options.parentRunId,
       state: "running",
       result: null,
@@ -764,10 +758,6 @@ export class PiAgentRuntime implements AgentRuntime {
     if (!model) throw new Error(`Could not resolve profile model "${profile.model}".`);
     return model;
   }
-}
-
-export function getProjectOrchestraSessionDir(cwd: string): string {
-  return join(cwd, ORCHESTRA_SESSION_RELATIVE_DIR);
 }
 
 function buildInitialPrompt(profile: AgentProfile, task: string, runName: string): string {
