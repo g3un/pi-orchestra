@@ -391,120 +391,25 @@ export function createWorkgroupTool({
 }
 
 export async function createAndLaunchWorkgroup({
-  orchestra,
-  store,
-  onWorkgroupLaunching,
-  onWorkgroupLaunched,
-  onWorkgroupLaunchFailed,
-  parentRunId,
-  ownerSessionId,
   name,
   goal,
-  members: memberInputs,
+  members,
+  ...deps
 }: CreateAndLaunchWorkgroupOptions): Promise<Extract<WorkgroupOutput, { action: "add_members" }>> {
-  if (memberInputs.length === 0) throw new Error("workflow add_workgroup requires members.");
-  const identity = createWorkgroupIdentity(
-    createPrefixedName("group", name, "Workgroup", WORKGROUP_NAME_MAX_LENGTH),
-    store.listWorkgroups(),
-  );
-  const bus = orchestra.createBus({ name: createBusNameFromOwnerName(identity.name) });
-  const workgroup = createWorkgroupRun({ identity, busId: bus.id, ownerSessionId, goal, leaderRunId: parentRunId });
+  if (members.length === 0) throw new Error("workflow add_workgroup requires members.");
+
+  const tool = createWorkgroupTool(deps);
+  const created = await tool.execute({ action: "create", name, goal });
+  if (created.action !== "create") throw new Error(`Unexpected workgroup ${created.action} output from create.`);
+
+  const workgroup = created.workgroup;
   try {
-    store.saveWorkgroup(workgroup);
+    const launched = await tool.execute({ action: "add_members", id: workgroup.id, members });
+    if (launched.action !== "add_members")
+      throw new Error(`Unexpected workgroup ${launched.action} output from add_members.`);
+    return launched;
   } catch (error) {
-    orchestra.closeBus(bus.id);
-    throw error;
-  }
-
-  const members = prepareMembers(memberInputs, orchestra.listRuns({ busId: undefined }), bus);
-  const runNames = members.map((member) => member.name);
-  onWorkgroupLaunching?.({
-    input: { action: "add_members", id: workgroup.id, members: memberInputs },
-    workgroup,
-    bus,
-    runIds: [],
-    runNames,
-  });
-  let launchFailedNotified = false;
-  try {
-    const spawnResults = await Promise.allSettled(
-      members.map(
-        async (member): Promise<SpawnSuccess> => ({ member, run: await spawnSubagent(orchestra, member, parentRunId) }),
-      ),
-    );
-    const successes = collectSpawnSuccesses(spawnResults);
-    const failures = collectSpawnFailures(members, spawnResults);
-    if (failures.length > 0) {
-      const runIds = successes.map((success) => success.run.id);
-      onWorkgroupLaunchFailed?.({
-        input: { action: "add_members", id: workgroup.id, members: memberInputs },
-        workgroup,
-        bus,
-        runIds,
-        runNames,
-        error: new Error("Failed to launch every workgroup member."),
-      });
-      launchFailedNotified = true;
-      const cleanupResults = await Promise.allSettled(
-        successes.map((success) => orchestra.closeAgent(success.run.id, { busId: undefined })),
-      );
-      throw new Error(formatLaunchFailure(failures, successes, cleanupResults));
-    }
-
-    const runs = successes.map((success) => success.run);
-    const latestWorkgroup = store.getWorkgroup(workgroup.id);
-    if (!latestWorkgroup || latestWorkgroup.state !== "running") {
-      const runIds = runs.map((run) => run.id);
-      const error = new Error(
-        latestWorkgroup
-          ? `Workgroup ${latestWorkgroup.name} is ${latestWorkgroup.state}.`
-          : `Workgroup ${workgroup.name} not found.`,
-      );
-      onWorkgroupLaunchFailed?.({
-        input: { action: "add_members", id: workgroup.id, members: memberInputs },
-        workgroup: latestWorkgroup ?? workgroup,
-        bus,
-        runIds,
-        runNames,
-        error,
-      });
-      launchFailedNotified = true;
-      await closeAgentRuns(orchestra, runIds);
-      throw error;
-    }
-
-    const updatedWorkgroup = {
-      ...latestWorkgroup,
-      memberRunIds: [...new Set([...latestWorkgroup.memberRunIds, ...runs.map((run) => run.id)])],
-    };
-    store.saveWorkgroup(updatedWorkgroup);
-    const output: Extract<WorkgroupOutput, { action: "add_members" }> = {
-      action: "add_members",
-      workgroup: updatedWorkgroup,
-      bus,
-      runs,
-      message: formatWorkgroupMembersAddedMessage(bus, updatedWorkgroup, runs),
-    };
-    onWorkgroupLaunched?.({
-      input: { action: "add_members", id: workgroup.id, members: memberInputs },
-      workgroup: updatedWorkgroup,
-      bus,
-      runIds: runs.map((run) => run.id),
-      runNames,
-      output,
-    });
-    return output;
-  } catch (error) {
-    if (!launchFailedNotified)
-      onWorkgroupLaunchFailed?.({
-        input: { action: "add_members", id: workgroup.id, members: memberInputs },
-        workgroup,
-        bus,
-        runIds: [],
-        runNames,
-        error,
-      });
-    await closeWorkgroupRun(orchestra, store, workgroup, {
+    await closeWorkgroupRun(deps.orchestra, deps.store, workgroup, {
       includeLeader: false,
       result: { status: "failed", summary: formatError(error) },
     });

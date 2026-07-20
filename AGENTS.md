@@ -17,7 +17,6 @@
 - `src/adapters/` bridges core abstractions to concrete implementations, including the in-memory store and Pi runtime integration.
 - `src/tools/` contains tool implementations exposed to agents, plus their Pi tool definitions and colocated tests.
 - `src/extension/` is the Pi extension entry point; it wires stores, runtime adapters, the orchestra, and registered tools together.
-- `docs/` holds project architecture notes.
 - `agent-docs/` holds agent-facing implementation notes.
 - `scripts/` holds repository maintenance and release automation used by CI.
 - Root-level configuration files define package metadata, TypeScript, linting, formatting, and test setup.

@@ -164,16 +164,6 @@ export function resolveWorkgroupName(store: AgentStore, workgroupId: string): st
   return store.getWorkgroup(workgroupId)?.name ?? workgroupId;
 }
 
-export function resolveWorkflowName(store: AgentStore, workflowId: string): string {
-  return store.getWorkflow(workflowId)?.name ?? workflowId;
-}
-
-export type LifecycleState = AgentRun["state"];
-
-export function isTerminalAgentState(state: LifecycleState): boolean {
-  return state === "success" || state === "blocked" || state === "failed" || state === "closed";
-}
-
 export function isAgentRunActive(run: AgentRun): boolean {
   return run.state === "running" && run.result === null;
 }

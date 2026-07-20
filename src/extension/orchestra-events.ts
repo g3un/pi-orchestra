@@ -343,10 +343,6 @@ export class OrchestraEventController {
       : "delivered";
   }
 
-  private sendParentRunEvent(parentRunId: string, event: OrchestraMainEvent): boolean {
-    return this.deliverToRun(parentRunId, event) === "delivered";
-  }
-
   private findWorkflowForWorkgroup(workgroupId: string): WorkflowRun | undefined {
     return this.store.listWorkflows().find((workflow) => workflow.workgroupIds.includes(workgroupId));
   }

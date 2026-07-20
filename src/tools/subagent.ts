@@ -223,8 +223,10 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     parameters: SubagentToolParams,
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const input = withDefaultModel(toSubagentInput(params as RawSubagentParams), ctx);
-      const output = await resolveTool(ctx).execute(input);
+      const input = toSubagentInput(params as RawSubagentParams);
+      const output = await resolveTool(ctx).execute(
+        input.action === "spawn" ? withDefaultProfileModelInput(input, ctx) : input,
+      );
 
       return {
         content: [{ type: "text", text: output.message }],
@@ -347,14 +349,6 @@ function summarizeBus(bus: Bus): BusSummary {
     name: bus.name,
     state: bus.state,
     ...(bus.metadata ? { metadata: bus.metadata } : {}),
-  };
-}
-
-function withDefaultModel(input: SubagentInput, ctx: ExtensionContext): SubagentInput {
-  if (input.action !== "spawn") return input;
-  return {
-    ...input,
-    profile: withDefaultProfileModel(input.profile, ctx),
   };
 }
 
