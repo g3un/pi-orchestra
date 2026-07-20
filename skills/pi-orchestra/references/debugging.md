@@ -8,11 +8,11 @@ Completion and bus events arrive automatically. Do not poll status during normal
 
 ## Debug log
 
-Pi-Orchestra writes a SQLite debug log at `.pi/orchestra/debug.db`. It is
-write-only from the orchestra's side: it is appended for post-hoc debugging and
-is never read back to restore state. Inspect it only when diagnosing orchestra
-behavior after the fact; do not rely on it to recover live orchestration state,
-and do not edit it.
+Set `PI_ORCHESTRA_DEBUG_LOG=1` to write a SQLite debug log at
+`.pi/orchestra/debug.db`; it retains the latest 10,000 rows. The log is never
+read back to restore state. Inspect it only when diagnosing orchestra behavior
+after the fact; do not rely on it to recover live orchestration state, and do
+not edit it.
 
 ## Safety notes
 

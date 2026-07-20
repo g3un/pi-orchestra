@@ -49,8 +49,8 @@ export class InMemoryAgentStore implements AgentStore {
     return snapshotOrUndefined(getNamedEntity(this.runs, this.runIdByName, name, (run) => run.state !== "closed"));
   }
 
-  listRuns(): AgentRun[] {
-    return [...this.runs.values()].map(snapshot);
+  listRuns(filter?: (run: AgentRun) => boolean): AgentRun[] {
+    return [...this.runs.values()].filter((run) => !filter || filter(run)).map(snapshot);
   }
 
   subscribeRuns(listener: (run: AgentRun) => void, filter: ((run: AgentRun) => boolean) | undefined): () => void {
@@ -76,13 +76,14 @@ export class InMemoryAgentStore implements AgentStore {
     return [...this.buses.values()].map(snapshot);
   }
 
+  /** `update` must return a new Bus without mutating its input. */
   updateBus(busId: string, update: (bus: Bus) => Bus): Bus | undefined {
     const bus = this.buses.get(busId);
     if (!bus) return undefined;
 
-    const updatedBus = snapshot(update(snapshot(bus)));
+    const updatedBus = update(bus);
     this.saveBus(updatedBus);
-    return snapshot(updatedBus);
+    return updatedBus;
   }
 
   addBusMessage(busId: string, message: NewBusMessage | BusMessage): BusMessage {
@@ -153,8 +154,8 @@ export class InMemoryAgentStore implements AgentStore {
     );
   }
 
-  listWorkgroups(): WorkgroupRun[] {
-    return [...this.workgroups.values()].map(snapshot);
+  listWorkgroups(filter?: (workgroup: WorkgroupRun) => boolean): WorkgroupRun[] {
+    return [...this.workgroups.values()].filter((workgroup) => !filter || filter(workgroup)).map(snapshot);
   }
 
   subscribeWorkgroups(
@@ -183,8 +184,8 @@ export class InMemoryAgentStore implements AgentStore {
     );
   }
 
-  listWorkflows(): WorkflowRun[] {
-    return [...this.workflows.values()].map(snapshot);
+  listWorkflows(filter?: (workflow: WorkflowRun) => boolean): WorkflowRun[] {
+    return [...this.workflows.values()].filter((workflow) => !filter || filter(workflow)).map(snapshot);
   }
 
   subscribeWorkflows(

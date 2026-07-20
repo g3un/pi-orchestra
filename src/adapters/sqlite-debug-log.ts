@@ -1,6 +1,6 @@
-// Append-only SQLite debug/backup log. This is not the live store;
-// InMemoryAgentStore is. The log mirrors run/workgroup/bus-message
-// state transitions for debugging and backup. The application never reads it back.
+// Bounded SQLite debug log. This is not the live store; InMemoryAgentStore is.
+// The log mirrors recent run/workgroup/bus-message state transitions for
+// post-hoc debugging. The application never reads it back.
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -8,10 +8,12 @@ import type { AgentStore } from "../core/store.ts";
 
 const ORCHESTRA_DEBUG_LOG_RELATIVE_DIR = join(".pi", "orchestra");
 const ORCHESTRA_DEBUG_LOG_FILENAME = "debug.db";
+const ORCHESTRA_DEBUG_LOG_MAX_ROWS = 10_000;
 
 export class SqliteDebugLog {
   private readonly db: DatabaseSync;
   private readonly append: StatementSync;
+  private readonly prune: StatementSync;
   private readonly unsubscribes: Array<() => void> = [];
   private closed = false;
 
@@ -35,6 +37,10 @@ export class SqliteDebugLog {
     this.append = this.db.prepare(
       "INSERT INTO log (ts, kind, id, name, state, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
     );
+    this.prune = this.db.prepare(
+      "DELETE FROM log WHERE seq < (SELECT seq FROM log ORDER BY seq DESC LIMIT 1 OFFSET ?)",
+    );
+    this.prune.run(ORCHESTRA_DEBUG_LOG_MAX_ROWS - 1);
   }
 
   /** Subscribe to store changes and append each transition to the log. */
@@ -67,6 +73,7 @@ export class SqliteDebugLog {
     if (this.closed) return;
     try {
       this.append.run(Date.now(), kind, id, name, state, JSON.stringify(payload) ?? "null");
+      this.prune.run(ORCHESTRA_DEBUG_LOG_MAX_ROWS - 1);
     } catch {
       // Logging failures must not disrupt orchestration.
     }

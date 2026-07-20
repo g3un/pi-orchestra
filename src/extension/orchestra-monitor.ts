@@ -13,6 +13,8 @@ const MAX_NAME_WIDTH = 24;
 const DEFAULT_TICK_MS = 1_000;
 const TYPE_PREFIX_LENGTH = 7;
 
+type MonitorLineFormatter = (nowMs: number) => string;
+
 export interface OrchestraMonitorControllerOptions {
   now: (() => number) | undefined;
   resolveAgentHealth: ResolveAgentHealth | undefined;
@@ -27,6 +29,8 @@ export class OrchestraMonitorController {
   private unsubscribe?: () => void;
   private tickTimer?: ReturnType<typeof setInterval>;
   private renderQueued = false;
+  private dirty = true;
+  private lineFormatters?: MonitorLineFormatter[];
   private ctx?: ExtensionContext;
 
   constructor(
@@ -69,6 +73,8 @@ export class OrchestraMonitorController {
     const ctx = this.ctx;
     this.unsubscribe = undefined;
     this.renderQueued = false;
+    this.dirty = true;
+    this.lineFormatters = undefined;
     this.stopTicking();
     this.ctx = undefined;
 
@@ -84,6 +90,7 @@ export class OrchestraMonitorController {
   }
 
   private requestRender(): void {
+    this.dirty = true;
     if (this.renderQueued) return;
     this.renderQueued = true;
     queueMicrotask(() => {
@@ -113,7 +120,13 @@ export class OrchestraMonitorController {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return false;
 
-    const lines = buildOrchestraMonitorLines(this.store, this.now(), this.resolveAgentHealth);
+    const nowMs = this.now();
+    if (this.dirty || !this.lineFormatters) {
+      const lineFormatters = buildOrchestraMonitorLineFormatters(this.store, this.resolveAgentHealth);
+      this.lineFormatters = lineFormatters;
+      this.dirty = false;
+    }
+    const lines = this.lineFormatters.map((formatLine) => formatLine(nowMs));
     if (lines.length === 0) {
       this.dispose();
       return false;
@@ -155,92 +168,109 @@ export function buildOrchestraMonitorLines(
   nowMs = Date.now(),
   resolveAgentHealth?: ResolveAgentHealth,
 ): string[] {
-  const workflows = store.listWorkflows().filter((workflow) => workflow.state !== "closed");
-  const allWorkgroups = store.listWorkgroups();
-  const workgroups = allWorkgroups.filter((workgroup) => workgroup.state !== "closed");
-  const runs = store.listRuns();
-  const workgroupsById = new Map(allWorkgroups.map((workgroup) => [workgroup.id, workgroup]));
+  return buildOrchestraMonitorLineFormatters(store, resolveAgentHealth).map((formatLine) => formatLine(nowMs));
+}
+
+function buildOrchestraMonitorLineFormatters(
+  store: AgentStore,
+  resolveAgentHealth: ResolveAgentHealth | undefined,
+): MonitorLineFormatter[] {
+  const workflows = store.listWorkflows((workflow) => workflow.state !== "closed");
   const workflowWorkgroupIds = new Set(workflows.flatMap((workflow) => workflow.workgroupIds));
+  const workgroups = store.listWorkgroups(
+    (workgroup) => workgroup.state !== "closed" || workflowWorkgroupIds.has(workgroup.id),
+  );
+  const activeWorkgroups = workgroups.filter((workgroup) => workgroup.state !== "closed");
+  const workgroupsById = new Map(workgroups.map((workgroup) => [workgroup.id, workgroup]));
+  const monitoredBusIds = new Set([
+    ...workflows.map((workflow) => workflow.busId),
+    ...workgroups.map((workgroup) => workgroup.busId),
+  ]);
+  const runs = store.listRuns((run) => isAgentRunActive(run) || monitoredBusIds.has(run.busId));
   const ownedRunIds = new Set<string>();
 
   for (const workflow of workflows) {
     for (const run of collectWorkflowRuns(workflow, workgroupsById, runs)) ownedRunIds.add(run.id);
   }
-  for (const workgroup of workgroups) {
+  for (const workgroup of activeWorkgroups) {
     for (const run of collectWorkgroupRuns(workgroup, runs)) ownedRunIds.add(run.id);
   }
 
-  const scopeFormatters = [
-    ...workflows.map((workflow) => () => formatWorkflowLine(workflow, workgroupsById, runs, nowMs, resolveAgentHealth)),
-    ...workgroups
+  const scopeBuilders = [
+    ...workflows.map((workflow) => () => formatWorkflowLine(workflow, workgroupsById, runs, resolveAgentHealth)),
+    ...activeWorkgroups
       .filter((workgroup) => !workflowWorkgroupIds.has(workgroup.id))
-      .map((workgroup) => () => formatWorkgroupLine(workgroup, runs, nowMs, resolveAgentHealth)),
+      .map((workgroup) => () => formatWorkgroupLine(workgroup, runs, resolveAgentHealth)),
     ...runs
       .filter((run) => isAgentRunActive(run) && !ownedRunIds.has(run.id))
       .map((run) => () => formatAgentLine(run, resolveAgentHealth)),
   ];
 
-  const visibleLines = scopeFormatters.slice(0, MAX_VISIBLE_SCOPES).map((formatScope) => formatScope());
-  const hiddenCount = scopeFormatters.length - visibleLines.length;
+  const lineFormatters = scopeBuilders.slice(0, MAX_VISIBLE_SCOPES).map((buildScope) => buildScope());
+  const hiddenCount = scopeBuilders.length - lineFormatters.length;
   if (hiddenCount > 0) {
-    visibleLines.push(
-      `${" ".repeat(TYPE_PREFIX_LENGTH)}+${hiddenCount} more active ${pluralize("scope", hiddenCount)}`,
-    );
+    const hiddenLine = `${" ".repeat(TYPE_PREFIX_LENGTH)}+${hiddenCount} more active ${pluralize("scope", hiddenCount)}`;
+    lineFormatters.push(() => hiddenLine);
   }
-  return visibleLines;
+  return lineFormatters;
 }
 
 function formatWorkflowLine(
   workflow: WorkflowRun,
   workgroupsById: Map<string, WorkgroupRun>,
   runs: AgentRun[],
-  nowMs: number,
   resolveAgentHealth: ResolveAgentHealth | undefined,
-): string {
+): MonitorLineFormatter {
   const workgroups = workflow.workgroupIds.flatMap((workgroupId) => {
     const workgroup = workgroupsById.get(workgroupId);
     return workgroup ? [workgroup] : [];
   });
   const workflowRuns = collectWorkflowRuns(workflow, workgroupsById, runs);
   const status = workflow.state === "closing" ? "closing" : formatInline(workflow.goal);
-  return [
-    `FLOW   ${formatName(workflow.name)} [${formatUptimeSince(workflow.createdAtMs, nowMs)}]`,
-    `groups ${workgroups.filter((workgroup) => workgroup.state === "closed").length}/${workgroups.length}`,
-    `agents ${workflowRuns.filter(isAgentRunFinished).length}/${workflowRuns.length}`,
-    formatAggregateAgentHealth(workflowRuns, resolveAgentHealth),
-    status,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join(" | ");
+  const prefix = `FLOW   ${formatName(workflow.name)}`;
+  const groups = `groups ${workgroups.filter((workgroup) => workgroup.state === "closed").length}/${workgroups.length}`;
+  const agents = `agents ${workflowRuns.filter(isAgentRunFinished).length}/${workflowRuns.length}`;
+  const startedAtMs = workflow.createdAtMs;
+  return (nowMs) =>
+    [
+      `${prefix} [${formatUptimeSince(startedAtMs, nowMs)}]`,
+      groups,
+      agents,
+      formatAggregateAgentHealth(workflowRuns, resolveAgentHealth),
+      status,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" | ");
 }
 
 function formatWorkgroupLine(
   workgroup: WorkgroupRun,
   runs: AgentRun[],
-  nowMs: number,
   resolveAgentHealth: ResolveAgentHealth | undefined,
-): string {
+): MonitorLineFormatter {
   const workgroupRuns = collectWorkgroupRuns(workgroup, runs);
   const status = workgroup.state === "closing" ? "closing" : formatInline(workgroup.goal);
-  return [
-    `GROUP  ${formatName(workgroup.name)} [${formatUptimeSince(workgroup.createdAtMs, nowMs)}]`,
-    `agents ${workgroupRuns.filter(isAgentRunFinished).length}/${workgroupRuns.length}`,
-    formatAggregateAgentHealth(workgroupRuns, resolveAgentHealth),
-    status,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join(" | ");
+  const prefix = `GROUP  ${formatName(workgroup.name)}`;
+  const agents = `agents ${workgroupRuns.filter(isAgentRunFinished).length}/${workgroupRuns.length}`;
+  const startedAtMs = workgroup.createdAtMs;
+  return (nowMs) =>
+    [
+      `${prefix} [${formatUptimeSince(startedAtMs, nowMs)}]`,
+      agents,
+      formatAggregateAgentHealth(workgroupRuns, resolveAgentHealth),
+      status,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" | ");
 }
 
-function formatAgentLine(run: AgentRun, resolveAgentHealth: ResolveAgentHealth | undefined): string {
-  return [
-    `AGENT  ${formatName(run.name)}`,
-    formatAgentHealth(resolveAgentHealth?.(run.id)) ?? "",
-    formatInline(run.profile.name),
-    formatInline(run.task),
-  ]
-    .filter(Boolean)
-    .join(" | ");
+function formatAgentLine(run: AgentRun, resolveAgentHealth: ResolveAgentHealth | undefined): MonitorLineFormatter {
+  const prefix = `AGENT  ${formatName(run.name)}`;
+  const profile = formatInline(run.profile.name);
+  const task = formatInline(run.task);
+  const runId = run.id;
+  return () =>
+    [prefix, formatAgentHealth(resolveAgentHealth?.(runId)) ?? "", profile, task].filter(Boolean).join(" | ");
 }
 
 function collectWorkflowRuns(

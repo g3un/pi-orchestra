@@ -257,6 +257,66 @@ test("orchestra monitor contains stale context failures", async () => {
   assert.deepEqual(notifications, []);
 });
 
+test("orchestra monitor idle ticks refresh uptime and health without querying the store", () => {
+  vi.useFakeTimers();
+  try {
+    const store = new CountingStore();
+    store.saveWorkflow(workflowRun());
+    store.saveRun(run({ id: "workflow-agent", busId: "workflow-bus" }));
+    const widgets: Array<string[] | undefined> = [];
+    let nowMs = MONITOR_NOW_MS;
+    let healthCalls = 0;
+    let healthPhase: "active" | "waiting" = "active";
+    let contextPercent = 10;
+    const monitor = new OrchestraMonitorController(store, {
+      now: () => nowMs,
+      resolveAgentHealth: () => {
+        healthCalls++;
+        return { phase: healthPhase, contextPercent };
+      },
+      tickMs: 1_000,
+    });
+
+    assert.equal(monitor.show(monitorContext(widgets)), true);
+    assert.deepEqual(widgets.at(-1), [
+      " FLOW   workflow [10s] | groups 0/0 | agents 0/1 | [health ctx<=10%] | Complete the workflow.",
+    ]);
+    const listCallsAfterShow = store.listCalls;
+    const healthCallsAfterShow = healthCalls;
+    nowMs += 1_000;
+    healthPhase = "waiting";
+    contextPercent = 20;
+    vi.advanceTimersByTime(1_000);
+
+    assert.deepEqual(store.listCalls, listCallsAfterShow);
+    assert.equal(healthCalls, healthCallsAfterShow + 1);
+    assert.deepEqual(widgets.at(-1), [
+      " FLOW   workflow [11s] | groups 0/0 | agents 0/1 | [health waiting=1 ctx<=20%] | Complete the workflow.",
+    ]);
+    monitor.dispose();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("orchestra monitor snapshots only renderable store entries", () => {
+  const store = new InMemoryAgentStore();
+  for (let index = 0; index < 10; index++) {
+    store.saveRun(run({ id: `closed-agent-${index}`, state: "closed" }));
+    store.saveWorkgroup(workgroupRun({ id: `closed-group-${index}`, state: "closed" }));
+    store.saveWorkflow(workflowRun({ id: `closed-flow-${index}`, state: "closed" }));
+  }
+  store.saveRun(run({ id: "active-agent" }));
+  const clone = vi.spyOn(globalThis, "structuredClone");
+
+  const lines = buildOrchestraMonitorLines(store, MONITOR_NOW_MS);
+  const cloneCount = clone.mock.calls.length;
+  clone.mockRestore();
+
+  assert.equal(cloneCount, 1);
+  assert.deepEqual(lines, ["AGENT  active-agent | researcher | Inspect the code."]);
+});
+
 test("orchestra monitor coalesces store updates before rerendering", async () => {
   const store = new CountingStore();
   const agent = run({ id: "reviewer" });
@@ -287,18 +347,34 @@ test("orchestra monitor is disabled without UI", () => {
 class ThrowingStore extends InMemoryAgentStore {
   throwOnList = false;
 
-  override listWorkflows(): WorkflowRun[] {
+  override listWorkflows(filter?: (workflow: WorkflowRun) => boolean): WorkflowRun[] {
     if (this.throwOnList) throw new Error("listWorkflows failed");
-    return super.listWorkflows();
+    return super.listWorkflows(filter);
   }
 }
 
 class CountingStore extends InMemoryAgentStore {
+  listRunsCalls = 0;
+  listWorkgroupsCalls = 0;
   listWorkflowsCalls = 0;
 
-  override listWorkflows(): WorkflowRun[] {
+  get listCalls(): [number, number, number] {
+    return [this.listRunsCalls, this.listWorkgroupsCalls, this.listWorkflowsCalls];
+  }
+
+  override listRuns(filter?: (run: AgentRun) => boolean): AgentRun[] {
+    this.listRunsCalls++;
+    return super.listRuns(filter);
+  }
+
+  override listWorkgroups(filter?: (workgroup: WorkgroupRun) => boolean): WorkgroupRun[] {
+    this.listWorkgroupsCalls++;
+    return super.listWorkgroups(filter);
+  }
+
+  override listWorkflows(filter?: (workflow: WorkflowRun) => boolean): WorkflowRun[] {
     this.listWorkflowsCalls++;
-    return super.listWorkflows();
+    return super.listWorkflows(filter);
   }
 }
 

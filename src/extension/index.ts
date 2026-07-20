@@ -66,8 +66,8 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
   if (existing) return existing;
 
   const store = new InMemoryAgentStore();
-  const debugLog = createProjectSqliteDebugLog(ctx.cwd);
-  debugLog.attach(store);
+  const debugLog = process.env.PI_ORCHESTRA_DEBUG_LOG === "1" ? createProjectSqliteDebugLog(ctx.cwd) : undefined;
+  debugLog?.attach(store);
   const ownerSessionId = crypto.randomUUID();
   let resolveChildCustomTools: (runId: string) => ToolDefinition[] = () => [];
   const runtime = new PiAgentRuntime({
@@ -160,7 +160,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
         try {
           this.runtime.dispose();
         } finally {
-          debugLog.dispose();
+          debugLog?.dispose();
           store.dispose();
         }
       }
