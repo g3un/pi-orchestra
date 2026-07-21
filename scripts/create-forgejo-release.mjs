@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -9,7 +10,7 @@ const serverUrl = trimTrailingSlash(
 );
 const repository = process.env.FORGEJO_REPOSITORY ?? process.env.GITHUB_REPOSITORY;
 const token = process.env.FORGEJO_TOKEN ?? process.env.GITHUB_TOKEN;
-const tagName = process.env.GITHUB_REF_NAME ?? parseTagName(process.env.GITHUB_REF);
+const tagName = process.argv[2] ?? process.env.FORGEJO_TAG_NAME;
 const version = packageJson.version;
 const packageName = packageJson.name;
 
@@ -22,7 +23,7 @@ if (!token) {
 }
 
 if (!tagName) {
-  fail("GITHUB_REF_NAME or GITHUB_REF tag reference is required.");
+  fail("Tag name argument or FORGEJO_TAG_NAME is required.");
 }
 
 if (tagName !== `v${version}`) {
@@ -47,13 +48,36 @@ if (existingRelease.status !== 404) {
   await failResponse("Failed to check existing Forgejo release", existingRelease);
 }
 
+const fallbackBody = `Published ${packageName}@${version} to npm.`;
+let releaseBody = fallbackBody;
+try {
+  const previousTag = git(
+    "describe",
+    "--tags",
+    "--abbrev=0",
+    "--always",
+    "--match",
+    "v*",
+    "--exclude",
+    tagName,
+    tagName,
+  );
+  if (previousTag.startsWith("v")) {
+    releaseBody =
+      git("log", "--format=- %s", "--invert-grep", "--grep", "^release: v", `${previousTag}..${tagName}`) ||
+      fallbackBody;
+  }
+} catch (error) {
+  console.warn(`Failed to generate release notes; using fallback body: ${error.message}`);
+}
+
 const createRelease = await request(releasesUrl, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     tag_name: tagName,
     name: tagName,
-    body: `Published ${packageName}@${version} to npm.`,
+    body: releaseBody,
     draft: false,
   }),
 });
@@ -71,6 +95,10 @@ if (createRelease.status === 409) {
 
 await failResponse("Failed to create Forgejo release", createRelease);
 
+function git(...args) {
+  return execFileSync("git", args, { encoding: "utf8" }).trim();
+}
+
 function request(url, options) {
   return fetch(url, {
     ...options,
@@ -80,10 +108,6 @@ function request(url, options) {
       ...options?.headers,
     },
   });
-}
-
-function parseTagName(ref) {
-  return ref?.startsWith("refs/tags/") ? ref.slice("refs/tags/".length) : undefined;
 }
 
 function trimTrailingSlash(value) {

@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "skills/**"
+      - README.md
+      - LICENSE
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: "${{ !startsWith(github.event.head_commit.message, 'release: v') }}"
+    runs-on: codeberg-small
+    container:
+      image: node:lts-slim
+    defaults:
+      run:
+        shell: sh
+
+    steps:
+      - name: Install CI prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git xz-utils
+          rm -rf /var/lib/apt/lists/*
+          install -d -m 0755 /nix
+          mkdir -p /etc/nix
+          printf '%s\n' 'build-users-group =' 'experimental-features = nix-command flakes' > /etc/nix/nix.conf
+          curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install | sh -s -- --no-daemon
+          ln -sf /root/.nix-profile/bin/nix /usr/local/bin/nix
+
+      - name: Check out repository
+        uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Run checks
+        run: nix flake check path:$PWD
+
+      - name: Bump package version
+        run: |
+          VERSION="$(nix develop path:$PWD --command node scripts/next-release-version.mjs)"
+          nix develop path:$PWD --command corepack pnpm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Commit and tag release
+        run: |
+          git config user.name "Forgejo Actions"
+          git config user.email "actions@noreply.codeberg.org"
+
+          for ATTEMPT in 1 2 3; do
+            VERSION="$(nix develop path:$PWD --command node -p 'require("./package.json").version')"
+            TAG="v$VERSION"
+
+            if ! git diff --quiet -- package.json; then
+              git add package.json
+              git commit -m "release: $TAG"
+            fi
+
+            if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+              if [ "$(git rev-list -n 1 "$TAG")" != "$(git rev-parse HEAD)" ]; then
+                echo "$TAG does not point to HEAD." >&2
+                exit 1
+              fi
+            else
+              git tag -a "$TAG" -m "Release $TAG"
+            fi
+
+            if git push --atomic origin HEAD:main "$TAG"; then
+              exit 0
+            fi
+
+            git tag -d "$TAG"
+            echo "Release push failed on attempt $ATTEMPT."
+
+            if [ "$ATTEMPT" -lt 3 ]; then
+              git fetch origin main --tags
+              git reset --hard FETCH_HEAD
+              nix flake check path:$PWD
+              VERSION="$(nix develop path:$PWD --command node scripts/next-release-version.mjs)"
+              nix develop path:$PWD --command corepack pnpm version "$VERSION" --no-git-tag-version --allow-same-version
+            fi
+          done
+
+          echo "Release push failed after 3 attempts." >&2
+          exit 1
+
+      # Rerun this workflow if npm publish fails; the HEAD tag keeps the version stable.
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          nix develop path:$PWD --command sh -c '
+            if [ -z "$NPM_TOKEN" ]; then
+              echo "NPM_TOKEN secret is required."
+              exit 1
+            fi
+
+            PKG="$(node -p "require(\"./package.json\").name")"
+            VERSION="$(node -p "require(\"./package.json\").version")"
+
+            if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+              echo "$PKG@$VERSION is already published; skipping npm publish."
+            else
+              echo "Publishing $PKG@$VERSION."
+              printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
+              corepack pnpm publish --access public --no-git-checks
+            fi
+          '
+
+      - name: Create Codeberg release
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          TAG="v$(nix develop path:$PWD --command node -p 'require("./package.json").version')"
+          nix develop path:$PWD --command node scripts/create-forgejo-release.mjs "$TAG"

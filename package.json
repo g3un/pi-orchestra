@@ -21,7 +21,6 @@
   "files": [
     "src/**/*.ts",
     "!src/**/*.test.ts",
-    "docs/**/*.md",
     "skills/**/*",
     "README.md",
     "LICENSE"

@@ -39,8 +39,7 @@ nix flake check
 ```
 
 The devcontainer also enters the flake shell and installs dependencies with
-Corepack/pnpm after creation. Forgejo CI and publishing run the same
-`nix flake check` entrypoint.
+Corepack/pnpm after creation.
 
 ## Core concepts
 

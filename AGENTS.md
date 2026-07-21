@@ -18,7 +18,7 @@
 - `src/tools/` contains tool implementations exposed to agents, plus their Pi tool definitions and colocated tests.
 - `src/extension/` is the Pi extension entry point; it wires stores, runtime adapters, the orchestra, and registered tools together.
 - `agent-docs/` holds agent-facing implementation notes.
-- `scripts/` holds repository maintenance and release automation used by CI.
+- `scripts/` holds repository maintenance scripts.
 - Root-level configuration files define package metadata, TypeScript, linting, formatting, and test setup.
 
 ## Agent docs
@@ -37,10 +37,6 @@
 ## Commits
 
 - Do not create commits unless the user explicitly asks
-- Do not bump `package.json` for every code change; bump only for release/publish work or when the user asks
-- Use `major.YYYYMMDD.patch` release versions, such as `1.20260626.0`
-- Release tags are only for publish releases and must be `v${package.version}`
-- Do not create release tags unless the user explicitly asks, and keep npm versions SemVer-compatible
 - One logical change per commit
 - Use Conventional Commits, such as `feat(tool): add subagent tool`
 - Avoid overly granular scopes unless they clarify ownership or impact
