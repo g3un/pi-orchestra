@@ -108,6 +108,42 @@ test("explicit close rejects a running led workgroup but allows scope teardown",
   assert.deepEqual(closedRunIds, ["leader"]);
 });
 
+test("explicit close rejects a running coordinated workflow but allows scope teardown", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "coordinator", name: "coordinator", parentRunId: "parent" }));
+  const workflow = {
+    id: "workflow-1",
+    name: "flow-review",
+    busId: "workflow-bus",
+    ownerSessionId: "session-1",
+    goal: "Review the change.",
+    ownerRunId: "parent",
+    coordinatorRunId: "coordinator",
+    workgroupIds: [],
+    state: "running" as const,
+    result: null,
+    createdAtMs: Date.now(),
+  };
+  store.saveWorkflow(workflow);
+  const closedRunIds: string[] = [];
+  const tool = createSubagentTool({
+    orchestra: lifecycleOrchestra(store, closedRunIds),
+    store,
+    parentRunId: "parent",
+    ownerSessionId: "session-1",
+  });
+
+  await assert.rejects(
+    () => tool.execute({ action: "close", id: "coordinator" }),
+    /Agent coordinator coordinates running workflow flow-review; cancel it before closing the agent\./,
+  );
+  assert.deepEqual(closedRunIds, []);
+
+  store.saveWorkflow({ ...workflow, state: "closing" });
+  await tool.execute({ action: "close", id: "coordinator" });
+  assert.deepEqual(closedRunIds, ["coordinator"]);
+});
+
 function lifecycleOrchestra(store: InMemoryAgentStore, closedRunIds: string[]): OrchestraApi {
   return {
     getRun: (id: string) => store.getRun(id),

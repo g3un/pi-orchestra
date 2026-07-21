@@ -9,7 +9,7 @@ the main agent continues working.
 2. The tool spawns the run as `agent-{name}`, creates `bus-agent-{name}`, and subscribes the owning scope (main for top-level spawns, or the parent run for nested spawns).
 3. Continue main-thread work until `subagent.finished` arrives.
 4. Use `subagent message` only for useful new guidance.
-5. Use `subagent close` when the supervising parent no longer needs the run. It rejects runs with active descendants or a running led workgroup instead of cascading. On success, an unused auto-created private bus closes; a rejection leaves the run and bus unchanged.
+5. Use `subagent close` when the supervising parent no longer needs the run. It rejects runs with active descendants, a running led workgroup, or a running coordinated workflow instead of cascading. On success, an unused auto-created private bus closes; a rejection leaves the run and bus unchanged.
 
 ## Example: spawn with a custom profile
 

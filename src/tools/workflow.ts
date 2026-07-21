@@ -18,7 +18,14 @@ import {
 import type { OrchestraApi } from "../core/orchestra.ts";
 import { createBusNameFromOwnerName, createPrefixedName } from "../naming.ts";
 import { boundResultData } from "../formatting.ts";
-import { closeAgentRuns, findEntity, requireParam, resolveRunName, resolveWorkgroupName } from "../utils.ts";
+import {
+  closeAgentRuns,
+  findEntity,
+  formatError,
+  requireParam,
+  resolveRunName,
+  resolveWorkgroupName,
+} from "../utils.ts";
 import { subscribeMainToBus } from "./bus.ts";
 import {
   AgentProfileParams,
@@ -102,6 +109,7 @@ export function createWorkflowTool(deps: WorkflowToolDeps): WorkflowTool {
         const identity = createWorkflowIdentity(flowName, store.listWorkflows());
         const bus = orchestra.createBus({ name: createBusNameFromOwnerName(identity.name) });
         let coordinator: AgentRun | undefined;
+        let workflow: WorkflowRun | undefined;
         try {
           subscribeWorkflowBusOwner(store, bus, parentRunId);
           const coordinatorName = createPrefixedName("agent", `${identity.name}-coordinator`, "Workflow coordinator");
@@ -116,7 +124,7 @@ export function createWorkflowTool(deps: WorkflowToolDeps): WorkflowTool {
             },
             parentRunId,
           );
-          const workflow = createWorkflowRun({
+          const createdWorkflow = createWorkflowRun({
             identity,
             busId: bus.id,
             ownerSessionId,
@@ -124,14 +132,22 @@ export function createWorkflowTool(deps: WorkflowToolDeps): WorkflowTool {
             ownerRunId: parentRunId,
             coordinatorRunId: coordinator.id,
           });
-          store.saveWorkflow(workflow);
-          await orchestra
-            .messageAgent(coordinator.id, formatWorkflowRegisteredMessage(workflow), { busId: undefined })
-            .catch(() => undefined);
+          store.saveWorkflow(createdWorkflow);
+          workflow = createdWorkflow;
+          await orchestra.messageAgent(coordinator.id, formatWorkflowRegisteredMessage(workflow), {
+            busId: undefined,
+          });
           return { action: "create", workflow, bus, coordinator, message: formatWorkflowStatus(store, workflow) };
         } catch (error) {
-          if (coordinator) await orchestra.closeAgent(coordinator.id, { busId: undefined });
-          orchestra.closeBus(bus.id);
+          if (workflow) {
+            await closeWorkflowRun(orchestra, store, workflow, {
+              includeCoordinator: true,
+              result: { status: "failed", summary: formatError(error) },
+            });
+          } else {
+            if (coordinator) await orchestra.closeAgent(coordinator.id, { busId: undefined });
+            orchestra.closeBus(bus.id);
+          }
           throw error;
         }
       }
@@ -171,6 +187,10 @@ export function createWorkflowTool(deps: WorkflowToolDeps): WorkflowTool {
           members: input.members,
         });
         const latest = store.getWorkflow(workflow.id) ?? workflow;
+        if (latest.state !== "running") {
+          await cancelWorkgroup(orchestra, store, launched.workgroup);
+          throw new Error(`Workflow ${latest.name} is ${latest.state}.`);
+        }
         const updated = { ...latest, workgroupIds: [...new Set([...latest.workgroupIds, launched.workgroup.id])] };
         store.saveWorkflow(updated);
         return {

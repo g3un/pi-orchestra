@@ -100,6 +100,40 @@ test("workflow cancel closes child workgroups, coordinator, and bus", async () =
   assert.equal(orchestra.store.getWorkgroup(added.workgroupId)?.state, "closed");
 });
 
+test("workflow cancel during child workgroup launch closes the late workgroup", async () => {
+  const orchestra = new FakeOrchestra();
+  const created = await createWorkflowTool(deps(orchestra)).execute({ action: "create", name: "review", goal: "Run." });
+  assert.equal(created.action, "create");
+
+  let releaseMemberSpawn!: () => void;
+  orchestra.memberSpawnDelay = new Promise<void>((resolve) => {
+    releaseMemberSpawn = resolve;
+  });
+  const memberSpawnStarted = new Promise<void>((resolve) => {
+    orchestra.onMemberSpawnStarted = resolve;
+  });
+  const addWorkgroup = createWorkflowTool(deps(orchestra, created.workflow.coordinatorRunId)).execute({
+    action: "add_workgroup",
+    id: created.workflow.id,
+    name: "phase-one",
+    goal: "Review phase one.",
+    members: [{ name: "reviewer", profile: reviewerProfile, task: "Review." }],
+  });
+
+  await memberSpawnStarted;
+  await createWorkflowTool(deps(orchestra)).execute({ action: "cancel", id: created.workflow.id });
+  releaseMemberSpawn();
+
+  await assert.rejects(addWorkgroup, /Workflow flow-review is closed\./);
+  const [workgroup] = orchestra.store.listWorkgroups();
+  assert.equal(workgroup?.state, "closed");
+  assert.equal(orchestra.getBus(workgroup?.busId ?? "")?.state, "closed");
+  assert.deepEqual(
+    workgroup?.memberRunIds.map((id) => orchestra.getRun(id)?.state),
+    ["closed"],
+  );
+});
+
 test("workflow names conflict while open and can be reused after close", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkflowTool(deps(orchestra));
@@ -134,16 +168,20 @@ test("closeWorkflowRun cleans up already closed workflow resources", async () =>
   assert.equal(orchestra.getBus(created.workflow.busId)?.state, "closed");
 });
 
-test("workflow create keeps saved workflow when registration message fails", async () => {
+test("workflow create rolls back when registration message fails", async () => {
   const orchestra = new FakeOrchestra();
   orchestra.failMessages = true;
 
-  const created = await createWorkflowTool(deps(orchestra)).execute({ action: "create", name: "review", goal: "Run." });
+  await assert.rejects(
+    () => createWorkflowTool(deps(orchestra)).execute({ action: "create", name: "review", goal: "Run." }),
+    /Message failed\./,
+  );
 
-  assert.equal(created.action, "create");
-  assert.equal(orchestra.store.getWorkflow(created.workflow.id)?.state, "running");
-  assert.equal(orchestra.getRun(created.workflow.coordinatorRunId)?.state, "running");
-  assert.equal(orchestra.getBus(created.workflow.busId)?.state, "open");
+  const [workflow] = orchestra.store.listWorkflows();
+  assert.equal(workflow?.state, "closed");
+  assert.deepEqual(workflow?.result, { status: "failed", summary: "Message failed." });
+  assert.equal(orchestra.getRun(workflow?.coordinatorRunId ?? "")?.state, "closed");
+  assert.equal(orchestra.getBus(workflow?.busId ?? "")?.state, "closed");
 });
 
 test("workflow create rolls back coordinator when workflow save fails", async () => {
@@ -232,6 +270,8 @@ class FakeOrchestra implements OrchestraApi {
   runs = new Map<string, AgentRun>();
   messages: Array<{ id: string; message: string }> = [];
   failMessages = false;
+  memberSpawnDelay: Promise<void> | undefined;
+  onMemberSpawnStarted: (() => void) | undefined;
 
   createBus(options: { name: string | undefined }): Bus {
     const id = options.name ?? `bus-${this.buses.size + 1}`;
@@ -269,6 +309,10 @@ class FakeOrchestra implements OrchestraApi {
   ): Promise<AgentRun> {
     const bus = this.getBus(busId);
     if (!bus) throw new Error(`Bus ${busId} not found.`);
+    if (options.parentRunId) {
+      this.onMemberSpawnStarted?.();
+      if (this.memberSpawnDelay) await this.memberSpawnDelay;
+    }
     const name = options.name ?? profile.name;
     const id = slugify(name);
     const run: AgentRun = {

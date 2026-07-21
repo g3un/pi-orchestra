@@ -723,6 +723,119 @@ test("a preflight failure fails instead of skipping to queued messages", async (
   runtime.dispose();
 });
 
+test("finish rejects an agent while a direct child is active", async () => {
+  const store = new InMemoryAgentStore();
+  const runId = "parent";
+  const child = run("child", runId);
+  store.saveRun(run(runId, null));
+  store.saveRun(child);
+  const runtime = createRuntime(store);
+  installEntry(runtime, runId, createHealthHarness());
+  const finishTool = runtimeInternals(runtime)
+    .createChildTools(runId)
+    .find((tool) => tool.name === "finish");
+  assert.ok(finishTool);
+
+  await assert.rejects(
+    () => finishTool.execute("finish-call", { status: "success", summary: "Done." }),
+    /Agent parent has active direct children; wait for their completion events before finish\./,
+  );
+  assert.equal(store.getRun(runId)?.state, "running");
+
+  store.saveRun({ ...child, state: "success", result: { status: "success", summary: "Done." } });
+  await finishTool.execute("finish-call", { status: "success", summary: "Done." });
+  assert.equal(store.getRun(runId)?.state, "success");
+  runtime.dispose();
+});
+
+test("finish rejects while a direct child spawn is pending", async () => {
+  const store = new InMemoryAgentStore();
+  const runId = "parent-with-pending-child";
+  store.saveRun(run(runId, null));
+  store.saveBus({ id: "bus-1", name: "bus-1", state: "open", messages: [], nextMessageSeq: 1 });
+  const resolveStarted = createDeferred();
+  const releaseResolve = createDeferred();
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: async () => {
+      resolveStarted.resolve();
+      await releaseResolve.promise;
+      return undefined;
+    },
+    resolveCustomTools: () => [],
+    ownerSessionId: "owner",
+  });
+  installEntry(runtime, runId, createHealthHarness());
+  const spawnTask = runtime.spawn({ ...profile, model: "faux/missing" }, "Task.", "bus-1", {
+    id: "pending-child",
+    name: "pending-child",
+    parentRunId: runId,
+  });
+  await resolveStarted.promise;
+  const finishTool = runtimeInternals(runtime)
+    .createChildTools(runId)
+    .find((tool) => tool.name === "finish");
+  assert.ok(finishTool);
+
+  const finishRejected = assert.rejects(
+    () => finishTool.execute("finish-call", { status: "success", summary: "Done." }),
+    /Agent parent-with-pending-child has active direct children/,
+  );
+  releaseResolve.resolve();
+  await Promise.all([finishRejected, assert.rejects(spawnTask, /Could not resolve profile model/)]);
+
+  await finishTool.execute("finish-call", { status: "success", summary: "Done." });
+  assert.equal(store.getRun(runId)?.state, "success");
+  await assert.rejects(
+    () =>
+      runtime.spawn({ ...profile, model: "faux/missing" }, "Task.", "bus-1", {
+        id: "late-child",
+        name: "late-child",
+        parentRunId: runId,
+      }),
+    /Parent agent parent-with-pending-child is success\./,
+  );
+  runtime.dispose();
+});
+
+test("finish rejects a coordinator until its workflow closes", async () => {
+  const store = new InMemoryAgentStore();
+  const runId = "workflow-coordinator";
+  store.saveRun(run(runId, null));
+  const workflow = {
+    id: "workflow-1",
+    name: "flow-review",
+    busId: "bus-flow-review",
+    ownerSessionId: "owner",
+    goal: "Review the change.",
+    ownerRunId: null,
+    coordinatorRunId: runId,
+    workgroupIds: [],
+    state: "running" as const,
+    result: null,
+    createdAtMs: Date.now(),
+  };
+  store.saveWorkflow(workflow);
+  const runtime = createRuntime(store);
+  installEntry(runtime, runId, createHealthHarness());
+  const finishTool = runtimeInternals(runtime)
+    .createChildTools(runId)
+    .find((tool) => tool.name === "finish");
+  assert.ok(finishTool);
+
+  await assert.rejects(
+    () => finishTool.execute("finish-call", { status: "success", summary: "Done." }),
+    /Agent workflow-coordinator coordinates running workflow flow-review; use workflow action=finish before finish\./,
+  );
+  assert.equal(store.getRun(runId)?.state, "running");
+
+  store.saveWorkflow({ ...workflow, state: "closed", result: { status: "success", summary: "Done." } });
+  await finishTool.execute("finish-call", { status: "success", summary: "Done." });
+  assert.equal(store.getRun(runId)?.state, "success");
+  runtime.dispose();
+});
+
 test("finish requires confirmation after queued messages and retains an unconfirmed result", async () => {
   const store = new InMemoryAgentStore();
   const runId = "finish-with-queued-message";

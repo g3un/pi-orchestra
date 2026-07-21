@@ -60,3 +60,10 @@ export function createWorkflowRun(options: CreateWorkflowRunOptions): WorkflowRu
     createdAtMs: Date.now(),
   };
 }
+
+export function findRunningCoordinatedWorkflow(
+  workflows: WorkflowRun[],
+  coordinatorRunId: AgentRun["id"],
+): WorkflowRun | undefined {
+  return workflows.find((workflow) => workflow.coordinatorRunId === coordinatorRunId && workflow.state === "running");
+}

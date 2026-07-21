@@ -5,6 +5,7 @@ import { closeStandalonePrivateBusIfUnused } from "../core/auto-bus.ts";
 import { createBusSubscription, maxMessageSeq, type Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
 import type { AgentStore } from "../core/store.ts";
+import { findRunningCoordinatedWorkflow } from "../core/workflow.ts";
 import { findRunningLedWorkgroup } from "../core/workgroup.ts";
 import { createBusNameFromOwnerName, createPrefixedName, getBusOwnerRawNameBudget } from "../naming.ts";
 import { assertAgentRunNameAvailable, isAgentRunActive, normalizeEntityName, requireParam } from "../utils.ts";
@@ -217,7 +218,7 @@ export function defineSubagentPiTool(resolveTool: (ctx: ExtensionContext) => Sub
     promptGuidelines: [
       "Omit busId for the default private bus; pass busId only when related agents should share an existing bus.",
       "Use subagent status/message/close with the returned run name.",
-      "Use subagent close only after active descendants and any led workgroup are closed; it never cascades.",
+      "Use subagent close only after active descendants, any led workgroup, and any coordinated workflow are closed; it never cascades.",
       "For deeper trees, message the target child to clean up its descendants; use main/root for bottom-up recovery if it cannot.",
     ],
     parameters: SubagentToolParams,
@@ -401,6 +402,13 @@ function requireSubagentCloseable(store: AgentStore, targetRun: AgentRun, parent
   if (ledWorkgroup) {
     throw new Error(
       `Agent ${targetRun.name} leads running workgroup ${ledWorkgroup.name}; finish or cancel it before closing the agent.`,
+    );
+  }
+
+  const coordinatedWorkflow = findRunningCoordinatedWorkflow(store.listWorkflows(), targetRun.id);
+  if (coordinatedWorkflow) {
+    throw new Error(
+      `Agent ${targetRun.name} coordinates running workflow ${coordinatedWorkflow.name}; cancel it before closing the agent.`,
     );
   }
 

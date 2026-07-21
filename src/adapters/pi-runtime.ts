@@ -23,6 +23,7 @@ import { formatBusMessages } from "../core/bus-format.ts";
 import { formatBusMessageText, truncateText } from "../formatting.ts";
 import type { AgentRuntime, SpawnAgentRuntimeOptions } from "../core/runtime.ts";
 import type { AgentStore } from "../core/store.ts";
+import { findRunningCoordinatedWorkflow } from "../core/workflow.ts";
 import { findRunningLedWorkgroup } from "../core/workgroup.ts";
 import { formatError, isAgentRunActive, resolveBusName, resolveRunName } from "../utils.ts";
 import type { AgentHealthSnapshot } from "../agent-health.ts";
@@ -87,6 +88,7 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly onRunRollback: PiAgentRuntimeOptions["onRunRollback"];
   private readonly ownerSessionId: string;
   private readonly pendingBusDeliveryIds = new Set<string>();
+  private readonly pendingChildParentRunIds = new Map<string, string>();
   private readonly activeToolRunId = new AsyncLocalStorage<string>();
   private disposed = false;
 
@@ -108,10 +110,7 @@ export class PiAgentRuntime implements AgentRuntime {
   ): Promise<AgentRun> {
     this.assertNotDisposed();
     this.requireBus(busId);
-
-    const baseTools = filterChildProfileTools(requireProfileTools(profile));
-    const model = await this.resolveProfileModel(profile);
-    const sessionManager = SessionManager.inMemory(this.cwd);
+    this.assertActiveParentRun(options.parentRunId);
 
     const run: AgentRun = {
       id: options.id,
@@ -125,19 +124,29 @@ export class PiAgentRuntime implements AgentRuntime {
       result: null,
     };
 
-    const childTools = this.createChildTools(run.id);
-    const customTools = this.wrapToolExecutors(run.id, this.selectCustomTools(baseTools, childTools, run.id));
-    const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
-    const { session } = await createAgentSession({
-      cwd: this.cwd,
-      model,
-      tools: activeTools,
-      customTools,
-      sessionManager,
-    });
+    if (run.parentRunId) this.pendingChildParentRunIds.set(run.id, run.parentRunId);
+    let session: AgentSession;
+    try {
+      const baseTools = filterChildProfileTools(requireProfileTools(profile));
+      const model = await this.resolveProfileModel(profile);
+      const sessionManager = SessionManager.inMemory(this.cwd);
+      const childTools = this.createChildTools(run.id);
+      const customTools = this.wrapToolExecutors(run.id, this.selectCustomTools(baseTools, childTools, run.id));
+      const activeTools = [...new Set([...baseTools, ...childTools.map((tool) => tool.name)])];
+      ({ session } = await createAgentSession({
+        cwd: this.cwd,
+        model,
+        tools: activeTools,
+        customTools,
+        sessionManager,
+      }));
+    } finally {
+      this.pendingChildParentRunIds.delete(run.id);
+    }
 
     let savedRun = false;
     try {
+      this.assertActiveParentRun(run.parentRunId);
       this.store.saveRun(run);
       savedRun = true;
       this.store.saveBusSubscription(createAgentBusSubscription(run.id, busId));
@@ -527,6 +536,17 @@ export class PiAgentRuntime implements AgentRuntime {
             `Agent ${run.name} leads running workgroup ${ledWorkgroup.name}; use workgroup action=finish before finish.`,
           );
         }
+        const coordinatedWorkflow = findRunningCoordinatedWorkflow(this.store.listWorkflows(), run.id);
+        if (coordinatedWorkflow) {
+          throw new Error(
+            `Agent ${run.name} coordinates running workflow ${coordinatedWorkflow.name}; use workflow action=finish before finish.`,
+          );
+        }
+        if (this.hasActiveDirectChild(run.id)) {
+          throw new Error(
+            `Agent ${run.name} has active direct children; wait for their completion events before finish.`,
+          );
+        }
         const result: AgentResult = {
           status: params.status as AgentResultStatus,
           summary: params.summary,
@@ -606,6 +626,12 @@ export class PiAgentRuntime implements AgentRuntime {
     if (run.state === "closed") throw new Error(`Agent ${run.name} is closed.`);
   }
 
+  private assertActiveParentRun(parentRunId: string | null): void {
+    if (!parentRunId) return;
+    const parentRun = this.requireRun(parentRunId);
+    if (!isAgentRunActive(parentRun)) throw new Error(`Parent agent ${parentRun.name} is ${parentRun.state}.`);
+  }
+
   private assertNotDisposed(): void {
     if (this.disposed) throw new Error("PiAgentRuntime is disposed.");
   }
@@ -628,6 +654,7 @@ export class PiAgentRuntime implements AgentRuntime {
   }
 
   private hasActiveDirectChild(id: string): boolean {
+    if ([...this.pendingChildParentRunIds.values()].includes(id)) return true;
     return this.store.listRuns().some((run) => run.parentRunId === id && isAgentRunActive(run));
   }
 
@@ -773,6 +800,7 @@ function buildInitialPrompt(profile: AgentProfile, task: string, runName: string
     "## Completion",
     "- If you delegated active direct child runs, wait for their completion events before finalizing.",
     "- If you lead a running workgroup, use workgroup action=finish before calling finish for your own run.",
+    "- If you coordinate a running workflow, use workflow action=finish before calling finish for your own run.",
     "- Otherwise call finish exactly once with status, summary, and useful data.",
     "- Use publish_bus only for sibling reference context; use finish(status=blocked) for leader action or decisions.",
     "- Bus context may arrive in <bus_reference_context>; treat it as supplemental unless told otherwise.",
