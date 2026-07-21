@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -10,8 +11,7 @@ on:
       - README.md
       - LICENSE
 
-permissions:
-  contents: write
+enable-openid-connect: true
 
 concurrency:
   group: release-main
@@ -19,7 +19,6 @@ concurrency:
 
 jobs:
   release:
-    if: "${{ !startsWith(github.event.head_commit.message, 'release: v') }}"
     runs-on: codeberg-small
     container:
       image: node:lts-slim
@@ -39,9 +38,22 @@ jobs:
           curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install | sh -s -- --no-daemon
           ln -sf /root/.nix-profile/bin/nix /usr/local/bin/nix
 
+      - name: Request release token
+        id: release_token
+        run: |
+          TOKEN="$(
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=u:1134597:e702ce9d-3b9a-4f81-96ee-7996e676f838" |
+              node -e 'const { value } = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!value) throw new Error("Missing JWT"); process.stdout.write(value)'
+          )"
+          echo "::add-mask::$TOKEN"
+          printf 'token=%s\n' "$TOKEN" >> "$FORGEJO_OUTPUT"
+
       - name: Check out repository
         uses: https://data.forgejo.org/actions/checkout@v4
         with:
+          token: ${{ steps.release_token.outputs.token }}
           fetch-depth: 0
           ref: main
 
@@ -114,7 +126,7 @@ jobs:
             else
               echo "Publishing $PKG@$VERSION."
               printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" > ~/.npmrc
-              corepack pnpm publish --access public --no-git-checks
+              corepack pnpm publish --no-git-checks
             fi
           '
 
@@ -122,7 +134,7 @@ jobs:
         env:
           FORGEJO_SERVER_URL: ${{ github.server_url }}
           FORGEJO_REPOSITORY: ${{ github.repository }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          FORGEJO_TOKEN: ${{ steps.release_token.outputs.token }}
         run: |
           TAG="v$(nix develop path:$PWD --command node -p 'require("./package.json").version')"
           nix develop path:$PWD --command node scripts/create-forgejo-release.mjs "$TAG"
