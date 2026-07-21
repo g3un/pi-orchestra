@@ -4,7 +4,7 @@ export const RESULT_DATA_MAX_CHARS = DEFAULT_MAX_CHARS;
 export const BUS_MESSAGE_MAX_CHARS = DEFAULT_MAX_CHARS;
 export const DETAIL_MAX_COLLECTION_ITEMS = 10;
 export const RESULT_DATA_TRUNCATION_SUFFIX =
-  "\n… truncated; inspect the child run details/session for complete result data.";
+  "\n… truncated; for large results, have the child write the full data to a file in the shared cwd and return its path in the result.";
 
 export function formatFullResultData(data: unknown): string {
   return typeof data === "string" ? data : (JSON.stringify(data, null, 2) ?? String(data));

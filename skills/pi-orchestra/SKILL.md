@@ -27,6 +27,7 @@ Do not delegate trivial tasks that you can finish faster yourself.
 ## References
 
 - `references/subagent.md` for standalone bus + subagent calls.
+- `references/failure-handling.md` for retrying or steering child runs and handing off large results.
 - `references/workgroup.md` for workgroup create/add_members/finish/cancel calls.
 - `references/workflow.md` for workflow create/add_workgroup/finish/cancel calls.
 
