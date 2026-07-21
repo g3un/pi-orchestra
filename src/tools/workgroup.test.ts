@@ -42,6 +42,7 @@ function workgroupDeps(orchestra: OrchestraApi & { store: InMemoryAgentStore }):
     store: orchestra.store,
     parentRunId: null,
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
     onWorkgroupLaunching: undefined,
     onWorkgroupLaunched: undefined,
     onWorkgroupLaunchFailed: undefined,
@@ -403,6 +404,36 @@ test("workgroup status shows member models", async () => {
 
   assert.equal(status.action, "status");
   assert.match(status.message, /- agent-codex-mini-medium: running — openai-codex\/gpt-5\.4-mini/);
+});
+
+test("workgroup status reports member health", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = createWorkgroupTool({
+    ...workgroupDeps(orchestra),
+    resolveAgentHealth: (runId) =>
+      runId === "agent-health-check"
+        ? { phase: "compacting", contextPercent: 92.6, finalError: "Context limit reached." }
+        : undefined,
+  });
+  const created = await tool.execute({
+    action: "create",
+    name: "health-workgroup",
+    goal: "Inspect member health.",
+  });
+  const workgroup = requireCreatedWorkgroup(created);
+  await tool.execute({
+    action: "add_members",
+    id: workgroup.id,
+    members: [{ name: "health-check", profile: backendProfile, task: "Inspect health." }],
+  });
+
+  const status = await tool.execute({ action: "status", id: workgroup.id });
+
+  assert.equal(status.action, "status");
+  assert.match(
+    status.message,
+    /- agent-health-check: running — inherited model \[compacting ctx=93% error=Context limit reached\.\]/,
+  );
 });
 
 test("workgroup member task guides members to share useful context", async () => {

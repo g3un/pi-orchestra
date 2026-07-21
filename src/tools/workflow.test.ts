@@ -22,6 +22,7 @@ function deps(orchestra: FakeOrchestra, parentRunId: string | null = null): Work
     store: orchestra.store,
     parentRunId,
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
     onWorkgroupLaunching: undefined,
     onWorkgroupLaunched: undefined,
     onWorkgroupLaunchFailed: undefined,

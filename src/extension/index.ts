@@ -75,6 +75,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     ownerSessionId,
     onRunRollback: (runId) => orchestraEvents.suppressRunFinish(runId),
   });
+  const resolveAgentHealth = (runId: string) => runtime.getHealthSnapshot(runId);
   const orchestra = new Orchestra({ runtime, store });
   const orchestraEvents = new OrchestraEventController({
     store,
@@ -93,6 +94,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
       store,
       parentRunId,
       ownerSessionId,
+      resolveAgentHealth,
       onWorkgroupLaunching: ({ bus, workgroup, runIds, runNames }) =>
         orchestraEvents.beginWorkgroup({ busId: bus.id, leaderRunId: workgroup.leaderRunId, runIds, runNames }),
       onWorkgroupLaunched: ({ bus, workgroup, output }) =>
@@ -105,13 +107,14 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
         orchestraEvents.cancelWorkgroupLaunch(bus.id, { suppressRunIds: runIds }),
     });
   const createScopedSubagentTool = (parentRunId: string | null) =>
-    createSubagentTool({ orchestra, store, parentRunId, ownerSessionId });
+    createSubagentTool({ orchestra, store, parentRunId, ownerSessionId, resolveAgentHealth });
   const createScopedWorkflowTool = (parentRunId: string | null) =>
     createWorkflowTool({
       orchestra,
       store,
       parentRunId,
       ownerSessionId,
+      resolveAgentHealth,
       onWorkgroupLaunching: ({ bus, workgroup, runIds, runNames }) =>
         orchestraEvents.beginWorkgroup({ busId: bus.id, leaderRunId: workgroup.leaderRunId, runIds, runNames }),
       onWorkgroupLaunched: ({ bus, workgroup, output }) =>
@@ -130,7 +133,7 @@ function getBundle(pi: ExtensionAPI, bundles: Map<string, ToolBundle>, ctx: Exte
     workflowTool: createScopedWorkflowTool(null),
     orchestraMonitor: new OrchestraMonitorController(store, {
       now: undefined,
-      resolveAgentHealth: (runId) => runtime.getHealthSnapshot(runId),
+      resolveAgentHealth,
       tickMs: undefined,
     }),
     orchestraEvents,

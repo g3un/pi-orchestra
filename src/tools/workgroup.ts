@@ -1,5 +1,6 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { formatAgentHealth, type ResolveAgentHealth } from "../agent-health.ts";
 import {
   AGENT_RESULT_STATUS_VALUES,
   type AgentResult,
@@ -132,6 +133,7 @@ export interface WorkgroupToolDeps {
   onWorkgroupLaunchFailed: ((event: WorkgroupLaunchFailedEvent) => void) | undefined;
   parentRunId: string | null;
   ownerSessionId: string;
+  resolveAgentHealth: ResolveAgentHealth | undefined;
 }
 
 export interface CreateAndLaunchWorkgroupOptions extends WorkgroupToolDeps {
@@ -229,6 +231,7 @@ export function createWorkgroupTool({
   onWorkgroupLaunchFailed,
   parentRunId,
   ownerSessionId,
+  resolveAgentHealth,
 }: WorkgroupToolDeps): WorkgroupTool {
   return {
     name: "workgroup",
@@ -259,7 +262,7 @@ export function createWorkgroupTool({
           workgroup,
           bus,
           runs: [],
-          message: formatWorkgroupStatusMessage(store, workgroup, bus),
+          message: formatWorkgroupStatusMessage(store, workgroup, bus, undefined),
         };
       }
 
@@ -276,7 +279,7 @@ export function createWorkgroupTool({
           workgroup,
           bus,
           runs: collectWorkgroupMemberRuns(store, workgroup),
-          message: formatWorkgroupStatusMessage(store, workgroup, bus),
+          message: formatWorkgroupStatusMessage(store, workgroup, bus, resolveAgentHealth),
         };
       }
 
@@ -743,7 +746,12 @@ function formatWorkgroupMembersAddedMessage(bus: Bus, workgroup: WorkgroupRun, r
   ].join("\n");
 }
 
-function formatWorkgroupStatusMessage(store: AgentStore, workgroup: WorkgroupRun, bus: Bus): string {
+function formatWorkgroupStatusMessage(
+  store: AgentStore,
+  workgroup: WorkgroupRun,
+  bus: Bus,
+  resolveAgentHealth: ResolveAgentHealth | undefined,
+): string {
   const runs = collectWorkgroupMemberRuns(store, workgroup);
   return [
     `Workgroup ${workgroup.name} on bus ${bus.name}.`,
@@ -754,12 +762,13 @@ function formatWorkgroupStatusMessage(store: AgentStore, workgroup: WorkgroupRun
     `Leader: ${formatWorkgroupLeaderName(store, workgroup)}`,
     "",
     `Members (${runs.length}):`,
-    ...(runs.length > 0 ? runs.map(formatWorkgroupMemberStatusLine) : ["- none"]),
+    ...(runs.length > 0 ? runs.map((run) => formatWorkgroupMemberStatusLine(run, resolveAgentHealth)) : ["- none"]),
   ].join("\n");
 }
 
-function formatWorkgroupMemberStatusLine(run: AgentRun): string {
-  return `- ${run.name}: ${run.state} — ${run.profile.model ?? "inherited model"}`;
+function formatWorkgroupMemberStatusLine(run: AgentRun, resolveAgentHealth: ResolveAgentHealth | undefined): string {
+  const health = formatAgentHealth(resolveAgentHealth?.(run.id));
+  return `- ${run.name}: ${run.state} — ${run.profile.model ?? "inherited model"}${health ? ` ${health}` : ""}`;
 }
 
 function formatWorkgroupLeaderName(store: AgentStore, workgroup: WorkgroupRun): string {

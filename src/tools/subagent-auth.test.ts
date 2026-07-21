@@ -17,6 +17,7 @@ test("child subagent status is scoped to self or direct children", async () => {
     store,
     parentRunId: "parent",
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
   });
 
   assert.equal((await tool.execute({ action: "status", id: "parent" })).run?.id, "parent");
@@ -25,6 +26,26 @@ test("child subagent status is scoped to self or direct children", async () => {
     () => tool.execute({ action: "status", id: "stranger" }),
     /Only main or direct parent parent can status subagent stranger\./,
   );
+});
+
+test("subagent status reports run health", async () => {
+  const store = new InMemoryAgentStore();
+  store.saveRun(run({ id: "child", name: "child", parentRunId: null }));
+  const tool = createSubagentTool({
+    orchestra: { getRun: (id: string) => store.getRun(id) } as unknown as OrchestraApi,
+    store,
+    parentRunId: null,
+    ownerSessionId: "session-1",
+    resolveAgentHealth: () => ({
+      phase: "retrying",
+      contextPercent: 87.6,
+      finalError: "Provider unavailable.",
+    }),
+  });
+
+  const output = await tool.execute({ action: "status", id: "child" });
+
+  assert.equal(output.message, "Subagent child is running. [retrying ctx=88% error=Provider unavailable.]");
 });
 
 test("explicit close rejects transitive descendants and supports main bottom-up recovery", async () => {
@@ -56,6 +77,7 @@ test("explicit close rejects transitive descendants and supports main bottom-up 
     store,
     parentRunId: "parent",
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
   });
 
   await assert.rejects(
@@ -64,7 +86,13 @@ test("explicit close rejects transitive descendants and supports main bottom-up 
   );
   assert.deepEqual(closedRunIds, []);
 
-  const mainTool = createSubagentTool({ orchestra, store, parentRunId: null, ownerSessionId: "session-1" });
+  const mainTool = createSubagentTool({
+    orchestra,
+    store,
+    parentRunId: null,
+    ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
+  });
   await mainTool.execute({ action: "close", id: "active-descendant" });
   await mainTool.execute({ action: "close", id: "finished-descendant" });
   await parentTool.execute({ action: "close", id: "child" });
@@ -93,6 +121,7 @@ test("explicit close rejects a running led workgroup but allows scope teardown",
     store,
     parentRunId: "parent",
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
   });
 
   await assert.rejects(
@@ -131,6 +160,7 @@ test("explicit close rejects a running coordinated workflow but allows scope tea
     store,
     parentRunId: "parent",
     ownerSessionId: "session-1",
+    resolveAgentHealth: undefined,
   });
 
   await assert.rejects(

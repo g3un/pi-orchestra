@@ -1,5 +1,6 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { formatAgentHealth, type ResolveAgentHealth } from "../agent-health.ts";
 import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import { closeStandalonePrivateBusIfUnused } from "../core/auto-bus.ts";
 import { createBusSubscription, maxMessageSeq, type Bus } from "../core/bus.ts";
@@ -59,6 +60,7 @@ export interface SubagentToolDeps {
   store: AgentStore;
   parentRunId: string | null;
   ownerSessionId: string;
+  resolveAgentHealth: ResolveAgentHealth | undefined;
 }
 
 export const SubagentRunNameParam = Type.String({
@@ -157,7 +159,13 @@ export async function spawnSubagent(
   return await orchestra.spawnAgent(input.profile, input.task, input.busId, { name: input.name, parentRunId });
 }
 
-export function createSubagentTool({ orchestra, store, parentRunId, ownerSessionId }: SubagentToolDeps): SubagentTool {
+export function createSubagentTool({
+  orchestra,
+  store,
+  parentRunId,
+  ownerSessionId,
+  resolveAgentHealth,
+}: SubagentToolDeps): SubagentTool {
   return {
     name: "subagent",
 
@@ -181,7 +189,8 @@ export function createSubagentTool({ orchestra, store, parentRunId, ownerSession
         const run = orchestra.getRun(input.id, { busId: undefined });
         if (!run) return { message: formatMissingSubagentMessage(input.id) };
         requireSubagentTargetAuthorized(store, run, parentRunId, "status");
-        return { run, message: formatRunMessage(run) };
+        const health = formatAgentHealth(resolveAgentHealth?.(run.id));
+        return { run, message: formatRunMessage(run, undefined, health) };
       }
 
       if (input.action === "message") {
@@ -443,10 +452,11 @@ function formatMissingSubagentMessage(id: string): string {
   return `Subagent ${id} not found.`;
 }
 
-function formatRunMessage(run: AgentRun, headline = `Subagent ${run.name} is ${run.state}.`): string {
-  if (run.result === null) return headline;
+function formatRunMessage(run: AgentRun, headline = `Subagent ${run.name} is ${run.state}.`, suffix?: string): string {
+  const fullHeadline = suffix ? `${headline} ${suffix}` : headline;
+  if (run.result === null) return fullHeadline;
 
-  const parts = [headline, "", `Result: ${run.result.status}`, run.result.summary];
+  const parts = [fullHeadline, "", `Result: ${run.result.status}`, run.result.summary];
   if (run.result.data !== undefined) {
     parts.push("", "Data:", formatResultData(run.result.data));
   }
