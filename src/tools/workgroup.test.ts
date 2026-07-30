@@ -20,6 +20,7 @@ const securityProfile: AgentProfile = {
   systemPrompt: "Review security risks.",
   tools: ["read", "bash"],
   model: undefined,
+  thinkingLevel: undefined,
 };
 
 const backendProfile: AgentProfile = {
@@ -27,6 +28,7 @@ const backendProfile: AgentProfile = {
   systemPrompt: "Review backend design.",
   tools: ["read", "bash"],
   model: undefined,
+  thinkingLevel: undefined,
 };
 
 const brokenProfile: AgentProfile = {
@@ -34,6 +36,7 @@ const brokenProfile: AgentProfile = {
   systemPrompt: "Fail during spawn.",
   tools: ["read", "bash"],
   model: undefined,
+  thinkingLevel: undefined,
 };
 
 function workgroupDeps(orchestra: OrchestraApi & { store: InMemoryAgentStore }): WorkgroupToolDeps {
@@ -379,7 +382,7 @@ test("workgroup creates an internal bus and launches members on it", async () =>
   );
 });
 
-test("workgroup status shows member models", async () => {
+test("workgroup status shows member model and thinkingLevel", async () => {
   const orchestra = new FakeOrchestra();
   const tool = createWorkgroupTool(workgroupDeps(orchestra));
   const created = await tool.execute({
@@ -394,7 +397,7 @@ test("workgroup status shows member models", async () => {
     members: [
       {
         name: "agent-codex-mini-medium",
-        profile: { ...backendProfile, model: "openai-codex/gpt-5.4-mini" },
+        profile: { ...backendProfile, model: "openai-codex/gpt-5.4-mini", thinkingLevel: "high" },
         task: "Inspect model selection.",
       },
     ],
@@ -403,7 +406,49 @@ test("workgroup status shows member models", async () => {
   const status = await tool.execute({ action: "status", id: workgroup.id });
 
   assert.equal(status.action, "status");
-  assert.match(status.message, /- agent-codex-mini-medium: running — openai-codex\/gpt-5\.4-mini/);
+  assert.match(status.message, /- agent-codex-mini-medium: running — openai-codex\/gpt-5\.4-mini, thinking high/);
+});
+
+test("workgroup add_members forwards member profile.thinkingLevel to orchestra.spawnAgent", async () => {
+  const orchestra = new FakeOrchestra();
+  const tool = defineWorkgroupPiTool(() => createWorkgroupTool(workgroupDeps(orchestra)));
+
+  await tool.execute(
+    "call-create",
+    {
+      action: "create",
+      name: "group-review",
+      goal: "Review the change.",
+    },
+    new AbortController().signal,
+    undefined,
+    {} as never,
+  );
+
+  await tool.execute(
+    "call-add-members",
+    {
+      action: "add_members",
+      id: "group-review",
+      members: [
+        {
+          name: "reviewer",
+          task: "Review the change.",
+          profile: {
+            name: "reviewer",
+            systemPrompt: "Review the change.",
+            tools: ["read"],
+            thinkingLevel: "low",
+          },
+        },
+      ],
+    },
+    new AbortController().signal,
+    undefined,
+    {} as never,
+  );
+
+  assert.equal(orchestra.spawned.at(-1)?.profile.thinkingLevel, "low");
 });
 
 test("workgroup status reports member health", async () => {

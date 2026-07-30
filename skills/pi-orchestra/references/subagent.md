@@ -26,7 +26,8 @@ on bus `bus-agent-auth-security-reviewer`.
   "profile": {
     "name": "Security Reviewer",
     "systemPrompt": "Review code changes for security regressions. Report findings with evidence and a risk level.",
-    "tools": ["read", "bash"]
+    "tools": ["read", "bash"],
+    "thinkingLevel": "high"
   },
   "task": "Review the auth refactor for security regressions. Finish with findings, evidence, and risk level."
 }
@@ -52,7 +53,8 @@ same reference context.
   "profile": {
     "name": "API Compatibility Reviewer",
     "systemPrompt": "Review API changes for compatibility risks and migration issues.",
-    "tools": ["read", "bash"]
+    "tools": ["read", "bash"],
+    "thinkingLevel": "medium"
   },
   "task": "Check whether the auth refactor changes public API behavior. Finish with compatibility findings."
 }
@@ -88,5 +90,6 @@ Use the returned run name, typically `agent-{name}` for standalone spawns.
 - Child agents receive `finish` and `publish_bus` automatically; do not include
   `bus` in profile tools.
 - Omit `profile.model` to inherit the current Pi model; set it only to an exact
-  `provider/model` id. The supervising caller chooses before spawn. An unknown id
-  fails at spawn.
+  `provider/model` id. An unknown id fails at spawn.
+- Optional `profile.thinkingLevel` uses Pi's native levels:
+  `off|minimal|low|medium|high|xhigh|max`. Omit it to keep Pi's normal child-session behavior.

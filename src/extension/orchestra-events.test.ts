@@ -5,7 +5,13 @@ import type { AgentRun } from "../core/subagent.ts";
 import type { WorkgroupRun } from "../core/workgroup.ts";
 import { OrchestraEventController, type OrchestraMainEvent } from "./orchestra-events.ts";
 
-const profile = { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined };
+const profile = {
+  name: "researcher",
+  systemPrompt: "Research.",
+  tools: [],
+  model: undefined,
+  thinkingLevel: undefined,
+};
 
 test.each([
   { label: "waiting", waiting: true, delivered: true },

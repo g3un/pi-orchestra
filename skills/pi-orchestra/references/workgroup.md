@@ -36,7 +36,8 @@ Each member needs its own custom profile and its own run `name`.
       "profile": {
         "name": "Security Reviewer",
         "systemPrompt": "Review code changes for security risks. Report findings with evidence.",
-        "tools": ["read", "bash"]
+        "tools": ["read", "bash"],
+        "thinkingLevel": "high"
       },
       "task": "Review security risks in the auth refactor."
     },
@@ -45,7 +46,8 @@ Each member needs its own custom profile and its own run `name`.
       "profile": {
         "name": "API Compatibility Reviewer",
         "systemPrompt": "Review code changes for API compatibility and migration risks. Report findings with evidence.",
-        "tools": ["read", "bash"]
+        "tools": ["read", "bash"],
+        "thinkingLevel": "medium"
       },
       "task": "Review API compatibility risks in the auth refactor."
     }
@@ -86,5 +88,6 @@ Only the workgroup leader should finish the group result.
   needs cleanup.
 - Prefer 2-4 well-briefed members over many vague members.
 - For member `profile.model`, omit to inherit the current Pi model; set it only
-  to an exact `provider/model` id. The workgroup leader chooses before
-  `add_members`. An unknown id fails at spawn.
+  to an exact `provider/model` id. An unknown id fails at spawn.
+- Optional member `profile.thinkingLevel` uses Pi's native levels:
+  `off|minimal|low|medium|high|xhigh|max`. Omit it to keep Pi's normal child-session behavior.

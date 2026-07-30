@@ -50,7 +50,8 @@ Only the workflow coordinator should call this.
       "profile": {
         "name": "Token Security Reviewer",
         "systemPrompt": "Review token handling for security regressions. Report findings with evidence.",
-        "tools": ["read", "bash"]
+        "tools": ["read", "bash"],
+        "thinkingLevel": "high"
       },
       "task": "Check token refresh, storage, expiry, and revocation edge cases."
     }
@@ -97,5 +98,7 @@ closed.
 - Do not create workflow buses manually.
 - Do not use nested workflows.
 - Direct workflow subagents are not supported; create workgroups instead.
+- Optional member `profile.thinkingLevel` uses Pi's native levels:
+  `off|minimal|low|medium|high|xhigh|max`. Omit it to keep Pi's normal child-session behavior.
 - Prefer one workgroup at a time unless the next phase truly does not depend on
   previous results.

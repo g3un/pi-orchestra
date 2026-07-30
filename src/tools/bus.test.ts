@@ -291,7 +291,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
   return buildAgentRun({
     id,
     name: overrides.name ?? id,
-    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined, thinkingLevel: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "running",

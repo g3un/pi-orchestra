@@ -136,6 +136,7 @@ export class PiAgentRuntime implements AgentRuntime {
       ({ session } = await createAgentSession({
         cwd: this.cwd,
         model,
+        thinkingLevel: profile.thinkingLevel,
         tools: activeTools,
         customTools,
         sessionManager,

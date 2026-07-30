@@ -26,7 +26,8 @@ Pi-Orchestra registers four tools: `bus`, `subagent`, `workgroup`, and `workflow
   nested scopes; reopen it with `/orchestra-monitor`.
 - Child profiles are always custom: a `name`, a `systemPrompt`, and a `tools`
   allowlist. Set `profile.model` to an exact `provider/model` id, or omit it to
-  inherit the current Pi model.
+  inherit the current Pi model. Set `profile.thinkingLevel` to one of
+  `off|minimal|low|medium|high|xhigh|max`, or omit it to keep Pi's normal child-session behavior.
 
 ## Development
 
@@ -50,8 +51,8 @@ A bus is shared reference context for standalone subagents. Omit `busId` on a st
 ### Subagent
 
 A subagent is one isolated child agent with a role, task, explicit tool allowlist,
-and optional model. Use it for a focused independent task such as review,
-research, planning, or an alternative implementation attempt.
+and optional model/thinking level. Use it for a focused independent task such as
+review, research, planning, or an alternative implementation attempt.
 
 ### Workgroup
 

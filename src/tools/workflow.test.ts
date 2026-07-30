@@ -7,13 +7,14 @@ import type { AgentProfile, AgentRun } from "../core/subagent.ts";
 import type { WorkflowRun } from "../core/workflow.ts";
 import { OrchestraEventController, type OrchestraMainEvent } from "../extension/orchestra-events.ts";
 import { slugify } from "../utils.ts";
-import { closeWorkflowRun, createWorkflowTool, type WorkflowToolDeps } from "./workflow.ts";
+import { closeWorkflowRun, createWorkflowTool, defineWorkflowPiTool, type WorkflowToolDeps } from "./workflow.ts";
 
 const reviewerProfile: AgentProfile = {
   name: "reviewer",
   systemPrompt: "Review the work.",
   tools: ["read"],
   model: undefined,
+  thinkingLevel: undefined,
 };
 
 function deps(orchestra: FakeOrchestra, parentRunId: string | null = null): WorkflowToolDeps {
@@ -43,6 +44,54 @@ test("workflow create records flow-prefixed workflow, bus, and coordinator", asy
   assert.equal(output.coordinator.name, "agent-flow-review-coordinator");
   assert.deepEqual(output.coordinator.profile.tools, ["workflow", "publish_bus"]);
   assert.match(orchestra.messages[0]?.message ?? "", /is registered/);
+});
+
+test("workflow add_workgroup forwards member profile.thinkingLevel to orchestra.spawnAgent", async () => {
+  const orchestra = new FakeOrchestra();
+  const createTool = defineWorkflowPiTool(() => createWorkflowTool(deps(orchestra)));
+
+  await createTool.execute(
+    "call-create",
+    {
+      action: "create",
+      name: "review",
+      goal: "Run staged reviews.",
+    },
+    new AbortController().signal,
+    undefined,
+    {} as never,
+  );
+
+  const workflow = orchestra.store.listWorkflows()[0];
+  if (!workflow) throw new Error("Expected workflow to be created.");
+  const addWorkgroupTool = defineWorkflowPiTool(() => createWorkflowTool(deps(orchestra, workflow.coordinatorRunId)));
+
+  await addWorkgroupTool.execute(
+    "call-add-workgroup",
+    {
+      action: "add_workgroup",
+      id: workflow.id,
+      name: "phase-one",
+      goal: "Review phase one.",
+      members: [
+        {
+          name: "reviewer",
+          task: "Review.",
+          profile: {
+            name: "reviewer",
+            systemPrompt: "Review the work.",
+            tools: ["read"],
+            thinkingLevel: "minimal",
+          },
+        },
+      ],
+    },
+    new AbortController().signal,
+    undefined,
+    {} as never,
+  );
+
+  assert.equal(orchestra.spawned.at(-1)?.profile.thinkingLevel, "minimal");
 });
 
 test("workflow add_workgroup is coordinator-only and records child workgroup", async () => {
@@ -269,6 +318,12 @@ class FakeOrchestra implements OrchestraApi {
   store = new InMemoryAgentStore();
   buses = new Map<string, Bus>();
   runs = new Map<string, AgentRun>();
+  spawned: Array<{
+    profile: AgentProfile;
+    task: string;
+    busId: string;
+    options: { name: string | undefined; parentRunId: string | null };
+  }> = [];
   messages: Array<{ id: string; message: string }> = [];
   failMessages = false;
   memberSpawnDelay: Promise<void> | undefined;
@@ -327,6 +382,7 @@ class FakeOrchestra implements OrchestraApi {
       state: "running",
       result: null,
     };
+    this.spawned.push({ profile, task, busId: bus.id, options });
     this.runs.set(run.id, run);
     this.store.saveRun(run);
     return run;

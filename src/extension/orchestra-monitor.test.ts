@@ -420,6 +420,7 @@ function run(overrides: Partial<AgentRun> & { profileName?: string; task?: strin
       systemPrompt: "Research.",
       tools: [],
       model: undefined,
+      thinkingLevel: undefined,
     },
     task: runOverrides.task ?? "Inspect the code.",
     busId: runOverrides.busId ?? "bus-1",

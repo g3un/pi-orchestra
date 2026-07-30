@@ -246,6 +246,7 @@ function createWorkflowCoordinatorProfile(): AgentProfile {
       "You are the workflow coordinator. Use only workflow add_workgroup to create child workgroups, wait for workflow.workgroup_finished events before deciding the next step, and call workflow finish when the goal is complete.",
     tools: ["workflow", "publish_bus"],
     model: undefined,
+    thinkingLevel: undefined,
   };
 }
 

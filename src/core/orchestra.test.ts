@@ -13,6 +13,7 @@ const profile: AgentProfile = {
   systemPrompt: "Research the assigned task.",
   tools: ["read", "bash"],
   model: undefined,
+  thinkingLevel: undefined,
 };
 
 test("orchestra creates buses in the store", () => {
@@ -407,7 +408,7 @@ function run(overrides: Partial<AgentRun>): AgentRun {
   return buildAgentRun({
     id,
     name: overrides.name ?? id,
-    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined },
+    profile: { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined, thinkingLevel: undefined },
     task: "Inspect the code.",
     busId: "bus-1",
     state: "running",

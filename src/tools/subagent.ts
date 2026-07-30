@@ -1,7 +1,12 @@
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatAgentHealth, type ResolveAgentHealth } from "../agent-health.ts";
-import type { AgentProfile, AgentRun } from "../core/subagent.ts";
+import {
+  AGENT_THINKING_LEVEL_VALUES,
+  type AgentProfile,
+  type AgentRun,
+  type AgentThinkingLevel,
+} from "../core/subagent.ts";
 import { closeStandalonePrivateBusIfUnused } from "../core/auto-bus.ts";
 import { createBusSubscription, maxMessageSeq, type Bus } from "../core/bus.ts";
 import type { OrchestraApi } from "../core/orchestra.ts";
@@ -77,6 +82,14 @@ const AgentProfileModelParam = Type.Optional(
   }),
 );
 
+const AgentProfileThinkingLevelParam = Type.Optional(
+  Type.String({
+    enum: [...AGENT_THINKING_LEVEL_VALUES],
+    description:
+      "Optional Pi thinking level. Accepted values: off, minimal, low, medium, high, xhigh, max. Omit to keep Pi's default child-session behavior.",
+  }),
+);
+
 export const AgentProfileParams = Type.Object(
   {
     name: Type.Optional(
@@ -87,6 +100,7 @@ export const AgentProfileParams = Type.Object(
     systemPrompt: Type.Optional(Type.String({ description: "Required. The child agent's system prompt." })),
     tools: AgentProfileToolsParam,
     model: AgentProfileModelParam,
+    thinkingLevel: AgentProfileThinkingLevelParam,
   },
   {
     additionalProperties: false,
@@ -371,6 +385,7 @@ export function toAgentProfile(profile: RawAgentProfileParams): AgentProfile {
     systemPrompt: profile.systemPrompt,
     tools: profile.tools,
     model: profile.model,
+    thinkingLevel: profile.thinkingLevel,
   };
 }
 
@@ -494,6 +509,7 @@ export type RawAgentProfileParams = {
   systemPrompt?: string;
   tools?: string[];
   model?: string;
+  thinkingLevel?: AgentThinkingLevel;
 };
 
 type AgentProfileModel = NonNullable<ExtensionContext["model"]>;

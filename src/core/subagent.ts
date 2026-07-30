@@ -1,6 +1,9 @@
 export const AGENT_RESULT_STATUS_VALUES = ["success", "blocked", "failed"] as const;
 export type AgentResultStatus = (typeof AGENT_RESULT_STATUS_VALUES)[number];
 
+export const AGENT_THINKING_LEVEL_VALUES = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type AgentThinkingLevel = (typeof AGENT_THINKING_LEVEL_VALUES)[number];
+
 export type AgentRunState = "running" | "closed" | AgentResultStatus;
 
 export interface AgentProfile {
@@ -8,6 +11,7 @@ export interface AgentProfile {
   systemPrompt: string;
   tools: string[];
   model: string | undefined;
+  thinkingLevel: AgentThinkingLevel | undefined;
 }
 
 export interface AgentResult {

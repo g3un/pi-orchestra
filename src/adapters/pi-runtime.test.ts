@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, vi } from "vitest";
 import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { closeRuntimeOwnedStandalonePrivateBuses } from "../core/auto-bus.ts";
 import { createBusSubscription } from "../core/bus.ts";
 import { Orchestra } from "../core/orchestra.ts";
@@ -14,22 +14,73 @@ import { closeWorkgroupRun } from "../tools/workgroup.ts";
 import { InMemoryAgentStore } from "./in-memory-store.ts";
 import { observeAgentSessionHealth, PiAgentRuntime } from "./pi-runtime.ts";
 
+const createAgentSessionCalls = vi.hoisted((): CreateAgentSessionOptions[] => []);
+const createAgentSessionState = vi.hoisted(() => ({ faux: undefined as unknown }));
+
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
-  // Exercise the real session factory with deterministic in-memory auth.
-  const authStorage = actual.AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey("faux", "test");
   return {
     ...actual,
-    createAgentSession: (options?: CreateAgentSessionOptions) => actual.createAgentSession({ ...options, authStorage }),
+    createAgentSession: async (options?: CreateAgentSessionOptions) => {
+      createAgentSessionCalls.push(options ?? {});
+      const faux = createAgentSessionState.faux as ReturnType<typeof fauxProvider> | undefined;
+      if (!faux) return actual.createAgentSession(options);
+      const modelRuntime = await actual.ModelRuntime.create({ allowModelNetwork: false });
+      modelRuntime.registerProvider(faux.provider.id, {
+        api: faux.models[0].api,
+        streamSimple: faux.provider.streamSimple.bind(faux.provider),
+        models: faux.models.map(
+          ({
+            id,
+            name,
+            api,
+            baseUrl,
+            reasoning,
+            thinkingLevelMap,
+            input,
+            cost,
+            contextWindow,
+            maxTokens,
+            headers,
+            compat,
+          }) => ({
+            id,
+            name,
+            api,
+            baseUrl,
+            reasoning,
+            thinkingLevelMap,
+            input,
+            cost,
+            contextWindow,
+            maxTokens,
+            headers,
+            compat,
+          }),
+        ),
+      });
+      await modelRuntime.setRuntimeApiKey(faux.provider.id, "test");
+      return actual.createAgentSession({ ...options, modelRuntime });
+    },
   };
 });
 
-const profile = { name: "researcher", systemPrompt: "Research.", tools: [], model: undefined };
+const profile = {
+  name: "researcher",
+  systemPrompt: "Research.",
+  tools: [],
+  model: undefined,
+  thinkingLevel: undefined,
+};
+
+function setMockFauxProvider(faux: ReturnType<typeof fauxProvider> | undefined): void {
+  createAgentSessionState.faux = faux;
+}
 
 test("spawn completes a child conversation without creating an orchestra directory", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-orchestra-runtime-"));
-  const faux = registerFauxProvider();
+  const faux = fauxProvider();
+  setMockFauxProvider(faux);
   faux.setResponses([
     fauxAssistantMessage(fauxToolCall("finish", { status: "success", summary: "Done." }), {
       stopReason: "toolUse",
@@ -58,9 +109,56 @@ test("spawn completes a child conversation without creating an orchestra directo
     assert.equal(store.getRun("agent-memory")?.state, "success");
     assert.equal(existsSync(join(cwd, ".pi", "orchestra")), false);
   } finally {
+    setMockFauxProvider(undefined);
     runtime.dispose();
-    faux.unregister();
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("spawn passes profile thinkingLevel=max to the child session", async () => {
+  createAgentSessionCalls.length = 0;
+  const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+  setMockFauxProvider(faux);
+  const model = faux.getModel();
+  assert.ok(model);
+  model.thinkingLevelMap = {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  };
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("finish", { status: "success", summary: "Done." }), {
+      stopReason: "toolUse",
+    }),
+  ]);
+  const store = new InMemoryAgentStore();
+  store.saveBus({ id: "bus-thinking", name: "bus-thinking", state: "open", messages: [], nextMessageSeq: 1 });
+  const runtime = new PiAgentRuntime({
+    store,
+    cwd: undefined,
+    resolveModel: () => faux.getModel(),
+    resolveCustomTools: () => [],
+    ownerSessionId: "owner",
+  });
+
+  try {
+    await runtime.spawn({ ...profile, model: "faux/faux-1", thinkingLevel: "max" }, "Research.", "bus-thinking", {
+      id: "agent-thinking",
+      name: "agent-thinking",
+      parentRunId: null,
+    });
+    await runtimeInternals(runtime).entries.get("agent-thinking")?.promptTask;
+
+    assert.equal(createAgentSessionCalls.at(-1)?.thinkingLevel, "max");
+    assert.equal(runtimeInternals(runtime).entries.get("agent-thinking")?.session.state.thinkingLevel, "max");
+    assert.equal(store.getRun("agent-thinking")?.profile.thinkingLevel, "max");
+    assert.equal(store.getRun("agent-thinking")?.state, "success");
+  } finally {
+    setMockFauxProvider(undefined);
+    runtime.dispose();
   }
 });
 

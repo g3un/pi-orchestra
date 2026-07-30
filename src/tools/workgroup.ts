@@ -768,7 +768,16 @@ function formatWorkgroupStatusMessage(
 
 function formatWorkgroupMemberStatusLine(run: AgentRun, resolveAgentHealth: ResolveAgentHealth | undefined): string {
   const health = formatAgentHealth(resolveAgentHealth?.(run.id));
-  return `- ${run.name}: ${run.state} — ${run.profile.model ?? "inherited model"}${health ? ` ${health}` : ""}`;
+  return `- ${run.name}: ${run.state} — ${formatWorkgroupMemberRuntime(run)}${health ? ` ${health}` : ""}`;
+}
+
+function formatWorkgroupMemberRuntime(run: AgentRun): string {
+  return [
+    run.profile.model ?? "inherited model",
+    run.profile.thinkingLevel ? `thinking ${run.profile.thinkingLevel}` : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(", ");
 }
 
 function formatWorkgroupLeaderName(store: AgentStore, workgroup: WorkgroupRun): string {
