@@ -6,7 +6,7 @@ description: "Use whenever using Pi-Orchestra: bus, subagent, workgroup, workflo
 # Pi-Orchestra
 
 Use Pi-Orchestra to parallelize or structure work without losing the main thread.
-Do not delegate trivial tasks that you can finish faster yourself.
+Unless orchestration-only mode is active, do not delegate trivial tasks that you can finish faster yourself.
 
 ## Tool choice
 
@@ -14,6 +14,10 @@ Do not delegate trivial tasks that you can finish faster yourself.
 - Use `workgroup` when one leader should coordinate multiple members toward one shared goal. The workgroup creates its private bus internally; the leader adds members, consumes member finish events, and calls `workgroup finish`.
 - Use `workflow` when a coordinator should run workgroups sequentially and decide the next workgroup from prior results. The workflow creates `flow-{name}`, `bus-flow-{name}`, and `agent-flow-{name}-coordinator` internally.
 - Use `bus` for standalone subagent shared context. Buses are reference context, not a blocking queue or decision channel.
+
+## Orchestration-only mode
+
+This mode is not the default. Activate it only when the user explicitly says the main agent must not implement directly or should only orchestrate. When active, the main agent plans, delegates, processes completion events, reviews diffs, and runs final verification without editing or writing implementation files; read `references/orchestration-only.md` before proceeding.
 
 ## Default flow
 
@@ -26,6 +30,7 @@ Do not delegate trivial tasks that you can finish faster yourself.
 
 ## References
 
+- `references/orchestration-only.md` for the explicit opt-in workflow where the main agent only orchestrates.
 - `references/subagent.md` for standalone bus + subagent calls.
 - `references/failure-handling.md` for retrying or steering child runs and handing off large results.
 - `references/workgroup.md` for workgroup create/add_members/finish/cancel calls.
